@@ -150,7 +150,7 @@ A decoupled, component-oriented architecture separating strict deterministic sto
 
 * **Core Logic & Storage Layer:** Rust library crates. Source of truth. Enforces biological, chronological, and geographic constraints. Pure domain model with no framework dependencies.
 * **REST API:** Axum + utoipa. The single integration point for all external consumers — UI, agents, CLI, scripts. OpenAPI spec auto-generated; client SDKs derived from spec.
-* **Event Bus:** Internal pub/sub system for entity lifecycle events (created, updated, deleted, proposal_submitted, proposal_reviewed). Agents subscribe to relevant events via webhooks or polling. Enables agents to react to changes without coupling to the core.
+* **Event Bus:** Internal pub/sub system for entity lifecycle events (created, updated, deleted, proposal_submitted, proposal_reviewed). Agents subscribe to relevant events via SSE streams or polling. Enables agents to react to changes without coupling to the core.
 * **Presentation Layer:** Tauri 2.x desktop application (macOS initially). Svelte 5 frontend with Cytoscape.js and D3.js for graph rendering.
 * **Agent Workers:** External processes (any language, typically Python) that consume the REST API and event bus. Pluggable — zero, one, or many agents can run independently. Each writes proposals to the staging queue, never directly to the graph.
 
@@ -225,15 +225,20 @@ SQLite is the source of truth for all entity data. Single file, ACID transaction
 
 ##### 3.2 Schema Design
 
+**Timestamps:** All `TEXT` timestamp columns use ISO 8601 format (`YYYY-MM-DDTHH:MM:SSZ`, UTC, 24-hour clock). Enforced at the application layer via `chrono::DateTime<Utc>` serialization.
+
+**JSON schema versioning:** Entity JSON blobs include a `schema_version: u32` field. On startup, the storage layer runs migration functions that upcycle older JSON payloads to the current schema version. This avoids SQL schema migrations while handling structural changes (field renames, type changes) that `#[serde(default)]` alone cannot catch.
+
 ```sql
 -- All entities share a common pattern:
--- UUID primary key, created/updated timestamps, JSON for flexible fields
+-- UUID primary key, created/updated timestamps, versioned JSON for flexible fields
 
 CREATE TABLE persons (
-    id TEXT PRIMARY KEY,           -- UUID
-    data JSON NOT NULL,            -- full Person struct as JSON
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    id TEXT PRIMARY KEY,              -- UUID
+    schema_version INTEGER NOT NULL,  -- JSON blob schema version
+    data JSON NOT NULL,               -- full Person struct as JSON
+    created_at TEXT NOT NULL,         -- ISO 8601 UTC
+    updated_at TEXT NOT NULL          -- ISO 8601 UTC
 );
 
 -- Assertions stored in a unified table, linked to any entity
@@ -248,8 +253,9 @@ CREATE TABLE assertions (
     source_citations JSON,         -- array of citation refs
     proposed_by TEXT NOT NULL,     -- 'user:<id>', 'agent:<name>', 'import:<job>'
     reviewed_by TEXT,
-    created_at TEXT NOT NULL,
-    reviewed_at TEXT
+    created_at TEXT NOT NULL,      -- ISO 8601 UTC
+    reviewed_at TEXT,              -- ISO 8601 UTC
+    idempotency_key TEXT UNIQUE   -- hash(entity_id + field + value) — prevents duplicate proposals
 );
 
 -- Graph edges for relationship traversal
@@ -272,7 +278,7 @@ CREATE VIRTUAL TABLE search_index USING fts5(
 -- Audit log (append-only)
 CREATE TABLE audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,
+    timestamp TEXT NOT NULL,         -- ISO 8601 UTC
     actor TEXT NOT NULL,
     entity_id TEXT NOT NULL,
     entity_type TEXT NOT NULL,
@@ -351,16 +357,16 @@ import.completed   — a GEDCOM/CSV import finished
 
 * **Internal (Tauri):** In-process Rust channels. UI subscribes to update views reactively.
 * **External (Agents):**
-    * **Webhooks:** Agent registers a callback URL. Core POSTs events to it. Simple, stateless.
-    * **Polling:** `GET /events?since={timestamp}&types=entity.created,media.uploaded`. For agents that can't run a server.
-    * **Future:** Message queue (NATS, Redis streams) if throughput demands it. Not needed initially.
+    * **SSE (Server-Sent Events):** `GET /events/stream?types=entity.created,media.uploaded`. The core pushes events over a persistent HTTP stream. Agents open a connection and react to JSON payloads. Preferred over webhooks — agents don't need to run their own HTTP server, avoiding port conflicts on desktop.
+    * **Polling:** `GET /events?since={timestamp}&types=entity.created,media.uploaded`. Fallback for agents that cannot maintain a persistent connection.
+    * **Future:** WebSockets or message queue (NATS, Redis streams) if bidirectional communication or throughput demands it. Not needed initially.
 
 ##### 4.3 Agent Protocol
 
 An agent is anything that:
 1. Authenticates (API key or local socket).
 2. Reads from `/graph` and `/search`.
-3. Subscribes to events (webhooks or polling).
+3. Subscribes to events (SSE stream or polling).
 4. Writes proposals to `/staging` with confidence score and source citations.
 5. **Never** writes directly to `/graph/mutate`.
 
@@ -381,7 +387,7 @@ When building multiple agents, common infrastructure should be extracted:
 | Endpoint Group | Purpose |
 |---|---|
 | `GET/POST /graph/**` | Read and mutate the current graph state (persons, families, events, places, sources). |
-| `POST /staging` | Submit proposals. Agents and bulk importers write here. |
+| `POST /staging` | Submit proposals. Agents and bulk importers write here. Deduplicated via idempotency key (`hash(entity_id + field + value)`). |
 | `GET/POST /review` | Human review queue. Approve/reject/modify proposals. Bulk operations. |
 | `GET /search` | Full-text search across all entities and media OCR text. |
 | `POST /media`, `GET /media/{id}` | Upload, download, thumbnail for attached files. |
@@ -389,7 +395,7 @@ When building multiple agents, common infrastructure should be extracted:
 | `POST /import` | GEDCOM/CSV/Gramps XML import. Returns import report. |
 | `GET /export` | GEDCOM 5.5.1, GEDCOM 7.0, JSON, media bundle export. |
 | `GET /events` | Event polling endpoint for agents. |
-| `POST /webhooks` | Register/manage webhook subscriptions. |
+| `GET /events/stream` | SSE stream for real-time event delivery to agents. |
 | `GET /agents` | Agent registry and health status. |
 | `GET /health` | System health, queue depth, storage stats. |
 
