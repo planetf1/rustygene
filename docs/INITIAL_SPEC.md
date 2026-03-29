@@ -1,70 +1,558 @@
-### Initial Technical Specification: AI-Driven Genealogy Engine
+### Technical Specification: RustyGene — AI-Assisted Genealogy Engine
 
 **Document Revision Date:** 2026-03-29
-**Time:** 21:35
+**Revision:** 3 (monorepo structure, SQLite-primary storage, future extensibility)
 
 ---
 
-#### 1. System Architecture
-A decoupled, service-oriented architecture separating strict deterministic storage from probabilistic AI inference.
+#### Design Principle: Components First, Agents Later
 
-* **Core Logic & Storage Layer:** Built in Rust. Acts as the absolute source of truth and enforces biological/chronological constraints.
-* **Intelligence Layer:** Built in Python using BeeAI/crewAI. Operates as a background sidecar, utilizing LLMs (Gemini) to propose graph mutations.
-* **Presentation Layer:** A Tauri application targeting macOS initially, utilizing web technologies for responsive graph rendering.
-* **Communication Bridge:** A RESTful API built with Axum (Rust), exposing endpoints for both the UI and the Python agent workers. (Optional optimization: PyO3 bindings for direct core access).
+The system is built as independent, well-bounded components with stable public interfaces. AI agents are external consumers of the same API available to any client. The core must be fully functional without any agent running.
 
-#### 2. Data Model (Probabilistic Graph)
-Traditional genealogy databases treat data as binary facts. This system models data as assertions with varying confidence levels.
+The staging queue and event system are the integration points. Anything — a Python agent, a shell script, a user clicking "suggest match" — can submit proposals. The core validates, the human reviews.
 
-* **Graph Database:** SurrealDB or PostgreSQL (with graph extensions).
-* **Node/Edge Structure:**
-    * `Person` (Node)
-    * `Fact` / `Event` (Node - e.g., Birth, Census 1881)
-    * `Relationship` (Edge - e.g., Parent_Of, Resided_At)
-* **Confidence Wrapper Schema:** Every fact and relationship must implement a probabilistic trait:
-    ```json
-    {
-      "entity_id": "uuid",
-      "assertion_type": "birth_date",
-      "value": "1850-10-14",
-      "confidence_score": 0.85,
-      "needs_review": true,
-      "source_refs": ["uuid-of-1881-census-record"],
-      "proposed_by": "agent-inquisitor"
-    }
-    ```
+```
+                    ┌──────────────────────┐
+                    │   Tauri Desktop App   │
+                    │   (Svelte 5 + viz)    │
+                    └──────────┬───────────┘
+                               │ Tauri IPC
+                    ┌──────────┴───────────┐
+                    │     Rust Core         │
+                    │  ┌────────────────┐   │
+                    │  │  Domain Model  │   │
+                    │  └───────┬────────┘   │
+                    │  ┌───────┴────────┐   │
+                    │  │  Storage Layer │   │
+                    │  └───────┬────────┘   │
+                    │  ┌───────┴────────┐   │
+                    │  │   REST API     │◄──── External clients (agents, CLI, scripts)
+                    │  │  (Axum/utoipa) │   │
+                    │  └───────┬────────┘   │
+                    │  ┌───────┴────────┐   │
+                    │  │ Event Bus +    │   │  Proposals in, decisions out
+                    │  │ Staging Queue  │   │  Events: entity created/updated/deleted
+                    │  └────────────────┘   │
+                    └──────────────────────┘
+```
 
-#### 3. AI Agent Orchestration (`agent.md` & Skills)
-Agent configuration and behavioral prompts are defined in markdown files. The agents read from the database, use tools to gather external context, and write proposals to a staging queue.
+---
 
-* **Agent 1: The Validator (Constraint Checking)**
-    * *Trigger:* New data entry.
-    * *Skill:* Temporal logic reasoning via Gemini.
-    * *Action:* Checks for contradictions (e.g., overlapping geographic locations within impossible travel timeframes). Returns a pass/fail and a confidence score.
-* **Agent 2: The Discoverer (Upstream Sourcing)**
-    * *Trigger:* Scheduled cron or user request for a specific `Person` node.
-    * *Skill:* API Connector (FamilySearch, Discovery API).
-    * *Action:* Fetches upstream candidate records, scores them against local graph context, and pushes matches > 0.7 confidence to the review queue.
-* **Agent 3: The Scraper (Unstructured Data)**
-    * *Skill:* Playwright/headless browser automation.
-    * *Action:* Navigates target sites (e.g., FreeCEN), extracts raw HTML/OCR text, and uses Gemini to structure it into JSON assertions.
+#### 0. Repository Structure (Monorepo)
 
-#### 4. API & Connectors
-The Rust backend manages external IO and internal routing.
+Single repo, Cargo workspace for Rust crates, `uv` workspace for Python agents.
 
-* **Internal API:** REST (JSON) exposing `/graph`, `/staging`, and `/review` endpoints. Openapi specs generated via `utoipa` to auto-build the Python client for the agents.
-* **Ingestion Pipeline:** A Rust service utilizing the `ged_io` crate to parse `.ged` files, transforming them into the internal probabilistic schema.
-* **External Connectors:**
-    * `FamilySearch Connector`: Authenticates and queries the FamilySearch GEDCOM X API.
-    * `UK National Archives Connector`: Queries the Discovery API for record metadata and archival references (e.g., RG 14 piece numbers).
+```
+rustygene/
+├── Cargo.toml                  # Rust workspace root
+├── crates/
+│   ├── core/                   # Domain model, assertion engine, constraints
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   ├── storage/                # SQLite + trait abstraction
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   ├── gedcom/                 # GEDCOM 5.5.1/7.0 import/export
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   ├── api/                    # Axum REST API + OpenAPI spec generation
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   └── connectors/             # FamilySearch, Discovery API clients
+│       ├── Cargo.toml
+│       └── src/
+├── app/                        # Tauri desktop application
+│   ├── src-tauri/              # Rust Tauri backend (thin — delegates to crates/)
+│   │   ├── Cargo.toml          # workspace member, depends on core/storage/api
+│   │   └── src/
+│   ├── src/                    # Svelte 5 frontend
+│   │   ├── lib/
+│   │   └── routes/
+│   ├── package.json
+│   └── vite.config.ts
+├── agents/                     # Python agent workers (uv workspace)
+│   ├── pyproject.toml          # workspace root
+│   ├── packages/
+│   │   ├── client/             # Auto-generated from OpenAPI spec
+│   │   ├── agent-base/         # Shared infra: event subscription, health, config
+│   │   ├── validator/          # Constraint checking agent
+│   │   ├── discoverer/         # Upstream record matching agent
+│   │   └── doc-processor/      # Vision/OCR extraction agent
+│   └── ...
+├── spec/                       # Generated OpenAPI spec (committed, used for codegen)
+│   └── openapi.json
+├── docs/
+│   └── INITIAL_SPEC.md
+├── migrations/                 # SQLite schema migrations
+├── testdata/                   # Sample GEDCOM files, test fixtures
+└── CLAUDE.md
+```
 
-#### 5. User Interface (Tauri)
-A fast, local-first application designed for heavy data visualization.
+**Workspace boundaries:**
+* Rust crates depend only downward: `app/src-tauri` → `api` → `storage` → `core`. No circular dependencies.
+* `core` has zero external dependencies beyond `serde`, `uuid`, `chrono`. It is the pure domain model.
+* `storage` depends on `core` + `rusqlite`/`sqlx`. Nothing else.
+* `api` depends on `core` + `storage` + `axum` + `utoipa`.
+* Python agents depend only on the generated OpenAPI client. They never import Rust code.
+* The OpenAPI spec (`spec/openapi.json`) is the contract between Rust and Python. It is generated by the `api` crate and committed to the repo.
 
-* **Framework:** React or Svelte within a Tauri webview.
-* **Graph Visualization:** React Flow or Cytoscape.js for interactive relationship mapping.
-* **Visual Language:**
-    * Solid lines = Verified relationships.
-    * Dashed lines = Unverified/AI-proposed relationships.
-    * Color gradients (Red to Green) on nodes/edges mapping directly to the `confidence_score`.
-* **Review Dashboard:** A dedicated view for the "Human-in-the-Loop" to bulk approve, reject, or modify agent proposals sitting in the staging queue.
+**Future extensibility:**
+* **Mobile app (iOS/Android):** Tauri 2.x supports mobile targets. The Svelte frontend and Rust core work unchanged. Or: the REST API enables a native mobile client consuming the same endpoints.
+* **Cloud/shared storage:** The `storage` trait abstraction allows adding a PostgreSQL + S3 backend without touching `core`, `api`, or the frontend. The API layer is already network-ready.
+* **Web app:** The Axum API can serve the Svelte frontend directly (no Tauri needed). Deploy as a standard web service.
+
+---
+
+#### 1. Language Choice Rationale
+
+##### Why Rust for the core (not Python)
+
+**Python would be faster to develop.** Pydantic models are terse, GEDCOM parsing libraries are more mature in Python, and a FastAPI + SQLite prototype could exist in weeks. One language for core + agents would simplify the stack. This was seriously considered.
+
+**Rust was chosen for these reasons:**
+
+1. **Tauri requires it.** Tauri's backend is Rust — IPC between the webview and system layer is via Rust functions. Going Python means either a sidecar process (awkward IPC, two processes to manage, latency) or abandoning Tauri for Electron/similar (100MB+ binary, 50MB+ memory). Rust + Tauri produces a ~10MB binary with ~8MB runtime memory and instant startup.
+
+2. **Type safety pays for itself in this domain.** Genealogy has complex invariants: imprecise dates, multiple name types, assertion confidence, pedigree collapse, temporal place validity. Rust enums and exhaustive pattern matching catch modelling errors at compile time:
+   ```rust
+   enum DateValue {
+       Exact(NaiveDate),
+       Range { from: NaiveDate, to: NaiveDate },
+       Before(NaiveDate),
+       After(NaiveDate),
+       About(NaiveDate),
+       Quarter { year: i32, quarter: u8 },
+       Textual(String),
+   }
+   ```
+   Every consumer of `DateValue` must handle all variants. In Python, this is a runtime check that can be missed.
+
+3. **SQLite integration is mature.** `rusqlite` provides zero-overhead C bindings. `sqlx` provides compile-time query checking. Both are production-grade.
+
+4. **The Rust layer is kept thin.** The pain of Rust verbosity is managed by:
+   - Using JSON columns for flexible entity data (`data JSON NOT NULL`). Adding a field to `Person` means changing one struct + one `#[serde(default)]` — no schema migration.
+   - Deriving everything (`serde`, `Clone`, `Debug`, `PartialEq`).
+   - Keeping the domain model in `crates/core` with zero dependencies beyond `serde`/`uuid`/`chrono`.
+   - Using Rust enums aggressively for the domain, where the type system genuinely helps.
+   - Not fighting messy text in Rust — GEDCOM import can preprocess via a thin Python step if needed.
+
+5. **Clean language boundary.** Rust = authority (storage, validation, constraints, API). Python = advisory (AI agents proposing mutations). This separation is architecturally meaningful, not accidental.
+
+##### Why Python for agents (not Rust)
+
+AI agent work is inherently exploratory and fast-changing. LLM SDK APIs shift frequently. Pydantic AI, `google-genai`, `anthropic` SDKs are Python-first. Agent logic benefits from rapid iteration, not compile-time safety. The REST API boundary means agents are just HTTP clients — language doesn't matter, but Python has the best ecosystem for this work.
+
+---
+
+#### 2. System Architecture
+
+A decoupled, component-oriented architecture separating strict deterministic storage from probabilistic AI inference.
+
+* **Core Logic & Storage Layer:** Rust library crates. Source of truth. Enforces biological, chronological, and geographic constraints. Pure domain model with no framework dependencies.
+* **REST API:** Axum + utoipa. The single integration point for all external consumers — UI, agents, CLI, scripts. OpenAPI spec auto-generated; client SDKs derived from spec.
+* **Event Bus:** Internal pub/sub system for entity lifecycle events (created, updated, deleted, proposal_submitted, proposal_reviewed). Agents subscribe to relevant events via webhooks or polling. Enables agents to react to changes without coupling to the core.
+* **Presentation Layer:** Tauri 2.x desktop application (macOS initially). Svelte 5 frontend with Cytoscape.js and D3.js for graph rendering.
+* **Agent Workers:** External processes (any language, typically Python) that consume the REST API and event bus. Pluggable — zero, one, or many agents can run independently. Each writes proposals to the staging queue, never directly to the graph.
+
+---
+
+#### 2. Data Model (Probabilistic Assertions)
+
+Traditional genealogy databases treat data as binary facts. This system models data as assertions with varying confidence levels, supporting multiple competing assertions per field.
+
+##### 2.1 Entity Types
+
+Informed by the Gramps data model, GEDCOM 5.5.1/7.0, and real-world genealogy complexity:
+
+| Entity | Purpose | Notes |
+|---|---|---|
+| `Person` | An individual | Multiple names (birth/married/aka), sex, living flag |
+| `Family` | A partnership or union | Partner refs, child refs, relationship type (married/civil/de facto/unknown) |
+| `Event` | Something that happened | Typed (birth/death/census/baptism/burial/migration/occupation/...), date, place ref |
+| `Place` | A location with temporal validity | Name hierarchy (parish→county→country), coordinates, date ranges (boundaries change) |
+| `Source` | A document or record set | Title, author, publication info, repository ref |
+| `Citation` | A specific reference within a source | Page/folio/entry number, transcription, confidence |
+| `Repository` | Where sources are held | Name, address, type (archive/library/website/personal collection) |
+| `Media` | An attached file | File path, content hash, mime type, thumbnail, extracted OCR text |
+| `Note` | Free-text annotation | Typed (research/transcript/general), linked to any entity |
+
+##### 2.2 Assertion Wrapper
+
+Every fact and relationship implements a probabilistic assertion:
+
+```rust
+pub struct Assertion<T> {
+    pub id: Uuid,
+    pub value: T,
+    pub confidence: f64,              // 0.0..=1.0
+    pub status: AssertionStatus,       // Confirmed, Proposed, Disputed, Rejected
+    pub source_citations: Vec<CitationRef>,
+    pub proposed_by: ActorRef,         // user:<id>, agent:<name>, import:<job_id>
+    pub created_at: DateTime<Utc>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub reviewed_by: Option<ActorRef>,
+}
+```
+
+Multiple competing assertions can coexist for the same field (e.g., two possible birth dates from conflicting sources). The human resolves conflicts via the review queue.
+
+##### 2.3 Design Constraints
+
+* **Names are complex:** `Vec<PersonName>` where each has given/surname/prefix/suffix/type/date range. People have married names, maiden names, aliases, spelling variations across records.
+* **Dates are imprecise:** Support exact, range, before/after, about, quarter (Q1 1881), textual ("between 1850 and 1855").
+* **Relationships are diverse:** Same-sex partnerships, adoption, fosterage, step-parenting — all first-class via typed `ChildLink` (biological/adopted/foster/step/unknown) and `PartnerLink` enums.
+* **Pedigree collapse:** Ancestors appearing multiple times (cousin marriages) handled naturally — `Person` nodes are referenced, not duplicated. The graph may contain cycles.
+* **Place temporality:** "Middlesex" doesn't exist post-1965. Places have validity date ranges and may reference successor/predecessor places.
+
+---
+
+#### 3. Storage Layer
+
+SQLite as primary database. Trait-based abstraction for future backend swappability.
+
+##### 3.1 Primary Storage: SQLite
+
+SQLite is the source of truth for all entity data. Single file, ACID transactions, zero configuration.
+
+**Why SQLite:**
+* **ACID transactions.** Creating a Family that links two Persons and an Event is atomic — it all commits or none does. No partial-write corruption.
+* **Referential integrity.** Foreign keys enforced by the database, not just application code.
+* **Full-text search.** FTS5 built-in, no external dependency.
+* **Single file.** Backup = copy one file. Trivial to understand, trivial to deploy.
+* **Battle-tested.** Most deployed database on earth. Every mobile app, every browser, most desktop apps.
+* **Excellent Rust support.** `rusqlite` (zero-overhead C bindings) or `sqlx` (async, compile-time query checking).
+* **Performance at target scale.** 1000s of entities = single-digit MB. Queries return in microseconds.
+
+##### 3.2 Schema Design
+
+```sql
+-- All entities share a common pattern:
+-- UUID primary key, created/updated timestamps, JSON for flexible fields
+
+CREATE TABLE persons (
+    id TEXT PRIMARY KEY,           -- UUID
+    data JSON NOT NULL,            -- full Person struct as JSON
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Assertions stored in a unified table, linked to any entity
+CREATE TABLE assertions (
+    id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL,       -- FK to any entity table
+    entity_type TEXT NOT NULL,     -- 'person', 'family', 'event', ...
+    field TEXT NOT NULL,           -- 'birth_date', 'name', 'parent_of', ...
+    value JSON NOT NULL,
+    confidence REAL NOT NULL,      -- 0.0..1.0
+    status TEXT NOT NULL,          -- 'confirmed', 'proposed', 'disputed', 'rejected'
+    source_citations JSON,         -- array of citation refs
+    proposed_by TEXT NOT NULL,     -- 'user:<id>', 'agent:<name>', 'import:<job>'
+    reviewed_by TEXT,
+    created_at TEXT NOT NULL,
+    reviewed_at TEXT
+);
+
+-- Graph edges for relationship traversal
+CREATE TABLE relationships (
+    id TEXT PRIMARY KEY,
+    from_entity TEXT NOT NULL,
+    from_type TEXT NOT NULL,
+    to_entity TEXT NOT NULL,
+    to_type TEXT NOT NULL,
+    rel_type TEXT NOT NULL,        -- 'parent_of', 'partner_in', 'resided_at', ...
+    assertion_id TEXT REFERENCES assertions(id)
+);
+
+-- Full-text search
+CREATE VIRTUAL TABLE search_index USING fts5(
+    entity_id, entity_type, content,
+    tokenize='porter unicode61'
+);
+
+-- Audit log (append-only)
+CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    action TEXT NOT NULL,          -- 'create', 'update', 'delete'
+    old_value JSON,
+    new_value JSON
+);
+```
+
+##### 3.3 Media Storage
+
+Media files stored on the local filesystem alongside the SQLite database:
+
+```
+~/.rustygene/                    # or user-configured location
+├── rustygene.db                 # SQLite database
+├── media/
+│   ├── files/
+│   │   ├── {content-hash}.jpg   # content-addressed originals
+│   │   └── ...
+│   └── thumbs/
+│       ├── {content-hash}.jpg   # generated thumbnails
+│       └── ...
+└── backups/                     # automated backup copies
+```
+
+Media metadata (hash, mime type, OCR text, dimensions) stored in SQLite. Files content-addressed by hash for deduplication.
+
+##### 3.4 Export for Portability & Git
+
+While SQLite is the live database, full JSON export is available for portability:
+* `rustygene export --format json` dumps the entire database to a directory of JSON files (one per entity type or per entity).
+* `rustygene export --format gedcom` produces GEDCOM 5.5.1.
+* `rustygene export --format bundle` produces JSON + media files as a zip.
+* These exports are human-readable, diffable, and can be committed to git for versioning/backup.
+* `rustygene import` can rebuild the database from any export.
+
+##### 3.5 Trait Abstraction (Future Backends)
+
+The storage layer is behind a `Storage` trait in `crates/storage/`. SQLite is the only implementation initially.
+
+Future backends (added without touching `core`, `api`, or frontend):
+* **PostgreSQL + Apache AGE** — for a multi-user server edition. openCypher graph queries, `tsvector` search, S3 media storage.
+* **Cloud-sync** — SQLite locally + sync to a remote store (Turso/libSQL, or custom sync protocol).
+
+**SurrealDB is excluded.** v3.0 (2026-02) has open data-correctness bugs. Unacceptable for genealogy data where integrity is paramount.
+
+##### 3.6 Key Capabilities
+
+* **Graph traversal:** Recursive CTEs over the `relationships` table. Performant for ancestor/descendant chains at this scale.
+* **Full-text search:** FTS5. Searches across person names, notes, transcriptions, OCR text, place names.
+* **Audit log:** Append-only `audit_log` table. Every mutation records timestamp, actor, entity, old/new value. Enables undo.
+* **Backup/restore:** Copy the SQLite file + media directory. Application-level: GEDCOM or JSON bundle export.
+* **Versioning:** Assertions are never deleted, only superseded (status changes from `confirmed` to `rejected`, new assertion added). Audit log enables viewing state at any past point.
+
+---
+
+#### 4. Event Bus & Agent Integration
+
+The event bus decouples the core from consumers. It is the mechanism by which agents (and the UI) learn about changes.
+
+##### 4.1 Event Types
+
+```
+entity.created    — a new Person/Family/Event/etc. was added
+entity.updated    — an entity's assertions changed
+entity.deleted    — an entity was removed
+media.uploaded    — a new file was attached
+media.extracted   — OCR/vision extraction completed
+proposal.submitted — an agent submitted a new proposal
+proposal.reviewed  — a human approved/rejected a proposal
+import.completed   — a GEDCOM/CSV import finished
+```
+
+##### 4.2 Delivery Mechanisms
+
+* **Internal (Tauri):** In-process Rust channels. UI subscribes to update views reactively.
+* **External (Agents):**
+    * **Webhooks:** Agent registers a callback URL. Core POSTs events to it. Simple, stateless.
+    * **Polling:** `GET /events?since={timestamp}&types=entity.created,media.uploaded`. For agents that can't run a server.
+    * **Future:** Message queue (NATS, Redis streams) if throughput demands it. Not needed initially.
+
+##### 4.3 Agent Protocol
+
+An agent is anything that:
+1. Authenticates (API key or local socket).
+2. Reads from `/graph` and `/search`.
+3. Subscribes to events (webhooks or polling).
+4. Writes proposals to `/staging` with confidence score and source citations.
+5. **Never** writes directly to `/graph/mutate`.
+
+Agents can be written in any language, run anywhere, and be swapped/added/removed without touching the core. The OpenAPI spec is the contract.
+
+##### 4.4 Agent Infrastructure (Shared)
+
+When building multiple agents, common infrastructure should be extracted:
+* **Shared client library:** Auto-generated from OpenAPI spec. Handles auth, retries, rate limiting.
+* **Agent base class / trait:** Common event subscription, health reporting, logging, configuration.
+* **Agent registry:** The core tracks registered agents (`GET /agents`). Agents report health. UI shows agent status.
+* **Shared tool definitions:** Connectors (FamilySearch, Discovery API) are Rust library crates exposed as API endpoints. Agents call them via REST, not by reimplementing HTTP clients.
+
+---
+
+#### 5. REST API (Axum + utoipa)
+
+| Endpoint Group | Purpose |
+|---|---|
+| `GET/POST /graph/**` | Read and mutate the current graph state (persons, families, events, places, sources). |
+| `POST /staging` | Submit proposals. Agents and bulk importers write here. |
+| `GET/POST /review` | Human review queue. Approve/reject/modify proposals. Bulk operations. |
+| `GET /search` | Full-text search across all entities and media OCR text. |
+| `POST /media`, `GET /media/{id}` | Upload, download, thumbnail for attached files. |
+| `POST /media/{id}/extract` | Trigger OCR/vision extraction on an uploaded document. |
+| `POST /import` | GEDCOM/CSV/Gramps XML import. Returns import report. |
+| `GET /export` | GEDCOM 5.5.1, GEDCOM 7.0, JSON, media bundle export. |
+| `GET /events` | Event polling endpoint for agents. |
+| `POST /webhooks` | Register/manage webhook subscriptions. |
+| `GET /agents` | Agent registry and health status. |
+| `GET /health` | System health, queue depth, storage stats. |
+
+OpenAPI spec auto-generated via `utoipa`. Client SDKs for Python (and any other language) derived from the spec.
+
+---
+
+#### 6. Import / Export
+
+| Format | Direction | Notes |
+|---|---|---|
+| GEDCOM 5.5.1 | Import + Export | Via `ged_io` crate. The lingua franca of genealogy. |
+| GEDCOM 7.0 | Export (import later) | Newer standard, low adoption so far. Build on domain model. |
+| Gramps XML | Import | Many users migrating from Gramps. Parse with `quick-xml`. |
+| JSON | Import + Export | Native format. Full fidelity including confidence scores, audit history. |
+| CSV | Import | Bulk import of transcribed records (census, BMD indexes). |
+| Media bundle | Export | Zip of all attached files + manifest JSON. |
+
+---
+
+#### 7. Document Processing & Image Recognition
+
+A core capability, not an agent. Exposed as an API endpoint and also usable by agents.
+
+**Pipeline:**
+```
+Image/PDF upload → media storage → OCR/vision extraction → structured assertions → staging queue
+```
+
+* LLM vision API (Gemini, Claude, or local model) for handwritten record OCR — census entries, parish registers, certificates, wills.
+* Returns structured JSON: names, dates, places, relationships extracted from the document.
+* All extractions land in the staging queue as `Proposed` assertions with the media item as source citation.
+* User reviews, corrects, confirms.
+
+**Endpoint:** `POST /media/{id}/extract`
+
+This is the killer feature for genealogy research — old handwriting is the #1 bottleneck.
+
+---
+
+#### 8. External API Connectors
+
+Built as separate Rust library crates, each implementing a `Connector` trait. Exposed via REST endpoints so agents can use them without reimplementing HTTP clients.
+
+* **FamilySearch:** OAuth 2.0, requires Solutions Provider registration. Per-user rate limiting. Build on `reqwest` + `gedcomx` crate for GEDCOM X data types. Read-only access recommended; FamilySearch's tree is collaborative and writes require careful conflict handling.
+* **UK National Archives (Discovery API):** REST, no auth required for search. Returns metadata + archival references. Document images often require commercial partner access.
+* **FreeCEN / FreeBMD / FreeREG:** No public API. Bulk data downloads may be available from FreeUKGen — contact them about data access. **Do not scrape** — these are volunteer-run free services. Build CSV importers for any bulk data they provide.
+
+---
+
+#### 9. User Interface (Tauri 2.x + Svelte 5)
+
+A fast, local-first, offline-capable desktop application.
+
+##### 9.1 Technology Choices
+
+* **Svelte 5** over React: smaller bundles (~47KB vs ~156KB), lower memory, surgical DOM updates via runes. Graph viz libraries (Cytoscape, D3) have vanilla JS APIs — no need for framework-specific wrappers.
+* **Cytoscape.js 3.33:** Primary relationship graph view. Handles arbitrary topologies (pedigree collapse, multiple families). Performant at 1000+ nodes.
+* **D3.js:** Specialized views — fan charts (radial ancestor view), pedigree charts. Reference implementation: Gramps Web's D3 chart code.
+
+##### 9.2 Visual Language
+
+* Solid lines/borders = Confirmed assertions.
+* Dashed lines/borders = Proposed (unreviewed) assertions.
+* Colour gradients (red → amber → green) on nodes/edges mapping to `confidence` score.
+* Disputed assertions highlighted with a distinct indicator.
+
+##### 9.3 Key Views
+
+* **Pedigree chart:** Traditional ancestor tree.
+* **Descendant chart:** Top-down from an ancestor.
+* **Fan chart:** Radial ancestor view (D3).
+* **Relationship graph:** Full network view (Cytoscape). The primary differentiator.
+* **Person detail:** Timeline of events, attached media, source citations, competing assertions.
+* **Document viewer:** Image + OCR text side-by-side, annotation tools.
+* **Review queue:** Bulk approve/reject/modify agent proposals.
+* **Search:** Full-text across all entities, notes, OCR text.
+
+---
+
+#### 10. Agent Examples (Future — Pluggable)
+
+These are built separately, whenever ready. Each is an independent process consuming the REST API and event bus.
+
+| Agent | Subscribes To | Action |
+|---|---|---|
+| Validator | `entity.created`, `entity.updated` | Check temporal/geographic constraints. Flag contradictions (born after death, impossible travel). |
+| Discoverer | User request or `entity.created` | Query FamilySearch/Discovery APIs, propose record matches above confidence threshold. |
+| Document Processor | `media.uploaded` | Call `/media/{id}/extract`, review and refine results, submit structured proposals. |
+| Deduplicator | Scheduled | Find potential duplicate Person nodes via fuzzy matching, propose merges. |
+| Relationship Inferrer | `entity.created` | Suggest missing family links based on shared events, co-residence, naming patterns. |
+
+**Framework recommendation:** Pydantic AI or plain `google-genai` / `anthropic` SDK. Avoid heavy orchestration frameworks unless multi-agent coordination becomes genuinely complex. Agents are just programs that call the REST API.
+
+**LLM provider flexibility:** Abstract the LLM call behind a provider trait/interface. Support Gemini, Claude, and local models (Ollama) to avoid vendor lock-in.
+
+---
+
+#### 11. Dependency Summary
+
+| Component | Crate / Package | Status | Risk |
+|---|---|---|---|
+| Web framework | `axum` 0.8 | Mature, Tokio-backed | Low |
+| OpenAPI | `utoipa` 5.x | Mature, high adoption | Low |
+| GEDCOM parse | `ged_io` 0.12 | Active, pre-1.0 | Medium — pin version, wrap in trait |
+| GEDCOM X types | `gedcomx` 0.1.7 | Dormant, stable | Low |
+| Database (local) | `rusqlite` or `sqlx` + SQLite | Mature | Low |
+| Database (server) | `sqlx` + PG + Apache AGE | AGE: small team, irregular releases | Medium |
+| Full-text search | SQLite FTS5 / PG tsvector | Built-in | Low |
+| Desktop shell | Tauri 2.x | Stable, production-ready | Low |
+| UI framework | Svelte 5 | Stable | Low |
+| Graph viz | Cytoscape.js 3.33 | Mature | Low |
+| Charts | D3.js | Mature | Low |
+| Serialization | `serde` + `serde_json` | Mature | Low |
+| HTTP client | `reqwest` | Mature | Low |
+| XML parsing | `quick-xml` | Mature | Low |
+
+---
+
+#### 12. Phasing
+
+**Phase 1: Core Data Model + Storage + CLI**
+* Domain model crate (all entity types, assertion wrapper).
+* SQLite storage backend (schema, migrations, CRUD, FTS5).
+* GEDCOM 5.5.1 import/export.
+* CLI for import, query, export (validates the model before building UI).
+* JSON export for portability/git backup.
+* Audit log.
+
+**Phase 2: Tauri Desktop App**
+* Svelte 5 + Cytoscape.js + D3.js.
+* Person/family/event CRUD.
+* Pedigree, fan chart, graph views.
+* Document attachment + viewer.
+* Full-text search.
+* Backup/restore (file copy + GEDCOM/JSON export).
+
+**Phase 3: REST API + Event Bus + Review Queue**
+* Axum API with OpenAPI spec.
+* Event bus (internal channels + webhook/polling delivery).
+* Staging queue + review dashboard in UI.
+* Agent registry.
+
+**Phase 4: Connectors + First Agents**
+* FamilySearch connector crate.
+* Discovery API connector crate.
+* Document processor (vision/OCR extraction).
+* Validator agent.
+
+**Phase 5: Additional Agents + Server Edition**
+* Discoverer agent.
+* Deduplicator agent.
+* PostgreSQL + Apache AGE backend.
+* Multi-user collaboration.
+* S3 media storage.
+
+---
+
+#### 13. Open Questions
+
+1. **Licensing?** Open source (AGPL like Gramps, or MIT/Apache)?
+2. **Collaboration model?** Single-user desktop only, or eventual multi-user shared tree?
+3. **OpenCLAW integration?** Potential scope extension — legal document processing for probate/will records. Deferred.
+4. **Research branching?** "What if this John Smith is a different person?" — fork the graph, explore, merge back. Powerful differentiator, complex implementation. Phase 5+?
+5. **GEDCOM 7.0 import priority?** Future standard but low current adoption.
+6. **Offline-first guarantee?** Core app works fully offline (SQLite + local media). Network only for connectors/agents.
