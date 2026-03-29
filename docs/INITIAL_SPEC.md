@@ -1,7 +1,7 @@
 ### Technical Specification: RustyGene — AI-Assisted Genealogy Engine
 
 **Document Revision Date:** 2026-03-29
-**Revision:** 6 (genealogy domain deep dive: multi-component names, hierarchical places, historical calendars, three-tier citations, research logs, evidence types, DNA model, event roles, media regions, GPS alignment)
+**Revision:** 7 (real-world research feedback: research sandboxes, naming convention inferrer, geographic anchor weighting, enhanced validator, negative evidence bridge, testing strategy, native UX from top Gramps addons)
 
 ---
 
@@ -367,6 +367,8 @@ enum SearchResult { Found, NotFound, PartiallyFound, Inconclusive }
 
 **Key distinction:** A `NotFound` result is a research log entry, not negative evidence. Negative evidence (§3.2) requires establishing that a record *should* exist and reasoning from its absence — a higher bar that produces an `Assertion` with `evidence_type: Negative`.
 
+**UI bridge between NotFound and Negative Evidence:** When a user (or agent) logs a `NotFound` result for a specific person in a specific source (e.g., "searched 1871 census for Thomas Jones in Llanelly — not found"), the UI should prompt: *"Thomas Jones is not recorded in the 1871 Llanelly census. Do you want to assert that Thomas Jones was not living in Llanelly in 1871?"* Accepting creates a `Negative` evidence assertion linked to the research log entry. This turns failed searches into structured evidence that eventually proves migration timelines or identity disambiguation. This is one of the most powerful analytical workflows in genealogy and no current tool automates it.
+
 ##### 3.5 Genealogical Proof Standard (GPS) Alignment
 
 The architecture maps to the BCG's five GPS elements:
@@ -401,6 +403,57 @@ GPS is a methodology, not a data structure — the system provides infrastructur
 * **Relationships are diverse:** Same-sex partnerships, adoption, fosterage, step-parenting — all first-class via typed `ChildLink` (biological/adopted/foster/step/unknown) and `PartnerLink` enums.
 * **Pedigree collapse:** Ancestors appearing multiple times (cousin marriages) handled naturally — `Person` nodes are referenced, not duplicated. The graph may contain cycles.
 * **Place temporality:** "Middlesex" doesn't exist post-1965. Places have validity date ranges and may reference successor/predecessor places.
+
+##### 3.8 Research Sandboxes (Hypothesis Branches)
+
+Genealogists are terrified of deleting data in case they are wrong. "What if this Thomas Jones is actually a different person?" Destructive actions (delete, merge) in a single-timeline system force premature commitment. Research sandboxes solve this.
+
+**Concept:** A sandbox is a lightweight, named branch of the entity graph. The user can create competing hypotheses and let the validator agent score them:
+
+```
+Branch A: "Thomas (1866) belongs to the Richards family via patronymic shift"
+Branch B: "Thomas (1866) belongs to the Thomas Jones (1821) / Margaret (1832) family"
+```
+
+**Implementation:**
+* Each sandbox is a **set of overlay assertions** — they don't copy the entire graph, just the assertions that differ from the main branch (the "trunk").
+* An assertion carries an optional `sandbox_id: Option<Uuid>`. Trunk assertions have `None`. Sandbox assertions have a sandbox UUID.
+* Reading the graph with a sandbox active = trunk assertions + sandbox overlay (sandbox wins on conflict for the same entity+field).
+* The validator agent can run against each sandbox independently and report which has fewer contradictions.
+* When the user is satisfied, they **promote** a sandbox (its assertions become trunk) or **discard** it (overlay assertions deleted). No data is lost until the user explicitly discards.
+
+```rust
+struct Sandbox {
+    id: Uuid,
+    name: String,                     // "Richards patronymic hypothesis"
+    description: Option<String>,
+    created_at: DateTime<Utc>,
+    parent_sandbox: Option<Uuid>,     // sandboxes can nest (rare but possible)
+    status: SandboxStatus,            // Active, Promoted, Discarded
+}
+
+enum SandboxStatus { Active, Promoted, Discarded }
+```
+
+```sql
+-- Sandbox registry
+CREATE TABLE sandboxes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TEXT NOT NULL,
+    parent_sandbox TEXT,
+    status TEXT NOT NULL DEFAULT 'active'
+);
+
+-- Assertions gain an optional sandbox_id
+-- ALTER TABLE assertions ADD COLUMN sandbox_id TEXT REFERENCES sandboxes(id);
+-- CREATE INDEX idx_assertions_sandbox ON assertions(sandbox_id);
+```
+
+**UI:** Sandbox selector in the toolbar (like git branches). Active sandbox shown as a coloured banner. Side-by-side comparison view for competing hypotheses. "Score this sandbox" button runs the validator.
+
+**Phase:** Core sandbox data model in Phase 1 (just the `sandbox_id` column on assertions). UI and validator integration in Phase 2-3. This is a massive differentiator — neither Ancestry nor Gramps support this.
 
 ---
 
@@ -634,6 +687,10 @@ Future backends (added without touching `core`, `api`, or frontend):
     * **Fuzzy/typo tolerance:** Levenshtein distance or trigram matching (`pg_trgm` in PG, application-level in SQLite) for OCR errors and transcription mistakes.
     * **Date range search:** "born about 1850" searches 1848-1852. Tolerance configurable per query.
     * **Combined:** Search "William Smith born ~1850 Yorkshire" uses all strategies simultaneously, ranked by relevance (exact > phonetic > fuzzy).
+    * **Geographic resolution weighting:** Not all location assertions carry equal weight. A self-reported, highly specific birthplace (e.g., "Llanpumsaint" from an 1901 census where the person stated it themselves) is a **high-resolution anchor** — it should be treated with much higher confidence than a county-level location ("Carmarthenshire") from a secondary source. The search and deduplication systems should:
+        * Assign a `geographic_specificity` score based on place type (Village > Town > County > Country).
+        * Heavily penalise merge proposals that try to combine a high-resolution person with a low-resolution person from a different specific location, unless the timeline plausibly explains migration.
+        * Prefer high-specificity self-reported locations (census birthplace fields) over locations inferred from record jurisdiction.
 * **Core validation rules:** The Rust storage layer enforces basic sanity checks on every mutation, independent of AI agents:
     * Birth date must precede death date.
     * Parent must be older than child (minimum age gap configurable, default 12 years).
@@ -1083,32 +1140,60 @@ Two categories of agent, sharing the same infrastructure:
 ```yaml
 # agents/definitions/validator.yaml
 name: validator
-description: Check temporal and geographic constraints
+description: Check temporal, geographic, and genealogical constraints
 subscribes_to: [entity.created, entity.updated]
 model: gemini-2.5-flash   # default LLM; overridable per agent
 context:
   - entity: "{{event.entity}}"           # the entity that triggered
   - ancestors: "{{entity.ancestors(3)}}"  # 3 generations of context
+  - descendants: "{{entity.descendants(2)}}" # children, grandchildren
   - events: "{{entity.events}}"           # related events
+  - family: "{{entity.families}}"         # all family groups
 prompt: |
-  You are a genealogy data validator. Given the following person and their
-  related events, check for contradictions:
+  You are a genealogy data validator. Given the following person, their
+  family, and related events, check for ALL of the following contradiction
+  types. Be thorough — these are real-world patterns that corrupt trees:
+
+  TEMPORAL PARADOXES:
   - Birth date after death date
-  - Overlapping geographic locations within impossible travel timeframes
-  - Parent younger than child
-  - Marriage before age 14
+  - "Life after death" — person appears in records (census, marriage, etc.)
+    dated AFTER their recorded death. Flag with high confidence.
+  - Marriage before age 14 or after death
+  - Child born before parent was 12 or after parent's death
+  - Child born before parents' marriage by more than 9 months AND marriage
+    date is suspiciously late — flag as "possible wrong family assignment"
+    (e.g., child born 1866, parents' marriage 1887 = likely wrong couple)
+
+  PARENTAL TIMELINE SANITY:
+  - Mother giving birth after age 50 or before age 12
+  - Father siring children after age 75 or before age 12
+  - Children's birth dates imply impossible spacing (e.g., two births
+    fewer than 9 months apart to the same mother)
+  - Large gaps in children's birth years may indicate a missing child or
+    a second marriage
+
+  GEOGRAPHIC IMPOSSIBILITIES:
+  - Person recorded in two distant locations within an impossibly short
+    timeframe (consider era-appropriate travel — 1850s rural Wales is not
+    the same as 1920s London)
+  - Birthplace specificity mismatch: if a person self-reports a specific
+    village (e.g., "Llanpumsaint") in one record but is assigned to a
+    different parish in another, flag for review
 
   Person: {{context.entity}}
   Ancestors: {{context.ancestors}}
+  Descendants: {{context.descendants}}
   Events: {{context.events}}
+  Family groups: {{context.family}}
 
   For each issue found, return a JSON array of objects:
   {
     "entity_id": "...",
     "field": "...",
     "issue": "description of the contradiction",
+    "severity": "error" | "warning" | "info",
     "confidence": 0.0-1.0,
-    "suggested_action": "dispute" | "flag_for_review"
+    "suggested_action": "dispute" | "flag_for_review" | "suggest_split"
   }
 
   Return an empty array if no issues found.
@@ -1144,6 +1229,73 @@ output_schema: DeduplicationResult[]
 action: submit_proposals
 ```
 
+```yaml
+# agents/definitions/naming-convention-inferrer.yaml
+name: naming-convention-inferrer
+description: Detect patronymic shifts, naming patterns, and suggest research directions
+subscribes_to: [entity.created, entity.updated]
+trigger: also_on_demand   # user can invoke manually for a stuck branch
+model: gemini-2.5-pro     # needs stronger reasoning for cultural inference
+context:
+  - person: "{{event.entity}}"
+  - children: "{{entity.children}}"
+  - parents: "{{entity.parents}}"
+  - siblings: "{{entity.siblings}}"
+  - grandparents: "{{entity.ancestors(2)}}"
+  - place: "{{entity.birth_place}}"
+prompt: |
+  You are a genealogy naming pattern analyst with expertise in British Isles
+  naming conventions, especially Welsh, Scottish, and Irish patronymics.
+
+  Given a person and their family context, analyse naming patterns:
+
+  PATRONYMIC DETECTION:
+  - If children's surname differs from father's surname but matches
+    grandfather's FIRST name, flag as "patronymic shift" (e.g., David
+    Richards' children surnamed Jones = grandfather likely named John/Jones)
+  - If in Wales pre-1850, assume patronymics are likely even if records
+    show fixed surnames — the transition was gradual and inconsistent
+
+  NAMING HONOUR PATTERNS:
+  - First son often named after paternal grandfather
+  - First daughter often named after maternal grandmother
+  - Children named after deceased siblings (replacement naming)
+  - Children's given names that match a SURNAME in the family suggest
+    maternal maiden name or other family connection (e.g., child named
+    "Richard" in a Jones family → mother's maiden name may be Richards)
+
+  RESEARCH SUGGESTIONS:
+  - Based on detected patterns, suggest specific searches:
+    "Child named Richard in Jones family — prioritise 'Richards' as
+    maternal maiden name in parish searches"
+  - Flag when a naming pattern breaks (may indicate adoption, step-parent,
+    or second marriage)
+
+  Consider the geographic and temporal context: {{context.place}} in the
+  relevant era. Welsh, Scottish, Irish, and English naming customs differ.
+
+  Person: {{context.person}}
+  Children: {{context.children}}
+  Parents: {{context.parents}}
+  Siblings: {{context.siblings}}
+  Grandparents: {{context.grandparents}}
+
+  Return:
+  {
+    "patterns_detected": [
+      {
+        "pattern_type": "patronymic_shift" | "honour_naming" | "maternal_clue" | "replacement_naming" | "pattern_break",
+        "description": "...",
+        "confidence": 0.0-1.0,
+        "research_suggestion": "specific actionable search to try",
+        "affected_persons": ["uuid", ...]
+      }
+    ]
+  }
+output_schema: NamingPatternResult
+action: submit_proposals
+```
+
 **Adding a new agent** = writing a YAML file in `agents/definitions/` and restarting the agent runtime. No Python code required. The runtime handles event subscription, LLM calls, output parsing, schema validation, and proposal submission.
 
 ##### 11.2 Agent Runtime Architecture
@@ -1153,6 +1305,7 @@ agents/
 ├── definitions/                 # YAML agent definitions (prompt-only agents)
 │   ├── validator.yaml
 │   ├── deduplicator.yaml
+│   ├── naming-convention-inferrer.yaml
 │   ├── relationship-inferrer.yaml
 │   └── ...
 ├── packages/
@@ -1322,12 +1475,13 @@ Retrospectives are stored in `docs/retro/` as dated markdown files (`docs/retro/
 #### 16. Phasing
 
 **Phase 1: Core Data Model + Storage + CLI**
-* Domain model crate (all entity types, assertion wrapper).
-* SQLite storage backend (schema, migrations, CRUD, FTS5).
-* GEDCOM 5.5.1 import/export.
+* Domain model crate (all entity types, assertion wrapper, sandbox data model).
+* SQLite storage backend (schema, migrations, CRUD, FTS5, generated columns).
+* GEDCOM 5.5.1 import/export (round-trip test suite).
 * CLI for import, query, export (validates the model before building UI).
 * JSON export for portability/git backup.
 * Audit log.
+* Research log (CLI: `rustygene research-log add ...`).
 
 **Phase 2: Tauri Desktop App**
 * Svelte 5 + Cytoscape.js + D3.js.
@@ -1336,22 +1490,28 @@ Retrospectives are stored in `docs/retro/` as dated markdown files (`docs/retro/
 * Document attachment + viewer.
 * Full-text search.
 * Backup/restore (file copy + GEDCOM/JSON export).
+* **Research sandboxes** — create/switch/compare/promote/discard hypothesis branches.
+* Source-driven form entry for common document types.
+* Session restore.
 
 **Phase 3: REST API + Event Bus + Review Queue**
 * Axum API with OpenAPI spec.
 * Event bus (internal channels + SSE/polling delivery).
 * Staging queue + review dashboard in UI.
 * Agent registry.
+* Sandbox comparison view + validator scoring per sandbox.
+* Negative evidence prompt (NotFound → Negative assertion bridge).
 
 **Phase 4: Connectors + First Agents**
 * FamilySearch connector crate.
 * Discovery API connector crate.
 * Document processor (vision/OCR extraction).
-* Validator agent.
+* Validator agent (with life-after-death, parental timeline, geographic impossibility rules).
+* **Naming convention inferrer agent** (patronymic detection, honour naming, maternal clues).
 
 **Phase 5: Additional Agents + Server Edition**
 * Discoverer agent.
-* Deduplicator agent.
+* Deduplicator agent (with geographic resolution weighting).
 * PostgreSQL + Apache AGE backend.
 * Multi-user collaboration.
 * S3 media storage.
@@ -1363,7 +1523,7 @@ Retrospectives are stored in `docs/retro/` as dated markdown files (`docs/retro/
 1. ~~**Licensing?**~~ **Resolved: MIT/Apache dual license.** Maximises adoption and compatibility with volunteer genealogy communities.
 2. ~~**Collaboration model?**~~ **Resolved: Single-user desktop for Phases 1-4.** Multi-user collaboration is a long-term goal (Phase 5+). The data model (assertions, audit log, optimistic locking) is designed to support it when the time comes.
 3. **OpenCLAW integration?** Potential scope extension — legal document processing for probate/will records. Deferred.
-4. **Research branching?** "What if this John Smith is a different person?" — fork the graph, explore, merge back. Powerful differentiator, complex implementation. Phase 5+?
+4. ~~**Research branching?**~~ **Elevated to Phase 2-3. See §3.8 Research Sandboxes below.**
 5. **GEDCOM 7.0 import priority?** Future standard but low current adoption.
 6. **Offline-first guarantee?** Core app works fully offline (SQLite + local media). Network only for connectors/agents.
 7. ~~**Living persons privacy?**~~ **Resolved in §3.7 Design Constraints.** `living: bool` flag on Person with configurable age threshold, export redaction, GDPR notes.
