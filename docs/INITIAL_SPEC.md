@@ -840,13 +840,117 @@ This is the killer feature for genealogy research — old handwriting is the #1 
 
 ---
 
-#### 9. External API Connectors
+#### 9. External Data Source Connectors
 
-Built as separate Rust library crates, each implementing a `Connector` trait. Exposed via REST endpoints so agents can use them without reimplementing HTTP clients.
+##### 9.1 Connector Architecture
 
-* **FamilySearch:** OAuth 2.0, requires Solutions Provider registration. Per-user rate limiting. Build on `reqwest` + `gedcomx` crate for GEDCOM X data types. Read-only access recommended; FamilySearch's tree is collaborative and writes require careful conflict handling.
-* **UK National Archives (Discovery API):** REST, no auth required for search. Returns metadata + archival references. Document images often require commercial partner access.
-* **FreeCEN / FreeBMD / FreeREG:** No public API. Bulk data downloads may be available from FreeUKGen — contact them about data access. **Do not scrape** — these are volunteer-run free services. Build CSV importers for any bulk data they provide.
+Connectors are **pluggable adapters** for external genealogy data providers. Each connector implements a common `Connector` trait, is packaged as a separate Rust crate (or Python package for API-only connectors), and is registered at runtime. Adding a new data source means writing one crate — no changes to core, API, or UI.
+
+```rust
+/// Every connector implements this trait. The core doesn't know or care
+/// which provider is behind it — it just gets search results and records.
+#[async_trait]
+trait Connector: Send + Sync {
+    /// Human-readable name ("FamilySearch", "FindMyPast", ...).
+    fn name(&self) -> &str;
+
+    /// What this connector can do. Drives UI display and agent decisions.
+    fn capabilities(&self) -> ConnectorCapabilities;
+
+    /// Search the external provider. Returns normalized results.
+    async fn search(&self, query: &SearchQuery) -> Result<Vec<ExternalRecord>>;
+
+    /// Fetch a single record by its provider-specific ID.
+    async fn get_record(&self, external_id: &str) -> Result<ExternalRecord>;
+
+    /// Check whether credentials are configured and valid.
+    async fn health_check(&self) -> Result<ConnectorHealth>;
+}
+
+struct ConnectorCapabilities {
+    can_search_persons: bool,
+    can_search_records: bool,
+    can_fetch_images: bool,
+    can_search_places: bool,
+    requires_auth: bool,
+    rate_limit: Option<RateLimit>,   // requests per second/minute
+    supported_regions: Vec<String>,  // geographic focus (if any)
+}
+
+/// Normalized record from any provider. Provider-specific details in `raw_data`.
+struct ExternalRecord {
+    provider: String,
+    external_id: String,            // provider-specific ID
+    record_type: ExternalRecordType, // Census, BirthReg, DeathReg, Marriage, Baptism, Burial, ...
+    title: String,
+    persons: Vec<ExtractedPerson>,  // persons mentioned in this record
+    date: Option<DateValue>,
+    place: Option<String>,
+    source_citation: String,        // human-readable citation for this record
+    image_url: Option<String>,      // link to document image (if available)
+    raw_data: serde_json::Value,    // full provider response for lossless storage
+}
+```
+
+##### 9.2 Connector Registry & Configuration
+
+Connectors are registered in a `connectors.toml` configuration file:
+
+```toml
+[familysearch]
+enabled = true
+crate = "rustygene-connector-familysearch"
+auth_type = "oauth2"
+# Credentials stored separately in OS keychain or env vars, never in config.
+
+[findmypast]
+enabled = false
+crate = "rustygene-connector-findmypast"
+auth_type = "api_key"
+
+[wikitree]
+enabled = true
+crate = "rustygene-connector-wikitree"
+auth_type = "none"   # public read API
+```
+
+The connector registry is exposed via the REST API (`GET /api/v1/connectors`) so the UI can show which providers are available and their health status. Agents query the registry to discover which connectors are active.
+
+##### 9.3 REST API for Connectors
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/connectors` | `GET` | List registered connectors with status and capabilities. |
+| `/api/v1/connectors/{name}/search` | `GET` | Search a specific provider. `?q=...&type=person&date_range=...` |
+| `/api/v1/connectors/{name}/records/{external_id}` | `GET` | Fetch a specific record from the provider. |
+| `/api/v1/connectors/{name}/health` | `GET` | Auth status, rate limit remaining, last error. |
+| `/api/v1/connectors/search` | `GET` | **Federated search** across all enabled connectors. Results tagged by provider. |
+
+##### 9.4 Known Providers
+
+| Provider | Auth | API Type | Coverage | Notes |
+|---|---|---|---|---|
+| **FamilySearch** | OAuth 2.0 (Solutions Provider) | REST (GEDCOM X) | Global, largest free collection | Read-only recommended. Collaborative tree — writes need conflict handling. `gedcomx` crate for types. |
+| **Ancestry** | No public API | — | Global, largest paid collection | No connector possible without partnership. Import via GEDCOM export only. |
+| **FindMyPast** | API key (partnership) | REST | UK/Ireland, strong BMD + census | Commercial — requires data partnership agreement. |
+| **MyHeritage** | OAuth 2.0 | REST | Global, strong European coverage | API available for registered apps. DNA matching integration. |
+| **WikiTree** | None (public read) | REST | Global, collaborative | Free, open data. Good for cross-tree linking. |
+| **UK National Archives (Discovery)** | None | REST | UK government archives | Free search. Document images via commercial partners. |
+| **ScotlandsPeople** | No public API | — | Scotland BMD, census, wills | Manual export only. CSV importer for purchased data. |
+| **FreeCEN / FreeBMD / FreeREG** | None | Bulk download | UK census, BMD, parish registers | **Do not scrape** — volunteer-run. Contact FreeUKGen about data access. CSV importers for bulk data. |
+| **GeneaNet** | No public API | — | France, strong European coverage | GEDCOM import/export only. |
+| **Billiongraves / FindAGrave** | Varies | REST / scrape risk | Cemetery records | BillionGraves has API; FindAGrave does not (Ancestry-owned). |
+| **GeoNames** | None | REST | Place authority (12M names) | For place hierarchy enrichment, not person records. |
+| **Getty TGN** | None | SPARQL / bulk | Historical place names (2.4M) | Polyhierarchy, temporal scope. Phase 3+. |
+
+##### 9.5 Adding a New Connector
+
+1. Create a new crate in `crates/connectors/` (or a Python package in `agents/packages/` for API-only connectors).
+2. Implement the `Connector` trait (Rust) or the equivalent Python protocol.
+3. Add an entry to `connectors.toml`.
+4. Restart the application. The connector is auto-discovered and registered.
+
+No changes to core, storage, API, or UI. The federated search endpoint and agent infrastructure automatically pick up the new provider.
 
 ---
 
