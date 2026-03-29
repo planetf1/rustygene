@@ -442,6 +442,15 @@ CREATE TABLE persons (
 -- Same pattern for families, events, places, sources, citations, repositories, media, notes.
 -- All entity tables include `version` for optimistic locking and `schema_version` for JSON migrations.
 
+-- Generated columns for high-value query fields extracted from JSON blobs.
+-- Avoids full table scans while preserving JSON flexibility.
+-- See: https://www.sqlite.org/gencol.html
+-- Example:
+--   ALTER TABLE persons ADD COLUMN birth_year INTEGER
+--     GENERATED ALWAYS AS (json_extract(data, '$.birth_event.year')) VIRTUAL;
+--   CREATE INDEX idx_persons_birth_year ON persons(birth_year);
+-- Add generated columns for any field that appears in WHERE/ORDER BY clauses.
+
 -- Assertions stored in a unified table, linked to any entity
 CREATE TABLE assertions (
     id TEXT PRIMARY KEY,
@@ -460,7 +469,8 @@ CREATE TABLE assertions (
     created_at TEXT NOT NULL,      -- ISO 8601 UTC
     reviewed_at TEXT,              -- ISO 8601 UTC
     evidence_type TEXT NOT NULL DEFAULT 'direct', -- 'direct', 'indirect', 'negative' (Mills taxonomy)
-    idempotency_key TEXT UNIQUE   -- hash(entity_id + field + value + source_citations)
+    idempotency_key TEXT UNIQUE   -- hash(entity_id + field + value + sorted(source_citations))
+    -- NOTE: hash must sort arrays before hashing. [A,B] and [B,A] must produce the same key.
 );
 
 -- Optimistic locking: mutations require `WHERE version = ?`. On mismatch, return 409 Conflict.
@@ -584,7 +594,7 @@ Media files stored on the local filesystem alongside the SQLite database:
 └── backups/                     # automated backup copies
 ```
 
-Media metadata (hash, mime type, OCR text, dimensions) stored in SQLite. Files content-addressed by hash for deduplication. Multiple metadata records can reference the same file hash (same image, different captions/contexts).
+Media metadata (hash, mime type, OCR text, dimensions in pixels, physical dimensions in millimetres where known) stored in SQLite. All physical measurements are metric-only — never store or display imperial units. Files content-addressed by hash for deduplication. Multiple metadata records can reference the same file hash (same image, different captions/contexts).
 
 **Supported media types:**
 * **Documents:** Birth/death/marriage certificates, census pages, wills, probate records, parish register entries (JPEG, PNG, TIFF, PDF).
@@ -877,6 +887,8 @@ struct ConnectorCapabilities {
     can_search_places: bool,
     requires_auth: bool,
     rate_limit: Option<RateLimit>,   // requests per second/minute
+    delay_between_requests_ms: Option<u64>, // crawl delay — volunteer sites and gov APIs
+                                            // aggressively block IPs that don't respect this
     supported_regions: Vec<String>,  // geographic focus (if any)
 }
 
@@ -995,7 +1007,7 @@ A fast, local-first, offline-capable desktop application.
 
 **Technology choices:**
 * **Svelte 5** over React: smaller bundles (~47KB vs ~156KB), lower memory, surgical DOM updates via runes. Graph viz libraries (Cytoscape, D3) have vanilla JS APIs — no need for framework-specific wrappers.
-* **Cytoscape.js 3.33:** Primary relationship graph view. Handles arbitrary topologies (pedigree collapse, multiple families). Performant at 1000+ nodes.
+* **Cytoscape.js 3.33:** Primary relationship graph view. Handles arbitrary topologies (pedigree collapse, multiple families). Performant at 1000+ nodes. **IPC consideration:** Passing 5000+ JSON node objects through Tauri IPC can cause UI stutter. The `/graph/pedigree/{id}` endpoint must support a `?generations=N` viewport radius parameter (default 3-4). Load immediate generations first; fetch further branches asynchronously as the user pans the canvas.
 * **D3.js:** Specialized views — fan charts (radial ancestor view), pedigree charts. Reference implementation: Gramps Web's D3 chart code.
 
 **Visual language:**
@@ -1017,9 +1029,39 @@ A fast, local-first, offline-capable desktop application.
 * **Search:** Full-text across all entities, notes, OCR text.
 * **Reports:** Printable/PDF pedigree charts, family group sheets, ahnentafel reports, descendant reports. Standard genealogy outputs.
 
-**Undo/redo:** UI supports undo/redo via the audit log. Each user action is an undoable operation. `Ctrl-Z` reverts the last mutation.
+**Additional key views (informed by most-requested Gramps addons — these should be native, not plugins):**
+* **Chromosome painter:** Visual chromosome map of DNA segment matches, painted across all 22 autosomes + X. Clickable segments link to matched persons. (Phase 4+, requires DNA data model.)
+* **Geographic heatmap:** Density overlay on the map view showing concentration of family events by region/era. Reveals migration patterns at a glance.
+* **Lifeline chart:** Horizontal lifeline bars on a common time axis. Instantly shows who was alive simultaneously, generational overlap, and age-at-event. (D3.js.)
+* **Shareable web export:** Generate a self-contained static HTML/JS family tree (no server needed) for sharing with non-technical family members. D3 interactive charts + narrative pages. Export via CLI (`rustygene export --format web`) or UI.
 
-**Bulk operations:** UI supports batch actions — import CSV of census records, bulk approve/reject proposals, bulk mark persons as confirmed.
+**Source-driven data entry:** Form-based entry mode that mirrors real-world documents — birth certificates, census forms, parish register entries, marriage records. The user fills in fields as they appear on the source document; the system maps them to the correct entities, events, and citations. This is the natural way genealogists work (source → data, not data → source). Configurable form templates for common document types per country/era.
+
+**Estimated date calculation:** Heuristic engine that estimates missing birth/death dates from known dates of relatives (parents' births, children's births, marriage dates, census ages). Configurable rules (e.g., "if no birth date, estimate from first child's birth minus 25 years"). Estimates are stored as `About` DateValues with low confidence, clearly marked in the UI. Enables timeline and chart views to function with incomplete data.
+
+**Session restore:** The app remembers the last active view, selected person, scroll position, and open panels. Restart picks up exactly where you left off. Maintains a recent-items history (last 20 visited persons/families/events) accessible via a Go menu or `Ctrl-R`.
+
+**Bulk operations:**
+* Import CSV of census records, bulk approve/reject proposals, bulk mark persons as confirmed.
+* **Bulk privacy management:** Set/clear privacy flags on all persons matching a filter (e.g., "born within last 100 years"). Essential before any export or sharing.
+* **Bulk tagging:** Add/remove tags on filtered sets of any entity type.
+* **Bulk source attachment:** Attach a single source/citation to all persons from a filtered set (e.g., all persons on a census page).
+* **Batch find-and-replace** on event descriptions, place names, notes.
+
+**Data quality tools (native, not plugins):**
+* **Media integrity checker:** Verify all media references resolve to files on disk. Flag missing, moved, or orphaned files. Offer path repair.
+* **Place cleanup:** Detect duplicate/variant place entries, offer merge. Enrich from GeoNames (coordinates, hierarchy, alternate names).
+* **Duplicate person detection:** Beyond the AI deduplicator agent — a deterministic tool that flags persons with similar names, dates, and locations for manual review.
+* **Type cleanup:** Remove unused custom event/attribute/relationship types that accumulate from imports.
+
+**Rich filter/query system:** Combinable filter rules beyond text search:
+* Relationship filters: persons within N degrees, patrilineal/matrilineal lines, X-chromosomal inheritance path.
+* Event filters: persons with/without specific event types, date ranges, places.
+* Citation filters: persons with fewer than N citations (under-sourced).
+* DNA filters: persons in a shared segment group, match threshold.
+* Filters are saveable, nameable, and composable (AND/OR). Used by both UI views and batch operations.
+
+**Undo/redo:** UI supports undo/redo via the audit log. Each user action is an undoable operation. `Ctrl-Z` reverts the last mutation.
 
 ---
 
@@ -1168,7 +1210,64 @@ Provider is configurable per-agent in YAML (`model: gemini-2.5-flash`, `model: c
 
 ---
 
-#### 13. Work Structuring Guidance
+#### 13. Testing Strategy
+
+Testing is not an afterthought — it is the primary mechanism for validating domain model correctness and preventing regressions in a system where data integrity is paramount.
+
+##### 13.1 Test Pyramid
+
+| Layer | Tool | What | Coverage Target |
+|---|---|---|---|
+| **Unit** | `cargo test`, `pytest` | Individual functions: date parsing, name matching, assertion conflict logic, calendar conversion, phonetic encoding | Domain model: 90%+ line coverage |
+| **Property-based** | `proptest` (Rust), `hypothesis` (Python) | Invariant testing: "for any valid DateValue, serialize → deserialize is identity", "for any two Names, similarity score is symmetric", "for any assertion set, exactly one is preferred" | All core domain types |
+| **Integration** | `cargo test` (in `tests/`) | Storage layer: CRUD operations, FTS5 indexing, optimistic locking conflicts, graph traversal CTEs, constraint enforcement | Every SQL table and index |
+| **GEDCOM round-trip** | Dedicated test suite | Import reference GEDCOM files → export → diff. Any delta is a bug. Test corpus: Gramps sample files, TNG samples, known edge-case files from GEDCOM-L mailing list | 100% tag coverage for GEDCOM 5.5.1 |
+| **API contract** | `reqwest` test client against Axum | Every REST endpoint: happy path, validation errors (422), optimistic lock conflicts (409), auth failures (401/403), pagination, filtering | Every endpoint |
+| **Agent** | `pytest` with mocked API | Agent runtime: YAML loading, context template resolution, LLM response parsing, proposal submission, idempotency dedup | All YAML agents |
+| **UI** | Playwright or Vitest | Critical workflows: person CRUD, review queue approve/reject, search, GEDCOM import wizard | Smoke coverage of primary flows |
+
+##### 13.2 Test Data
+
+* **`testdata/` directory** committed to the repo. Contains:
+    * Reference GEDCOM files (small, medium, edge-case).
+    * Sample media files (JPEG, PNG, PDF) for media pipeline tests.
+    * CSV census extracts for bulk import testing.
+    * Golden-file JSON snapshots for serialization tests.
+* **Fixture generation:** Use `proptest` to generate randomised but valid entity graphs for stress testing storage and graph traversal.
+* **LLM test fixtures:** Recorded LLM responses (not live calls) for agent tests. Agents are tested against deterministic fixtures, not live LLM APIs. Live integration tests run separately in CI with a dedicated test budget.
+
+##### 13.3 CI Pipeline
+
+```
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test                         # unit + integration + property + GEDCOM round-trip
+uv run ruff check agents/          # Python lint
+uv run ruff format --check agents/
+uv run pyright agents/             # type check
+uv run pytest agents/              # agent unit tests
+pnpm -C app lint                   # frontend lint
+pnpm -C app test                   # frontend unit tests
+```
+
+All checks must pass before merge. No skipping, no `#[ignore]` without a tracking issue.
+
+##### 13.4 Key Test Scenarios (Domain-Specific)
+
+These are non-obvious edge cases that must have explicit tests before implementation is considered complete:
+
+* **Date parsing:** "BET 1850 AND 1855", "ABT 1868", "Q1 1881", "3 FEB 1723/24" (dual date), "@#DJULIAN@ 15 OCT 1582", "@#DFRENCH R@ 1 VENDEMIAIRE AN II", empty/null dates, impossible dates (31 Feb).
+* **Name matching:** Smith ↔ Smyth (phonetic), Elisabeth ↔ Elizabeth (alternate), Wm ↔ William (known abbreviation), "de la Cruz" ↔ "Cruz" (prefix handling), "García y López" (compound surname), "Björk Guðmundsdóttir" (Icelandic patronymic).
+* **Assertion conflicts:** Two `Confirmed` assertions for the same field with different values. Preferred marking. Confidence ranking. Dispute workflow.
+* **Pedigree collapse:** Person appears as both great-grandparent via two paths. Graph traversal must not infinite-loop or double-count.
+* **Optimistic locking:** Two concurrent updates to the same entity — second must get 409.
+* **GEDCOM edge cases:** Empty `NOTE` tags, multi-line `CONT`/`CONC`, UTF-8 BOM, ANSEL encoding, nested `SOUR` citations, custom `_CUSTOM` tags preserved in round-trip.
+* **Privacy:** Export with living-person redaction. Verify names replaced, events stripped, structure preserved. Re-import the redacted export — must not corrupt.
+* **Calendar conversion:** Julian date in a British record pre-1752 → display as Gregorian equivalent. Dual date "1723/24" → both years preserved.
+
+---
+
+#### 14. Work Structuring Guidance
 
 ##### Development approach
 * **Test-driven for the domain model.** Write tests for `DateValue` parsing, name matching, assertion conflict resolution, and GEDCOM import before writing the implementation. The domain model is the foundation — get it right early.
@@ -1199,7 +1298,7 @@ Retrospectives are stored in `docs/retro/` as dated markdown files (`docs/retro/
 
 ---
 
-#### 14. Dependency Summary
+#### 15. Dependency Summary
 
 | Component | Crate / Package | Status | Risk |
 |---|---|---|---|
@@ -1220,7 +1319,7 @@ Retrospectives are stored in `docs/retro/` as dated markdown files (`docs/retro/
 
 ---
 
-#### 15. Phasing
+#### 16. Phasing
 
 **Phase 1: Core Data Model + Storage + CLI**
 * Domain model crate (all entity types, assertion wrapper).
@@ -1259,7 +1358,7 @@ Retrospectives are stored in `docs/retro/` as dated markdown files (`docs/retro/
 
 ---
 
-#### 16. Open Questions
+#### 17. Open Questions
 
 1. ~~**Licensing?**~~ **Resolved: MIT/Apache dual license.** Maximises adoption and compatibility with volunteer genealogy communities.
 2. ~~**Collaboration model?**~~ **Resolved: Single-user desktop for Phases 1-4.** Multi-user collaboration is a long-term goal (Phase 5+). The data model (assertions, audit log, optimistic locking) is designed to support it when the time comes.
