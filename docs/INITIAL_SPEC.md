@@ -419,6 +419,13 @@ Future backends (added without touching `core`, `api`, or frontend):
     * **Fuzzy/typo tolerance:** Levenshtein distance or trigram matching (`pg_trgm` in PG, application-level in SQLite) for OCR errors and transcription mistakes.
     * **Date range search:** "born about 1850" searches 1848-1852. Tolerance configurable per query.
     * **Combined:** Search "William Smith born ~1850 Yorkshire" uses all strategies simultaneously, ranked by relevance (exact > phonetic > fuzzy).
+* **Core validation rules:** The Rust storage layer enforces basic sanity checks on every mutation, independent of AI agents:
+    * Birth date must precede death date.
+    * Parent must be older than child (minimum age gap configurable, default 12 years).
+    * No impossible dates (31 Feb, 31 Apr, etc.).
+    * Event dates must fall within the person's lifespan (with tolerance for imprecise dates).
+    * Relationship constraints: a person cannot be their own parent/child.
+    * These are hard constraints — rejected at the API layer with a 422 error and a clear message. Agents proposing data that violates these constraints have their proposals auto-rejected.
 * **Audit log:** Append-only `audit_log` table. Every mutation records timestamp, actor, entity, old/new value. Enables undo.
 * **Backup/restore:** Copy the SQLite file + media directory. Application-level: GEDCOM or JSON bundle export.
 * **Versioning:** Assertions are never deleted, only superseded (status changes from `confirmed` to `rejected`, new assertion added). Audit log enables viewing state at any past point.
@@ -599,9 +606,16 @@ A fast, local-first, offline-capable desktop application.
 * **Fan chart:** Radial ancestor view (D3).
 * **Relationship graph:** Full network view (Cytoscape). The primary differentiator.
 * **Person detail:** Timeline of events, attached media, source citations, competing assertions.
+* **Timeline view:** Chronological timeline of all events for a person, family, or the entire tree. Zoomable.
+* **Map view:** Events plotted on a geographic map (migration paths, census locations, birth/death places). Leaflet or MapLibre. Shows movement over time.
 * **Document viewer:** Image + OCR text side-by-side, annotation tools.
 * **Review queue:** Bulk approve/reject/modify agent proposals.
 * **Search:** Full-text across all entities, notes, OCR text.
+* **Reports:** Printable/PDF pedigree charts, family group sheets, ahnentafel reports, descendant reports. Standard genealogy outputs.
+
+**Undo/redo:** UI supports undo/redo via the audit log. Each user action is an undoable operation. `Ctrl-Z` reverts the last mutation.
+
+**Bulk operations:** UI supports batch actions — import CSV of census records, bulk approve/reject proposals, bulk mark persons as confirmed.
 
 ---
 
@@ -833,8 +847,8 @@ Provider is configurable per-agent in YAML (`model: gemini-2.5-flash`, `model: c
 
 #### 15. Open Questions
 
-1. **Licensing?** Open source (AGPL like Gramps, or MIT/Apache)? MIT/Apache recommended if integrating with volunteer genealogy communities.
-2. **Collaboration model?** Single-user desktop only, or eventual multi-user shared tree?
+1. ~~**Licensing?**~~ **Resolved: MIT/Apache dual license.** Maximises adoption and compatibility with volunteer genealogy communities.
+2. ~~**Collaboration model?**~~ **Resolved: Single-user desktop for Phases 1-4.** Multi-user collaboration is a long-term goal (Phase 5+). The data model (assertions, audit log, optimistic locking) is designed to support it when the time comes.
 3. **OpenCLAW integration?** Potential scope extension — legal document processing for probate/will records. Deferred.
 4. **Research branching?** "What if this John Smith is a different person?" — fork the graph, explore, merge back. Powerful differentiator, complex implementation. Phase 5+?
 5. **GEDCOM 7.0 import priority?** Future standard but low current adoption.
