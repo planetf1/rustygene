@@ -491,22 +491,101 @@ When building multiple agents, common infrastructure should be extracted:
 
 #### 5. REST API (Axum + utoipa)
 
-| Endpoint Group | Purpose |
-|---|---|
-| `GET/POST /graph/**` | Read and mutate the current graph state. Mutations require `If-Match: <version>` header for optimistic locking; return 409 Conflict on version mismatch. |
-| `POST /staging` | Submit proposals. Agents and bulk importers write here. Deduplicated via idempotency key (`hash(entity_id + field + value + source_citations)`). Duplicate key with different confidence updates the existing proposal if still unreviewed. |
-| `GET/POST /review` | Human review queue. Approve/reject/modify proposals. Bulk operations. |
-| `GET /search` | Full-text search across all entities and media OCR text. |
-| `POST /media`, `GET /media/{id}` | Upload, download, thumbnail for attached files. |
-| `POST /media/{id}/extract` | Trigger OCR/vision extraction on an uploaded document. |
-| `POST /import` | GEDCOM/CSV/Gramps XML import. Returns import report. |
-| `GET /export` | GEDCOM 5.5.1, GEDCOM 7.0, JSON, media bundle export. |
-| `GET /events` | Event polling endpoint for agents. |
-| `GET /events/stream` | SSE stream for real-time event delivery to agents. |
-| `GET /agents` | Agent registry and health status. |
-| `GET /health` | System health, queue depth, storage stats. |
+##### REST vs GraphQL
 
-OpenAPI spec auto-generated via `utoipa`. Client SDKs for Python (and any other language) derived from the spec.
+**REST chosen for Phase 1-3.** Reasons:
+* `utoipa` auto-generates OpenAPI specs from Axum handlers — single source of truth, auto-generated client SDKs.
+* Agents are simple consumers — they don't need the query flexibility of GraphQL.
+* Caching, ETags, and optimistic locking map naturally to HTTP semantics.
+* GraphQL adds complexity (schema stitching, N+1 queries, batching) without clear benefit at this scale.
+
+**GraphQL may be added later** as an alternative API layer (Phase 5+) for the desktop/web UI where flexible queries over the graph would reduce round-trips. `async-graphql` is the mature Rust GraphQL library. The trait-based storage abstraction supports both REST and GraphQL resolvers without duplication.
+
+##### Resource-Oriented API Design
+
+All mutations require `If-Match: <version>` header for optimistic locking. Version mismatch returns `409 Conflict`.
+
+**Entity resources** (standard CRUD pattern for each entity type):
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/persons` | `GET` (list, filter, paginate), `POST` (create) | |
+| `/api/v1/persons/{id}` | `GET`, `PUT`, `DELETE` | Includes assertions, names, linked events |
+| `/api/v1/persons/{id}/assertions` | `GET`, `POST` | All assertions for this person |
+| `/api/v1/persons/{id}/relationships` | `GET` | All relationships involving this person |
+| `/api/v1/persons/{id}/media` | `GET` | Linked media items |
+| `/api/v1/persons/{id}/timeline` | `GET` | Chronological events for this person |
+| `/api/v1/families` | `GET`, `POST` | |
+| `/api/v1/families/{id}` | `GET`, `PUT`, `DELETE` | |
+| `/api/v1/relationships` | `GET`, `POST` | Pairwise relationships (couple, parent-child, etc.) |
+| `/api/v1/relationships/{id}` | `GET`, `PUT`, `DELETE` | |
+| `/api/v1/events` | `GET`, `POST` | |
+| `/api/v1/events/{id}` | `GET`, `PUT`, `DELETE` | Includes participants with roles |
+| `/api/v1/places` | `GET`, `POST` | |
+| `/api/v1/places/{id}` | `GET`, `PUT`, `DELETE` | Includes hierarchy (enclosed-by) |
+| `/api/v1/sources` | `GET`, `POST` | |
+| `/api/v1/sources/{id}` | `GET`, `PUT`, `DELETE` | |
+| `/api/v1/citations` | `GET`, `POST` | |
+| `/api/v1/citations/{id}` | `GET`, `PUT`, `DELETE` | |
+| `/api/v1/repositories` | `GET`, `POST` | |
+| `/api/v1/repositories/{id}` | `GET`, `PUT`, `DELETE` | |
+| `/api/v1/notes` | `GET`, `POST` | |
+| `/api/v1/notes/{id}` | `GET`, `PUT`, `DELETE` | |
+
+**Media resources:**
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/media` | `GET` (list), `POST` (upload, multipart) | |
+| `/api/v1/media/{id}` | `GET` (metadata), `DELETE` | |
+| `/api/v1/media/{id}/file` | `GET` (download original) | |
+| `/api/v1/media/{id}/thumbnail` | `GET` (download thumbnail) | |
+| `/api/v1/media/{id}/extract` | `POST` (trigger OCR/vision) | |
+
+**Staging & review:**
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/staging` | `GET` (list proposals), `POST` (submit proposal) | Deduplicated via idempotency key. |
+| `/api/v1/staging/{id}` | `GET`, `DELETE` | |
+| `/api/v1/staging/{id}/approve` | `POST` | Move to confirmed assertions. |
+| `/api/v1/staging/{id}/reject` | `POST` | Mark as rejected with reason. |
+| `/api/v1/staging/bulk` | `POST` | Bulk approve/reject. Body: `{ids: [...], action: "approve"|"reject"}` |
+
+**Search:**
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/search` | `GET` | `?q=...&type=person&strategy=phonetic&date_range=1850..1870&place=yorkshire` |
+
+**Graph traversal:**
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/graph/ancestors/{person_id}` | `GET` | `?generations=5`. Returns ancestor tree. |
+| `/api/v1/graph/descendants/{person_id}` | `GET` | `?generations=5`. Returns descendant tree. |
+| `/api/v1/graph/path/{person_id_1}/{person_id_2}` | `GET` | Shortest relationship path between two persons. |
+| `/api/v1/graph/pedigree/{person_id}` | `GET` | Pedigree data (optimised for chart rendering). |
+
+**Import/export:**
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/import` | `POST` | Multipart upload. `?format=gedcom|csv|gramps_xml`. Returns job ID. |
+| `/api/v1/import/{job_id}` | `GET` | Import job status and report. |
+| `/api/v1/export` | `GET` | `?format=gedcom|gedcom7|json|bundle`. Streams the export. |
+
+**Infrastructure:**
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/events` | `GET` | Polling. `?since={timestamp}&types=entity.created,...` |
+| `/api/v1/events/stream` | `GET` | SSE stream for real-time delivery. |
+| `/api/v1/agents` | `GET` (list), `POST` (register) | |
+| `/api/v1/agents/{id}` | `GET`, `DELETE` | Includes health, last seen, error count. |
+| `/api/v1/health` | `GET` | System health, queue depth, storage stats. |
+
+All endpoints versioned under `/api/v1/`. OpenAPI spec auto-generated via `utoipa`. Client SDKs for Python (and any other language) derived from the spec.
 
 ---
 
