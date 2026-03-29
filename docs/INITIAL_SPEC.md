@@ -1,7 +1,7 @@
 ### Technical Specification: RustyGene — AI-Assisted Genealogy Engine
 
 **Document Revision Date:** 2026-03-29
-**Revision:** 3 (monorepo structure, SQLite-primary storage, future extensibility)
+**Revision:** 5 (data model alignment, cross-tree linking, pluggable agents, language standards, UI variants)
 
 ---
 
@@ -162,19 +162,44 @@ Traditional genealogy databases treat data as binary facts. This system models d
 
 ##### 2.1 Entity Types
 
-Informed by the Gramps data model, GEDCOM 5.5.1/7.0, and real-world genealogy complexity:
+The data model draws from three established models, taking the best of each:
 
-| Entity | Purpose | Notes |
-|---|---|---|
-| `Person` | An individual | Multiple names (birth/married/aka), sex, living flag |
-| `Family` | A partnership or union | Partner refs, child refs, relationship type (married/civil/de facto/unknown) |
-| `Event` | Something that happened | Typed (birth/death/census/baptism/burial/migration/occupation/...), date, place ref |
-| `Place` | A location with temporal validity | Name hierarchy (parish→county→country), coordinates, date ranges (boundaries change) |
-| `Source` | A document or record set | Title, author, publication info, repository ref |
-| `Citation` | A specific reference within a source | Page/folio/entry number, transcription, confidence |
-| `Repository` | Where sources are held | Name, address, type (archive/library/website/personal collection) |
-| `Media` | An attached file | File path, content hash, mime type, thumbnail, extracted OCR text |
-| `Note` | Free-text annotation | Typed (research/transcript/general), linked to any entity |
+* **GEDCOM X** (FamilySearch): Person, Relationship (Couple / ParentChild), Fact, SourceDescription, Agent. Flat relationship model — no "Family" grouping object, just pairwise relationships. Every conclusion has Attribution (who, when, why). Identifiers can be Primary, Authority, or Deprecated (for merges).
+* **Gramps** (v5.2): Person, Family, Event, Place, Source, Citation, Repository, Media, Note as primary objects. Family is a first-class grouping object linking partners + children. Events are shared across people (a census record is one Event, multiple people participated). Places have hierarchical names.
+* **GEDCOM 5.5.1/7.0**: The interchange standard. Person (INDI), Family (FAM), Source (SOUR), Repository (REPO), Note (NOTE), Media (OBJE). Family-centric model.
+
+**RustyGene's model** follows the Gramps approach (Family as a first-class grouping) while incorporating GEDCOM X's attribution and pairwise relationship richness:
+
+| Entity | Purpose | Key properties | Analogues |
+|---|---|---|---|
+| `Person` | An individual | names (ordered, typed: birth/married/aka), gender, living flag, private flag | GEDCOM X Person, Gramps Person, GEDCOM INDI |
+| `Family` | A partnership/union grouping | partner refs, child refs (with lineage type: biological/adopted/foster/step/unknown), relationship type | Gramps Family, GEDCOM FAM |
+| `Relationship` | A pairwise link between two persons | type (couple/parent-child/godparent/guardian/...), person1 ref, person2 ref, facts | GEDCOM X Relationship — more expressive than Family alone |
+| `Event` | Something that happened | type (birth/death/marriage/census/baptism/burial/migration/occupation/...), date, place ref, participants (person refs with roles) | Gramps Event, GEDCOM X Fact |
+| `Place` | A location with temporal validity | name hierarchy (parish→county→country), coordinates, validity date range, enclosed-by ref (parent place) | Gramps Place, GEDCOM X PlaceDescription |
+| `Source` | A document or record set | title, author, publication info, repository ref, resource type | Gramps Source, GEDCOM X SourceDescription |
+| `Citation` | A specific reference within a source | page/folio/entry, transcription, date accessed | Gramps Citation, GEDCOM X SourceReference |
+| `Repository` | Where sources are held | name, address, type (archive/library/website/personal collection) | Gramps Repository, GEDCOM REPO |
+| `Media` | An attached file | file path, content hash, mime type, thumbnail, OCR text, dimensions | Gramps Media, GEDCOM OBJE, FamilySearch Memory |
+| `Note` | Free-text annotation | text (markdown), type (research/transcript/general), linked entity refs | Gramps Note, GEDCOM NOTE, FamilySearch Discussion |
+
+**Design notes:**
+* Both `Family` (grouping) and `Relationship` (pairwise) exist because they serve different purposes. A Family groups a household for GEDCOM compatibility and UI display. A Relationship captures precise typed links (e.g., godparent, guardian) that don't fit the nuclear family model.
+* Events are shared objects — a census record is one Event with multiple Person participants (each with a role: head, wife, child, servant, etc.). This matches how records actually work.
+* Every entity has a `private` flag for living-persons privacy control.
+
+##### 2.1.1 Cross-Tree Linking (Future)
+
+For tree sharing and collaboration:
+
+* **External identifiers:** Every entity can carry external IDs (GEDCOM X `Identifier` with types: `Primary`, `Authority`, `Deprecated`). An Authority identifier links to a person in an external system (FamilySearch PID, another RustyGene instance, WikiTree ID).
+* **Linked trees:** A user can link a local Person to an external tree's Person via an Authority identifier. The link carries a `trust_level` (full / partial / untrusted) that governs how much data is imported:
+    * `full`: All assertions from the linked tree are imported with the external tree's confidence scores.
+    * `partial`: Only assertions with source citations are imported; unsourced assertions are discarded.
+    * `untrusted`: Link is recorded for reference only; no assertions are imported.
+* **Trust propagation:** Assertions originating from a linked tree carry a `provenance` field identifying the external source. If the trust level is later downgraded, imported assertions can be bulk-reassessed.
+* **Merge support:** When two Person records are determined to be the same individual (local dedup or cross-tree match), one becomes the primary and the other is marked `Deprecated`. All references are rewritten. The audit log records the merge for reversal.
+* **Unmerge support:** Merges can be reversed. The audit log stores the complete pre-merge state of both entities. Unmerge restores both persons to their pre-merge state and rewrites references back. This is messy (assertions may have been added post-merge that reference both original entities) — the UI flags these for manual review after unmerge.
 
 ##### 2.2 Assertion Wrapper
 
@@ -196,10 +221,23 @@ pub struct Assertion<T> {
 
 Multiple competing assertions can coexist for the same field (e.g., two possible birth dates from conflicting sources). The human resolves conflicts via the review queue.
 
-##### 2.3 Design Constraints
+##### 2.3 Assertion Conflict Resolution
+
+When multiple `Confirmed` assertions exist for the same entity + field:
+* **UI:** Displays all competing assertions with confidence scores, sources, and provenance. The user can mark one as `preferred`.
+* **Default query behaviour:** Returns the `preferred` assertion if set, otherwise the highest-confidence `Confirmed` assertion. API callers can request all assertions via `?include_all=true`.
+* **Agent proposals:** A new proposal for an already-asserted field does not replace the existing assertion. It enters the staging queue for human review. The user decides whether to confirm, dispute, or reject.
+
+##### 2.4 Authentication & Authorization
+
+* **Desktop mode (Phase 1-2):** No user authentication. Single-user, local SQLite, all access is trusted.
+* **Agent API keys (Phase 3):** API keys generated via CLI (`rustygene agent register <name>`) or UI. Each agent authenticates with `Authorization: Bearer <key>`. Keys are stored hashed in the `agents` table. Rotation via `rustygene agent rotate <name>`.
+* **Future server mode (Phase 5):** OAuth2 + JWT for multi-user collaboration. Per-user permissions (read-only, propose, review, admin). Agents authenticate as service accounts.
+
+##### 2.5 Design Constraints
 
 * **Names are complex:** `Vec<PersonName>` where each has given/surname/prefix/suffix/type/date range. People have married names, maiden names, aliases, spelling variations across records.
-* **Dates are imprecise:** Support exact, range, before/after, about, quarter (Q1 1881), textual ("between 1850 and 1855").
+* **Dates are imprecise and fuzzy:** Support exact, range, before/after, about, quarter (Q1 1881), textual ("between 1850 and 1855"), and **tolerance ranges** (e.g., "1868 +/- 1 year"). The `DateValue` enum encodes all variants. Fuzzy matching uses tolerance to find overlapping date ranges — a search for birth "about 1850" matches records from 1848-1852. Agents use tolerance ranges for probabilistic matching (higher tolerance = lower confidence).
 * **Relationships are diverse:** Same-sex partnerships, adoption, fosterage, step-parenting — all first-class via typed `ChildLink` (biological/adopted/foster/step/unknown) and `PartnerLink` enums.
 * **Pedigree collapse:** Ancestors appearing multiple times (cousin marriages) handled naturally — `Person` nodes are referenced, not duplicated. The graph may contain cycles.
 * **Place temporality:** "Middlesex" doesn't exist post-1965. Places have validity date ranges and may reference successor/predecessor places.
@@ -235,11 +273,14 @@ SQLite is the source of truth for all entity data. Single file, ACID transaction
 
 CREATE TABLE persons (
     id TEXT PRIMARY KEY,              -- UUID
+    version INTEGER NOT NULL DEFAULT 1, -- optimistic locking (incremented on each mutation)
     schema_version INTEGER NOT NULL,  -- JSON blob schema version
     data JSON NOT NULL,               -- full Person struct as JSON
     created_at TEXT NOT NULL,         -- ISO 8601 UTC
     updated_at TEXT NOT NULL          -- ISO 8601 UTC
 );
+-- Same pattern for families, events, places, sources, citations, repositories, media, notes.
+-- All entity tables include `version` for optimistic locking and `schema_version` for JSON migrations.
 
 -- Assertions stored in a unified table, linked to any entity
 CREATE TABLE assertions (
@@ -247,16 +288,27 @@ CREATE TABLE assertions (
     entity_id TEXT NOT NULL,       -- FK to any entity table
     entity_type TEXT NOT NULL,     -- 'person', 'family', 'event', ...
     field TEXT NOT NULL,           -- 'birth_date', 'name', 'parent_of', ...
-    value JSON NOT NULL,
+    value JSON NOT NULL,           -- full assertion value as JSON
+    value_date TEXT,               -- extracted for date assertions (enables range queries)
+    value_text TEXT,               -- extracted for name/text assertions (enables LIKE queries)
     confidence REAL NOT NULL,      -- 0.0..1.0
     status TEXT NOT NULL,          -- 'confirmed', 'proposed', 'disputed', 'rejected'
+    preferred INTEGER NOT NULL DEFAULT 0, -- 1 if user explicitly marked as preferred
     source_citations JSON,         -- array of citation refs
     proposed_by TEXT NOT NULL,     -- 'user:<id>', 'agent:<name>', 'import:<job>'
     reviewed_by TEXT,
     created_at TEXT NOT NULL,      -- ISO 8601 UTC
     reviewed_at TEXT,              -- ISO 8601 UTC
-    idempotency_key TEXT UNIQUE   -- hash(entity_id + field + value) — prevents duplicate proposals
+    idempotency_key TEXT UNIQUE   -- hash(entity_id + field + value + source_citations)
 );
+
+-- Optimistic locking: mutations require `WHERE version = ?`. On mismatch, return 409 Conflict.
+-- UPDATE persons SET data = ?, version = version + 1 WHERE id = ? AND version = ?;
+
+CREATE INDEX idx_assertions_entity_field ON assertions(entity_id, field);
+CREATE INDEX idx_assertions_date ON assertions(value_date) WHERE value_date IS NOT NULL;
+CREATE INDEX idx_assertions_status ON assertions(status);
+CREATE INDEX idx_assertions_confidence ON assertions(entity_id, field, confidence DESC);
 
 -- Graph edges for relationship traversal
 CREATE TABLE relationships (
@@ -286,6 +338,28 @@ CREATE TABLE audit_log (
     old_value JSON,
     new_value JSON
 );
+
+-- Event log for agent replay (retained 30 days, pruned on startup)
+CREATE TABLE event_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,         -- ISO 8601 UTC
+    event_type TEXT NOT NULL,        -- 'entity.created', 'media.uploaded', etc.
+    entity_id TEXT,
+    entity_type TEXT,
+    payload JSON NOT NULL,           -- full event payload
+    expires_at TEXT NOT NULL         -- ISO 8601 UTC, timestamp + 30 days
+);
+CREATE INDEX idx_event_log_type_time ON event_log(event_type, timestamp);
+
+-- Agent registry
+CREATE TABLE agents (
+    id TEXT PRIMARY KEY,             -- agent name
+    api_key_hash TEXT NOT NULL,      -- bcrypt/argon2 hash of the API key
+    registered_at TEXT NOT NULL,     -- ISO 8601 UTC
+    last_seen_at TEXT,               -- ISO 8601 UTC, updated on each API call
+    status TEXT NOT NULL DEFAULT 'active',  -- 'active', 'inactive', 'error'
+    config JSON                      -- agent-specific configuration
+);
 ```
 
 ##### 3.3 Media Storage
@@ -305,7 +379,15 @@ Media files stored on the local filesystem alongside the SQLite database:
 └── backups/                     # automated backup copies
 ```
 
-Media metadata (hash, mime type, OCR text, dimensions) stored in SQLite. Files content-addressed by hash for deduplication.
+Media metadata (hash, mime type, OCR text, dimensions) stored in SQLite. Files content-addressed by hash for deduplication. Multiple metadata records can reference the same file hash (same image, different captions/contexts).
+
+**Supported media types:**
+* **Documents:** Birth/death/marriage certificates, census pages, wills, probate records, parish register entries (JPEG, PNG, TIFF, PDF).
+* **Photographs:** Family photos, headstone photos, house photos (JPEG, PNG, HEIC).
+* **Audio/Video:** Oral history recordings, interviews (MP3, MP4, WAV) — metadata only, no transcription in Phase 1.
+* **Transcriptions:** Manual or OCR-generated text associated with a document image.
+
+Each media item can be linked to one or more entities (a census page image links to multiple Persons via their Citation).
 
 ##### 3.4 Export for Portability & Git
 
@@ -329,7 +411,14 @@ Future backends (added without touching `core`, `api`, or frontend):
 ##### 3.6 Key Capabilities
 
 * **Graph traversal:** Recursive CTEs over the `relationships` table. Performant for ancestor/descendant chains at this scale.
-* **Full-text search:** FTS5. Searches across person names, notes, transcriptions, OCR text, place names.
+* **Search (multi-strategy):** Name search is hard in genealogy — spelling varies wildly across records (Smith/Smyth/Smythe, Elisabeth/Elizabeth, Wm/William). The search system supports multiple strategies:
+    * **Exact match:** FTS5 standard query.
+    * **Stem matching:** FTS5 porter tokenizer handles common stems (e.g., "running" matches "run").
+    * **Phonetic matching:** Soundex/Metaphone/Double Metaphone for name variants that sound alike (Smith ↔ Smyth). Stored as additional indexed columns.
+    * **Known alternates:** A configurable name-variants table mapping common alternate names (William ↔ Wm ↔ Will ↔ Bill, Margaret ↔ Peggy ↔ Maggie, Elisabeth ↔ Elizabeth).
+    * **Fuzzy/typo tolerance:** Levenshtein distance or trigram matching (`pg_trgm` in PG, application-level in SQLite) for OCR errors and transcription mistakes.
+    * **Date range search:** "born about 1850" searches 1848-1852. Tolerance configurable per query.
+    * **Combined:** Search "William Smith born ~1850 Yorkshire" uses all strategies simultaneously, ranked by relevance (exact > phonetic > fuzzy).
 * **Audit log:** Append-only `audit_log` table. Every mutation records timestamp, actor, entity, old/new value. Enables undo.
 * **Backup/restore:** Copy the SQLite file + media directory. Application-level: GEDCOM or JSON bundle export.
 * **Versioning:** Assertions are never deleted, only superseded (status changes from `confirmed` to `rejected`, new assertion added). Audit log enables viewing state at any past point.
@@ -372,13 +461,24 @@ An agent is anything that:
 
 Agents can be written in any language, run anywhere, and be swapped/added/removed without touching the core. The OpenAPI spec is the contract.
 
-##### 4.4 Agent Infrastructure (Shared)
+##### 4.4 Event Replay
+
+Agents that disconnect can replay missed events via `GET /events?since={timestamp}`. The `event_log` table retains events for 30 days (pruned on startup). This ensures agents recover cleanly after restarts or crashes.
+
+##### 4.5 Agent Infrastructure (Shared)
 
 When building multiple agents, common infrastructure should be extracted:
 * **Shared client library:** Auto-generated from OpenAPI spec. Handles auth, retries, rate limiting.
 * **Agent base class / trait:** Common event subscription, health reporting, logging, configuration.
-* **Agent registry:** The core tracks registered agents (`GET /agents`). Agents report health. UI shows agent status.
+* **Agent registry:** The core tracks registered agents in the `agents` table (`GET /agents`). Agents report health via periodic heartbeats. UI shows agent status. Agents not seen for a configurable timeout (default 5 minutes) are marked `inactive`.
 * **Shared tool definitions:** Connectors (FamilySearch, Discovery API) are Rust library crates exposed as API endpoints. Agents call them via REST, not by reimplementing HTTP clients.
+
+##### 4.6 Agent Failure Handling
+
+* **Proposal validation:** The `/staging` endpoint validates all proposals before storage. Malformed JSON, missing required fields, or invalid entity references are rejected with a 422 response. Agents never corrupt the staging queue.
+* **Health monitoring:** `GET /agents/{id}/health` returns last heartbeat, error count, and last error message. UI displays agent health dashboard.
+* **Crash recovery:** Agents are stateless consumers of the event stream. On restart, they resume from the last processed event timestamp (stored locally by the agent). No server-side state to recover.
+* **External API failures:** Agent base class implements exponential backoff with jitter for external API calls (FamilySearch, Discovery API, LLM providers). Circuit breaker pattern after N consecutive failures.
 
 ---
 
@@ -386,8 +486,8 @@ When building multiple agents, common infrastructure should be extracted:
 
 | Endpoint Group | Purpose |
 |---|---|
-| `GET/POST /graph/**` | Read and mutate the current graph state (persons, families, events, places, sources). |
-| `POST /staging` | Submit proposals. Agents and bulk importers write here. Deduplicated via idempotency key (`hash(entity_id + field + value)`). |
+| `GET/POST /graph/**` | Read and mutate the current graph state. Mutations require `If-Match: <version>` header for optimistic locking; return 409 Conflict on version mismatch. |
+| `POST /staging` | Submit proposals. Agents and bulk importers write here. Deduplicated via idempotency key (`hash(entity_id + field + value + source_citations)`). Duplicate key with different confidence updates the existing proposal if still unreviewed. |
 | `GET/POST /review` | Human review queue. Approve/reject/modify proposals. Bulk operations. |
 | `GET /search` | Full-text search across all entities and media OCR text. |
 | `POST /media`, `GET /media/{id}` | Upload, download, thumbnail for attached files. |
@@ -446,25 +546,54 @@ Built as separate Rust library crates, each implementing a `Connector` trait. Ex
 
 ---
 
-#### 9. User Interface (Tauri 2.x + Svelte 5)
+#### 9. User Interfaces
+
+Three interface layers, all backed by the same Rust core and REST API:
+
+##### 9.1 CLI (`rustygene`)
+
+The primary interface for Phase 1 development and power users. Built with `clap`.
+
+```
+rustygene import <file.ged>           # GEDCOM import
+rustygene export --format gedcom      # GEDCOM export
+rustygene export --format json        # JSON export
+rustygene query persons --name "Smith" --birth-range 1850..1870
+rustygene show person <uuid>          # detailed person view
+rustygene search "census 1881 yorkshire"
+rustygene agent register <name>       # register an agent
+rustygene agent list                  # show agent status
+rustygene backup                      # copy database + media
+rustygene restore <backup-path>
+```
+
+##### 9.2 TUI (Terminal UI — Optional)
+
+An interactive terminal interface inspired by k9s, lazygit, claude. Built with `ratatui`. Provides:
+* Navigable person/family/event lists with vim-style keybindings
+* Inline pedigree rendering (ASCII art tree)
+* Review queue with approve/reject workflow
+* Search with live results
+* Agent status dashboard
+
+Not a Phase 1 priority, but a natural extension of the CLI for users who prefer terminal workflows.
+
+##### 9.3 Desktop App (Tauri 2.x + Svelte 5)
 
 A fast, local-first, offline-capable desktop application.
 
-##### 9.1 Technology Choices
-
+**Technology choices:**
 * **Svelte 5** over React: smaller bundles (~47KB vs ~156KB), lower memory, surgical DOM updates via runes. Graph viz libraries (Cytoscape, D3) have vanilla JS APIs — no need for framework-specific wrappers.
 * **Cytoscape.js 3.33:** Primary relationship graph view. Handles arbitrary topologies (pedigree collapse, multiple families). Performant at 1000+ nodes.
 * **D3.js:** Specialized views — fan charts (radial ancestor view), pedigree charts. Reference implementation: Gramps Web's D3 chart code.
 
-##### 9.2 Visual Language
-
+**Visual language:**
 * Solid lines/borders = Confirmed assertions.
 * Dashed lines/borders = Proposed (unreviewed) assertions.
 * Colour gradients (red → amber → green) on nodes/edges mapping to `confidence` score.
 * Disputed assertions highlighted with a distinct indicator.
 
-##### 9.3 Key Views
-
+**Key views:**
 * **Pedigree chart:** Traditional ancestor tree.
 * **Descendant chart:** Top-down from an ancestor.
 * **Fan chart:** Radial ancestor view (D3).
@@ -476,25 +605,173 @@ A fast, local-first, offline-capable desktop application.
 
 ---
 
-#### 10. Agent Examples (Future — Pluggable)
+#### 10. Agent System (Future — Pluggable)
 
-These are built separately, whenever ready. Each is an independent process consuming the REST API and event bus.
+##### 10.1 Agent Types
+
+Two categories of agent, sharing the same infrastructure:
+
+**Coded agents** — Python programs with custom logic (API calls, data processing):
 
 | Agent | Subscribes To | Action |
 |---|---|---|
-| Validator | `entity.created`, `entity.updated` | Check temporal/geographic constraints. Flag contradictions (born after death, impossible travel). |
 | Discoverer | User request or `entity.created` | Query FamilySearch/Discovery APIs, propose record matches above confidence threshold. |
 | Document Processor | `media.uploaded` | Call `/media/{id}/extract`, review and refine results, submit structured proposals. |
-| Deduplicator | Scheduled | Find potential duplicate Person nodes via fuzzy matching, propose merges. |
-| Relationship Inferrer | `entity.created` | Suggest missing family links based on shared events, co-residence, naming patterns. |
 
-**Framework recommendation:** Pydantic AI or plain `google-genai` / `anthropic` SDK. Avoid heavy orchestration frameworks unless multi-agent coordination becomes genuinely complex. Agents are just programs that call the REST API.
+**Prompt-only agents** — Defined entirely in markdown/YAML, no coding required. The shared agent runtime loads the prompt, injects context from the API, calls the LLM, and submits proposals:
 
-**LLM provider flexibility:** Abstract the LLM call behind a provider trait/interface. Support Gemini, Claude, and local models (Ollama) to avoid vendor lock-in.
+```yaml
+# agents/definitions/validator.yaml
+name: validator
+description: Check temporal and geographic constraints
+subscribes_to: [entity.created, entity.updated]
+model: gemini-2.5-flash   # default LLM; overridable per agent
+context:
+  - entity: "{{event.entity}}"           # the entity that triggered
+  - ancestors: "{{entity.ancestors(3)}}"  # 3 generations of context
+  - events: "{{entity.events}}"           # related events
+prompt: |
+  You are a genealogy data validator. Given the following person and their
+  related events, check for contradictions:
+  - Birth date after death date
+  - Overlapping geographic locations within impossible travel timeframes
+  - Parent younger than child
+  - Marriage before age 14
+
+  Person: {{context.entity}}
+  Ancestors: {{context.ancestors}}
+  Events: {{context.events}}
+
+  For each issue found, return a JSON array of objects:
+  {
+    "entity_id": "...",
+    "field": "...",
+    "issue": "description of the contradiction",
+    "confidence": 0.0-1.0,
+    "suggested_action": "dispute" | "flag_for_review"
+  }
+
+  Return an empty array if no issues found.
+output_schema: ValidationResult[]
+action: submit_proposals   # auto-submit to staging queue
+```
+
+```yaml
+# agents/definitions/deduplicator.yaml
+name: deduplicator
+description: Find potential duplicate persons
+trigger: scheduled
+schedule: "0 3 * * *"    # daily at 03:00
+model: gemini-2.5-flash
+context:
+  - candidates: "{{search.similar_persons(threshold=0.6)}}"
+prompt: |
+  Compare the following pairs of person records and assess whether
+  they are likely the same individual. Consider: name similarity,
+  date proximity, geographic overlap, shared family members.
+
+  Candidates: {{context.candidates}}
+
+  For each pair, return:
+  {
+    "person1_id": "...",
+    "person2_id": "...",
+    "confidence": 0.0-1.0,
+    "reasoning": "...",
+    "suggested_action": "merge" | "link" | "ignore"
+  }
+output_schema: DeduplicationResult[]
+action: submit_proposals
+```
+
+**Adding a new agent** = writing a YAML file in `agents/definitions/` and restarting the agent runtime. No Python code required. The runtime handles event subscription, LLM calls, output parsing, schema validation, and proposal submission.
+
+##### 10.2 Agent Runtime Architecture
+
+```
+agents/
+├── definitions/                 # YAML agent definitions (prompt-only agents)
+│   ├── validator.yaml
+│   ├── deduplicator.yaml
+│   ├── relationship-inferrer.yaml
+│   └── ...
+├── packages/
+│   ├── runtime/                 # Shared agent runtime (loads YAMLs, runs prompts)
+│   │   ├── pyproject.toml
+│   │   └── src/
+│   │       ├── loader.py        # Parse YAML definitions
+│   │       ├── context.py       # Template engine — resolves {{entity.ancestors(3)}} etc.
+│   │       ├── llm.py           # LLM provider abstraction
+│   │       └── submitter.py     # Validates output, submits to /staging
+│   ├── client/                  # Auto-generated from OpenAPI spec
+│   ├── discoverer/              # Coded agent (custom FamilySearch logic)
+│   └── doc-processor/           # Coded agent (custom vision/OCR logic)
+└── pyproject.toml               # uv workspace root
+```
+
+##### 10.3 LLM Provider Configuration
+
+**Default LLM:** Gemini (2.5 Flash for cost efficiency, 2.5 Pro for complex reasoning). Gemini is the default because of its strong structured output support, competitive pricing, and generous free tier for development.
+
+**Multi-provider support:** The LLM abstraction layer supports:
+* **Gemini** (default) — via `google-genai` SDK
+* **Claude** — via `anthropic` SDK
+* **OpenAI-compatible** — via `openai` SDK (covers GPT, Groq, Together, etc.)
+* **Local models** — via Ollama (LLaMA, Mistral, etc.) for offline/privacy-sensitive use
+
+Provider is configurable per-agent in YAML (`model: gemini-2.5-flash`, `model: claude-sonnet-4-6`, `model: ollama/llama3.2`). Global default set in `agents/config.yaml`.
 
 ---
 
-#### 11. Dependency Summary
+#### 11. Language Standards & Tooling
+
+##### Rust
+* **Edition:** 2024 (Rust 1.85+). Use `edition = "2024"` in all `Cargo.toml` files.
+* **MSRV:** 1.85.0 (first edition 2024 release).
+* **Style:** `rustfmt` with default settings. `clippy` with `#![warn(clippy::all, clippy::pedantic)]`.
+* **Async:** Tokio runtime. `async fn` in traits (stabilised in Rust 2024, no `#[async_trait]` needed).
+* **Error handling:** `thiserror` for library errors, `anyhow` for application/CLI errors. No silent swallowing — fail fast and loud.
+* **Testing:** `cargo test` with `#[test]` and `#[tokio::test]`. Integration tests in `tests/` directory per crate. Property-based testing with `proptest` for the domain model (date parsing, name matching).
+* **CI:** `cargo fmt --check`, `cargo clippy`, `cargo test`, `cargo doc` on every PR.
+
+##### Python (Agents)
+* **Version:** 3.12+ (structural pattern matching, modern generics, `type` statement).
+* **Package manager:** `uv`. All commands via `uv run`.
+* **Linter/formatter:** `ruff` (format + lint). Configuration in `pyproject.toml`.
+* **Type checking:** `pyright` or `ty` in strict mode. No `Any` unless forced by an external library.
+* **Models:** Pydantic v2 `BaseModel` for all data structures.
+* **Testing:** `pytest` with `pytest-asyncio`. Fixtures for API client mocking.
+
+##### Frontend (Svelte)
+* **Svelte 5** with runes (`$state`, `$derived`, `$effect`). No legacy Svelte 4 patterns.
+* **TypeScript** strict mode. No `any`.
+* **Package manager:** `pnpm` (preferred for monorepo workspaces) or `npm`.
+* **Formatter:** `prettier` + `eslint`.
+
+---
+
+#### 12. Work Structuring Guidance
+
+##### Development approach
+* **Test-driven for the domain model.** Write tests for `DateValue` parsing, name matching, assertion conflict resolution, and GEDCOM import before writing the implementation. The domain model is the foundation — get it right early.
+* **CLI-first.** Phase 1 delivers a CLI that validates every domain model decision. If the CLI can import a GEDCOM file, query persons, and export cleanly, the model is sound. The UI and API are presentation layers over a proven core.
+* **One crate at a time.** Start with `crates/core` (pure domain types, zero dependencies). Then `crates/storage` (SQLite). Then `crates/gedcom` (import/export). Then `crates/api` (REST). Each crate has a clear boundary and can be tested independently.
+* **Beads for issue tracking.** Use `bd` to track issues, tasks, and progress. Issues are prefixed `rustygene-<hash>`.
+
+##### PR discipline
+* Small, focused PRs. One crate or one feature per PR.
+* Every PR must pass `cargo fmt --check`, `cargo clippy`, `cargo test`.
+* OpenAPI spec regenerated and committed whenever `crates/api` changes.
+
+##### When to use AI assistance
+* Domain model design — use LLMs to review struct designs against GEDCOM X / Gramps models.
+* GEDCOM edge case handling — GEDCOM files are notoriously inconsistent; use LLMs to generate test fixtures for weird edge cases.
+* Agent prompt engineering — iterate on agent prompts with real genealogy data.
+* Do NOT use AI for core storage logic or security-sensitive code (auth, data integrity).
+
+---
+
+#### 13. Dependency Summary
 
 | Component | Crate / Package | Status | Risk |
 |---|---|---|---|
@@ -515,7 +792,7 @@ These are built separately, whenever ready. Each is an independent process consu
 
 ---
 
-#### 12. Phasing
+#### 14. Phasing
 
 **Phase 1: Core Data Model + Storage + CLI**
 * Domain model crate (all entity types, assertion wrapper).
@@ -535,7 +812,7 @@ These are built separately, whenever ready. Each is an independent process consu
 
 **Phase 3: REST API + Event Bus + Review Queue**
 * Axum API with OpenAPI spec.
-* Event bus (internal channels + webhook/polling delivery).
+* Event bus (internal channels + SSE/polling delivery).
 * Staging queue + review dashboard in UI.
 * Agent registry.
 
@@ -554,11 +831,12 @@ These are built separately, whenever ready. Each is an independent process consu
 
 ---
 
-#### 13. Open Questions
+#### 15. Open Questions
 
-1. **Licensing?** Open source (AGPL like Gramps, or MIT/Apache)?
+1. **Licensing?** Open source (AGPL like Gramps, or MIT/Apache)? MIT/Apache recommended if integrating with volunteer genealogy communities.
 2. **Collaboration model?** Single-user desktop only, or eventual multi-user shared tree?
 3. **OpenCLAW integration?** Potential scope extension — legal document processing for probate/will records. Deferred.
 4. **Research branching?** "What if this John Smith is a different person?" — fork the graph, explore, merge back. Powerful differentiator, complex implementation. Phase 5+?
 5. **GEDCOM 7.0 import priority?** Future standard but low current adoption.
 6. **Offline-first guarantee?** Core app works fully offline (SQLite + local media). Network only for connectors/agents.
+7. **Living persons privacy?** Genealogy data includes living people. Consider a privacy mode that redacts individuals born <100 years ago (configurable threshold). Important for GDPR compliance in a future server/multi-user edition. Phase 5+, but data model should accommodate a `living: bool` flag from the start.
