@@ -3161,5 +3161,147 @@ mod tests {
 
         let _ = std::fs::remove_file(&export_file);
     }
+
+    #[tokio::test]
+    async fn json_round_trip_export_import_export_are_identical() {
+        let backend1 = create_test_backend();
+        let person_id = EntityId::new();
+        let family_id = EntityId::new();
+
+        // Create test data in first database
+        backend1
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        backend1
+            .create_family(&Family {
+                id: family_id,
+                partner1_id: None,
+                partner2_id: None,
+                partner_link: rustygene_core::family::PartnerLink::Unknown,
+                couple_relationship: None,
+                child_links: vec![],
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create family");
+
+        // First export (from original data)
+        let suffix1 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let export_file_1 =
+            std::env::temp_dir().join(format!("rustygene-round-trip-1-{suffix1}.json"));
+
+        let _export_result_1 = backend1
+            .export_json_dump(JsonExportMode::SingleFile {
+                output_file: export_file_1.clone(),
+            })
+            .expect("first export");
+
+        // Import into a fresh database
+        let backend2 = create_test_backend();
+        backend2
+            .import_json_dump(JsonImportMode::SingleFile {
+                input_file: export_file_1.clone(),
+            })
+            .expect("import to second database");
+
+        // Second export (from imported data)
+        let suffix2 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let export_file_2 =
+            std::env::temp_dir().join(format!("rustygene-round-trip-2-{suffix2}.json"));
+
+        let _export_result_2 = backend2
+            .export_json_dump(JsonExportMode::SingleFile {
+                output_file: export_file_2.clone(),
+            })
+            .expect("second export");
+
+        // Read both exports as JSON and compare
+        let export_content_1 = std::fs::read_to_string(&export_file_1).expect("read export 1");
+        let export_content_2 = std::fs::read_to_string(&export_file_2).expect("read export 2");
+
+        let export_json_1: serde_json::Value =
+            serde_json::from_str(&export_content_1).expect("parse export 1");
+        let export_json_2: serde_json::Value =
+            serde_json::from_str(&export_content_2).expect("parse export 2");
+
+        // Compare manifest entity counts
+        let manifest1 = export_json_1
+            .get("manifest")
+            .expect("export 1 manifest missing");
+        let manifest2 = export_json_2
+            .get("manifest")
+            .expect("export 2 manifest missing");
+
+        let counts1 = manifest1
+            .get("entity_counts")
+            .and_then(|v| v.as_object())
+            .expect("export 1 entity_counts");
+        let counts2 = manifest2
+            .get("entity_counts")
+            .and_then(|v| v.as_object())
+            .expect("export 2 entity_counts");
+
+        // Assert that entity counts are identical (fidelity gate)
+        assert_eq!(
+            counts1.len(),
+            counts2.len(),
+            "Entity count types differ between exports"
+        );
+        for (entity_type, count1) in counts1 {
+            let msg = format!("Entity type {} missing in second export", entity_type);
+            let count2 = counts2.get(entity_type).expect(&msg);
+            assert_eq!(
+                count1, count2,
+                "Entity type {} count differs: {:?} vs {:?}",
+                entity_type, count1, count2
+            );
+        }
+
+        // Additional structural checks:
+        // - Both exports should have the same persons
+        let persons1 = export_json_1
+            .get("persons")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let persons2 = export_json_2
+            .get("persons")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        assert_eq!(persons1, persons2, "Person count mismatch");
+
+        // - Both exports should have the same families
+        let families1 = export_json_1
+            .get("families")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let families2 = export_json_2
+            .get("families")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        assert_eq!(families1, families2, "Family count mismatch");
+
+        let _ = std::fs::remove_file(&export_file_1);
+        let _ = std::fs::remove_file(&export_file_2);
+    }
 }
+
 
