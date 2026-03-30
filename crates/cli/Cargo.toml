@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rustygene-gedcom = { version = "0.1.0", path = "../gedcom" }
 clap = { version = "4.5.38", features = ["derive"] }
+rusqlite = { version = "0.33.0", features = ["bundled"] }
+rustygene-storage = { version = "0.1.0", path = "../storage" }

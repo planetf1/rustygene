@@ -57,6 +57,59 @@ impl SqliteBackend {
         }
     }
 
+    pub fn rebuild_all_snapshots(&self) -> Result<usize, StorageError> {
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        let mut stmt = tx
+            .prepare("SELECT DISTINCT entity_id, entity_type FROM assertions")
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare rebuild query failed: {}", e),
+            })?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Rebuild query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Rebuild row collection failed: {}", e),
+            })?;
+
+        drop(stmt);
+
+        let mut rebuilt = 0usize;
+        for (entity_id_text, entity_type_text) in rows {
+            let entity_id = Self::parse_entity_id_str(&entity_id_text)?;
+            let entity_type = Self::entity_type_from_db(&entity_type_text)?;
+            Self::recompute_entity_snapshot_tx(&tx, entity_id, entity_type)?;
+            rebuilt += 1;
+        }
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
+
+        Ok(rebuilt)
+    }
+
     fn serialize<T: serde::Serialize>(entity: &T) -> Result<Value, StorageError> {
         serde_json::to_value(entity).map_err(|e| StorageError {
             code: StorageErrorCode::Serialization,
@@ -2336,5 +2389,51 @@ mod tests {
             .expect("descendants");
         assert!(descendants.contains(&parent));
         assert!(descendants.contains(&child));
+    }
+
+    #[tokio::test]
+    async fn rebuild_all_snapshots_recomputes_confirmed_preferred_fields() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+        backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        let asserted_name = sample_assertion(json!("Rebuilt Name"), AssertionStatus::Confirmed);
+        backend
+            .create_assertion(person_id, EntityType::Person, "name", &asserted_name)
+            .await
+            .expect("create assertion");
+
+        {
+            let conn = backend.connection.lock().expect("lock");
+            conn.execute(
+                "UPDATE persons SET data = json_set(data, '$.name', 'stale') WHERE id = ?",
+                rusqlite::params![person_id.to_string()],
+            )
+            .expect("set stale value");
+        }
+
+        let rebuilt = backend.rebuild_all_snapshots().expect("rebuild snapshots");
+        assert!(rebuilt >= 1);
+
+        let conn = backend.connection.lock().expect("lock");
+        let data: String = conn
+            .query_row(
+                "SELECT data FROM persons WHERE id = ?",
+                rusqlite::params![person_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("read person snapshot");
+        let value: serde_json::Value = serde_json::from_str(&data).expect("parse person json");
+        assert_eq!(value["name"], json!("Rebuilt Name"));
     }
 }
