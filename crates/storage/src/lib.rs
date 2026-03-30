@@ -134,6 +134,12 @@ pub enum JsonExportMode {
     SingleFile { output_file: PathBuf },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsonImportMode {
+    Directory { input_dir: PathBuf },
+    SingleFile { input_file: PathBuf },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct JsonExportManifest {
     pub exported_at: String,
@@ -145,6 +151,15 @@ pub struct JsonExportManifest {
 pub struct JsonExportResult {
     pub manifest: JsonExportManifest,
     pub output_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonImportReport {
+    pub manifest: JsonExportManifest,
+    pub entities_imported_by_type: BTreeMap<String, usize>,
+    pub assertions_imported: usize,
+    pub audit_log_entries_imported: usize,
+    pub research_log_entries_imported: usize,
 }
 
 pub type JsonAssertion = Assertion<Value>;

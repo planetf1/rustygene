@@ -12,6 +12,7 @@ rustygene-core = { version = "0.1.0", path = "../core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.0", features = ["full"] }
+uuid = { version = "1.23.0", features = ["v4"] }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }

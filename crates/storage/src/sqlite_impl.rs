@@ -1,6 +1,6 @@
 use crate::{
     AuditLogEntry, EntityType, JsonAssertion, JsonExportManifest, JsonExportMode,
-    JsonExportResult, Pagination, RelationshipEdge, ResearchLogFilter, Storage, StorageError,
+    JsonExportResult, JsonImportMode, JsonImportReport, Pagination, RelationshipEdge, ResearchLogFilter, Storage, StorageError,
     StorageErrorCode,
 };
 use rustygene_core::assertion::{compute_assertion_idempotency_key, AssertionStatus, EvidenceType};
@@ -19,6 +19,7 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 /// SQLite-backed implementation of the Storage trait.
 pub struct SqliteBackend {
@@ -867,6 +868,308 @@ impl SqliteBackend {
         }
 
         Ok(())
+    }
+
+    pub fn import_json_dump(&self, mode: JsonImportMode) -> Result<JsonImportReport, StorageError> {
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let payload = match mode {
+            JsonImportMode::Directory { input_dir } => {
+                let manifest_path = input_dir.join("manifest.json");
+                let manifest_text = fs::read_to_string(&manifest_path).map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Failed to read manifest: {}", e),
+                })?;
+
+                let manifest: JsonExportManifest = serde_json::from_str(&manifest_text).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Manifest deserialization failed: {}", e),
+                })?;
+
+                let mut payload = serde_json::Map::new();
+                payload.insert(
+                    "manifest".to_string(),
+                    serde_json::to_value(&manifest).map_err(|e| StorageError {
+                        code: StorageErrorCode::Serialization,
+                        message: format!("Manifest serialization failed: {}", e),
+                    })?,
+                );
+
+                for entry in fs::read_dir(&input_dir).map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Failed to read input directory: {}", e),
+                })? {
+                    let entry = entry.map_err(|e| StorageError {
+                        code: StorageErrorCode::Backend,
+                        message: format!("Failed to read directory entry: {}", e),
+                    })?;
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("json") && path.file_name().and_then(|n| n.to_str()) != Some("manifest.json") {
+                        let content = fs::read_to_string(&path).map_err(|e| StorageError {
+                            code: StorageErrorCode::Backend,
+                            message: format!("Failed to read JSON file: {}", e),
+                        })?;
+                        let table_name = path
+                            .file_stem()
+                            .and_then(|n| n.to_str())
+                            .ok_or(StorageError {
+                                code: StorageErrorCode::Backend,
+                                message: "Invalid file name".to_string(),
+                            })?;
+                        let value: Value = serde_json::from_str(&content).map_err(|e| StorageError {
+                            code: StorageErrorCode::Serialization,
+                            message: format!("JSON deserialization failed: {}", e),
+                        })?;
+                        payload.insert(table_name.to_string(), value);
+                    }
+                }
+
+                Value::Object(payload)
+            }
+            JsonImportMode::SingleFile { input_file } => {
+                let content = fs::read_to_string(&input_file).map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Failed to read input file: {}", e),
+                })?;
+
+                serde_json::from_str(&content).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("JSON deserialization failed: {}", e),
+                })?
+            }
+        };
+
+        let root_obj = payload.as_object().ok_or(StorageError {
+            code: StorageErrorCode::Serialization,
+            message: "Import payload must be a JSON object".to_string(),
+        })?;
+
+        let manifest_value = root_obj.get("manifest").ok_or(StorageError {
+            code: StorageErrorCode::Backend,
+            message: "Import payload missing manifest".to_string(),
+        })?;
+
+        let manifest: JsonExportManifest = serde_json::from_value(manifest_value.clone()).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Manifest deserialization failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        let mut entities_imported_by_type: BTreeMap<String, usize> = BTreeMap::new();
+        let mut assertions_imported: usize = 0;
+        let mut audit_log_entries_imported: usize = 0;
+        let mut research_log_entries_imported: usize = 0;
+
+        let entity_tables = [
+            "persons", "families", "events", "places", "sources", "citations",
+            "repositories", "media", "notes", "lds_ordinances",
+        ];
+
+        for table in &entity_tables {
+            if let Some(Value::Array(rows)) = root_obj.get(*table) {
+                for row_value in rows {
+                    let row_obj = row_value.as_object().ok_or(StorageError {
+                        code: StorageErrorCode::Serialization,
+                        message: format!("Invalid row structure in {}", table),
+                    })?;
+
+                    // The exported format contains only the `data` field (the entity object)
+                    // Extract id from the entity, then reconstruct the row
+                    let id = row_obj.get("id").and_then(|v| v.as_str()).ok_or(StorageError {
+                        code: StorageErrorCode::Backend,
+                        message: format!("Missing or invalid id in {} entity", table),
+                    })?;
+
+                    let version: i64 = 1;
+                    let schema_version: i64 = manifest.schema_version;
+                    let created_at = chrono::Utc::now().to_rfc3339();
+                    let updated_at = chrono::Utc::now().to_rfc3339();
+
+                    tx.execute(
+                        &format!(
+                            "INSERT OR REPLACE INTO {} (id, version, schema_version, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                            table
+                        ),
+                        rusqlite::params![
+                            id,
+                            version,
+                            schema_version,
+                            serde_json::to_string(row_value).map_err(|e| StorageError {
+                                code: StorageErrorCode::Serialization,
+                                message: format!("Entity serialization failed: {}", e),
+                            })?,
+                            created_at,
+                            updated_at,
+                        ],
+                    )
+                    .map_err(|e| StorageError {
+                        code: StorageErrorCode::Backend,
+                        message: format!("Insert into {} failed: {}", table, e),
+                    })?;
+                }
+
+                entities_imported_by_type.insert(table.to_string(), rows.len());
+            }
+        }
+
+        if let Some(Value::Array(assertions)) = root_obj.get("assertions") {
+            for assertion_value in assertions {
+                let assertion_obj = assertion_value.as_object().ok_or(StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: "Invalid assertion structure".to_string(),
+                })?;
+
+                let id = assertion_obj.get("id").and_then(|v| v.as_str()).ok_or(StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: "Missing assertion id".to_string(),
+                })?;
+
+                let entity_id = assertion_obj.get("entity_id").and_then(|v| v.as_str()).ok_or(StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: "Missing assertion entity_id".to_string(),
+                })?;
+
+                let entity_type = assertion_obj.get("entity_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let field = assertion_obj.get("field").and_then(|v| v.as_str()).unwrap_or("");
+                let value = assertion_obj.get("value").cloned().unwrap_or(Value::Null);
+                let confidence: f64 = assertion_obj.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                let status = assertion_obj.get("status").and_then(|v| v.as_str()).unwrap_or("Confirmed");
+                let evidence_type = assertion_obj.get("evidence_type").and_then(|v| v.as_str()).unwrap_or("Direct");
+                let source_citations = assertion_obj.get("source_citations").cloned();
+                let proposed_by = assertion_obj.get("proposed_by").and_then(|v| v.as_str()).unwrap_or("import");
+                let created_at = assertion_obj.get("created_at").and_then(|v| v.as_str()).unwrap_or("1970-01-01T00:00:00Z");
+
+                tx.execute(
+                    "INSERT OR REPLACE INTO assertions (id, entity_id, entity_type, field, value, confidence, status, evidence_type, source_citations, proposed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        id,
+                        entity_id,
+                        entity_type,
+                        field,
+                        value.to_string(),
+                        confidence,
+                        status,
+                        evidence_type,
+                        source_citations.map(|v| v.to_string()),
+                        proposed_by,
+                        created_at,
+                    ],
+                )
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Insert assertion failed: {}", e),
+                })?;
+
+                assertions_imported += 1;
+            }
+
+            entities_imported_by_type.insert("assertions".to_string(), assertions_imported);
+        }
+
+        if let Some(Value::Array(audit_entries)) = root_obj.get("audit_log") {
+            for entry_value in audit_entries {
+                let entry_obj = entry_value.as_object().ok_or(StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: "Invalid audit log entry structure".to_string(),
+                })?;
+
+                let id = entry_obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| Uuid::new_v4().to_string());
+                let actor = entry_obj.get("actor").and_then(|v| v.as_str()).unwrap_or("import");
+                let entity_id = entry_obj.get("entity_id").and_then(|v| v.as_str()).unwrap_or("");
+                let entity_type = entry_obj.get("entity_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let action = entry_obj.get("action").and_then(|v| v.as_str()).unwrap_or("import");
+                let old_value = entry_obj.get("old_value_json");
+                let new_value = entry_obj.get("new_value_json");
+                let timestamp = entry_obj.get("timestamp_iso").and_then(|v| v.as_str()).unwrap_or("1970-01-01T00:00:00Z");
+
+                tx.execute(
+                    "INSERT OR REPLACE INTO audit_log (id, actor, entity_id, entity_type, action, old_value_json, new_value_json, timestamp_iso) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        id,
+                        actor,
+                        entity_id,
+                        entity_type,
+                        action,
+                        old_value.map(|v| v.to_string()),
+                        new_value.map(|v| v.to_string()),
+                        timestamp,
+                    ],
+                )
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Insert audit log entry failed: {}", e),
+                })?;
+
+                audit_log_entries_imported += 1;
+            }
+        }
+
+        if let Some(Value::Array(research_entries)) = root_obj.get("research_log") {
+            for entry_value in research_entries {
+                let entry_obj = entry_value.as_object().ok_or(StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: "Invalid research log entry structure".to_string(),
+                })?;
+
+                let id = entry_obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| Uuid::new_v4().to_string());
+                let date = entry_obj.get("date_iso").and_then(|v| v.as_str()).unwrap_or("1970-01-01");
+                let objective = entry_obj.get("objective").and_then(|v| v.as_str()).unwrap_or("");
+                let result = entry_obj.get("result").and_then(|v| v.as_str()).unwrap_or("inconclusive");
+                let repository_id = entry_obj.get("repository_id").and_then(|v| v.as_str());
+                let search_terms = entry_obj.get("search_terms").and_then(|v| v.as_str()).unwrap_or("");
+                let source_id = entry_obj.get("source_id").and_then(|v| v.as_str());
+
+                tx.execute(
+                    "INSERT OR REPLACE INTO research_log (id, date_iso, objective, repository_id, search_terms, source_id, result) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        id,
+                        date,
+                        objective,
+                        repository_id,
+                        search_terms,
+                        source_id,
+                        result,
+                    ],
+                )
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Insert research log entry failed: {}", e),
+                })?;
+
+                research_log_entries_imported += 1;
+            }
+        }
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
+
+        Ok(JsonImportReport {
+            manifest,
+            entities_imported_by_type,
+            assertions_imported,
+            audit_log_entries_imported,
+            research_log_entries_imported,
+        })
     }
 }
 
@@ -1808,9 +2111,7 @@ impl Storage for SqliteBackend {
                 message: format!("Mutex lock failed: {}", e),
             })?;
 
-        let edge = if _edge.directed {
-            _edge.clone()
-        } else if _edge.from_entity <= _edge.to_entity {
+        let edge = if _edge.directed || _edge.from_entity <= _edge.to_entity {
             _edge.clone()
         } else {
             RelationshipEdge {
@@ -2769,4 +3070,96 @@ mod tests {
 
         let _ = std::fs::remove_file(&out_file);
     }
+
+    #[tokio::test]
+    async fn json_import_from_single_file_recreates_entities() {
+        let export_backend = create_test_backend();
+        let person_id = EntityId::new();
+        let family_id = EntityId::new();
+
+        // Create some test data
+        export_backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        export_backend
+            .create_family(&Family {
+                id: family_id,
+                partner1_id: None,
+                partner2_id: None,
+                partner_link: rustygene_core::family::PartnerLink::Unknown,
+                couple_relationship: None,
+                child_links: vec![],
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create family");
+
+        // Export to file
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let export_file = std::env::temp_dir().join(format!("rustygene-export-roundtrip-{suffix}.json"));
+
+        let export_result = export_backend
+            .export_json_dump(JsonExportMode::SingleFile {
+                output_file: export_file.clone(),
+            })
+            .expect("export single file");
+
+        let export_counts = export_result.manifest.entity_counts.clone();
+
+        // Now create a fresh database and import from the export file
+        let import_backend = create_test_backend();
+        let import_result = import_backend
+            .import_json_dump(JsonImportMode::SingleFile {
+                input_file: export_file.clone(),
+            })
+            .expect("import from file");
+
+        // Verify entity counts match
+        assert_eq!(
+            export_counts.get("persons").cloned().unwrap_or(0),
+            import_result
+                .entities_imported_by_type
+                .get("persons")
+                .cloned()
+                .unwrap_or(0),
+            "Person count mismatch after import"
+        );
+        assert_eq!(
+            export_counts.get("families").cloned().unwrap_or(0),
+            import_result
+                .entities_imported_by_type
+                .get("families")
+                .cloned()
+                .unwrap_or(0),
+            "Family count mismatch after import"
+        );
+
+        // Verify entities were actually imported
+        let imported_person = import_backend
+            .get_person(person_id)
+            .await
+            .expect("get imported person");
+        assert_eq!(imported_person.id, person_id);
+
+        let imported_family = import_backend
+            .get_family(family_id)
+            .await
+            .expect("get imported family");
+        assert_eq!(imported_family.id, family_id);
+
+        let _ = std::fs::remove_file(&export_file);
+    }
 }
+
