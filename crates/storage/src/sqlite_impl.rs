@@ -9,7 +9,7 @@ use rustygene_core::family::{Family, Relationship};
 use rustygene_core::lds::LdsOrdinance;
 use rustygene_core::place::Place;
 use rustygene_core::person::Person;
-use rustygene_core::research::ResearchLogEntry;
+use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
 use serde_json::Value;
@@ -32,6 +32,22 @@ struct AssertionRowData {
     created_at_text: String,
     reviewed_at_text: Option<String>,
     reviewed_by_text: Option<String>,
+}
+
+struct ResearchRowData {
+    id_text: String,
+    date_text: String,
+    objective: String,
+    repository_id: Option<String>,
+    repository_name: Option<String>,
+    search_terms: String,
+    source_id: Option<String>,
+    result: String,
+    findings: Option<String>,
+    citations_created: Option<String>,
+    next_steps: Option<String>,
+    person_refs: Option<String>,
+    tags: Option<String>,
 }
 
 impl SqliteBackend {
@@ -347,6 +363,84 @@ impl SqliteBackend {
                 message: format!("Unknown evidence type: {}", other),
             }),
         }
+    }
+
+    fn search_result_to_db(result: &SearchResult) -> &'static str {
+        match result {
+            SearchResult::Found => "found",
+            SearchResult::NotFound => "not_found",
+            SearchResult::PartiallyFound => "partially_found",
+            SearchResult::Inconclusive => "inconclusive",
+        }
+    }
+
+    fn search_result_from_db(result: &str) -> Result<SearchResult, StorageError> {
+        match result {
+            "found" => Ok(SearchResult::Found),
+            "not_found" => Ok(SearchResult::NotFound),
+            "partially_found" => Ok(SearchResult::PartiallyFound),
+            "inconclusive" => Ok(SearchResult::Inconclusive),
+            other => Err(StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Unknown search result: {}", other),
+            }),
+        }
+    }
+
+    fn parse_entity_id_str(value: &str) -> Result<EntityId, StorageError> {
+        serde_json::from_str(&format!("\"{}\"", value)).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Invalid entity id '{}': {}", value, e),
+        })
+    }
+
+    fn research_row_to_entry(data: ResearchRowData) -> Result<ResearchLogEntry, StorageError> {
+        Ok(ResearchLogEntry {
+            id: Self::parse_entity_id_str(&data.id_text)?,
+            date: chrono::DateTime::parse_from_rfc3339(&data.date_text)
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Invalid research log date '{}': {}", data.date_text, e),
+                })?
+                .with_timezone(&chrono::Utc),
+            objective: data.objective,
+            repository: data
+                .repository_id
+                .as_deref()
+                .map(Self::parse_entity_id_str)
+                .transpose()?,
+            repository_name: data.repository_name,
+            search_terms: serde_json::from_str(&data.search_terms).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Invalid search_terms JSON: {}", e),
+            })?,
+            source_searched: data
+                .source_id
+                .as_deref()
+                .map(Self::parse_entity_id_str)
+                .transpose()?,
+            result: Self::search_result_from_db(&data.result)?,
+            findings: data.findings,
+            citations_created: serde_json::from_str(
+                data.citations_created.as_deref().unwrap_or("[]"),
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Invalid citations_created JSON: {}", e),
+            })?,
+            next_steps: data.next_steps,
+            person_refs: serde_json::from_str(data.person_refs.as_deref().unwrap_or("[]"))
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Invalid person_refs JSON: {}", e),
+                })?,
+            tags: serde_json::from_str(data.tags.as_deref().unwrap_or("[]")).map_err(|e| {
+                StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Invalid tags JSON: {}", e),
+                }
+            })?,
+        })
     }
 
     fn row_to_assertion(data: AssertionRowData) -> Result<JsonAssertion, StorageError> {
@@ -1167,34 +1261,242 @@ impl Storage for SqliteBackend {
 
     async fn create_research_log_entry(
         &self,
-        _entry: &ResearchLogEntry,
+        entry: &ResearchLogEntry,
     ) -> Result<(), StorageError> {
-        Err(StorageError {
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let search_terms = serde_json::to_string(&entry.search_terms).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Failed to serialize search_terms: {}", e),
+        })?;
+        let citations_created = serde_json::to_string(&entry.citations_created).map_err(|e| {
+            StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Failed to serialize citations_created: {}", e),
+            }
+        })?;
+        let person_refs = serde_json::to_string(&entry.person_refs).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Failed to serialize person_refs: {}", e),
+        })?;
+        let tags = serde_json::to_string(&entry.tags).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Failed to serialize tags: {}", e),
+        })?;
+
+        conn.execute(
+            "INSERT INTO research_log (
+                id, date, objective, repository_id, repository_name, search_terms,
+                source_id, result, findings, citations_created, next_steps, person_refs, tags
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                entry.id.to_string(),
+                entry.date.to_rfc3339(),
+                &entry.objective,
+                entry.repository.map(|v| v.to_string()),
+                &entry.repository_name,
+                search_terms,
+                entry.source_searched.map(|v| v.to_string()),
+                Self::search_result_to_db(&entry.result),
+                &entry.findings,
+                citations_created,
+                &entry.next_steps,
+                person_refs,
+                tags,
+            ],
+        )
+        .map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
-            message: "Not implemented".to_string(),
+            message: format!("Research log insert failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    async fn get_research_log_entry(&self, id: EntityId) -> Result<ResearchLogEntry, StorageError> {
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let row = conn
+            .query_row(
+                "SELECT id, date, objective, repository_id, repository_name, search_terms,
+                        source_id, result, findings, citations_created, next_steps, person_refs, tags
+                 FROM research_log WHERE id = ?",
+                rusqlite::params![id.to_string()],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, String>(7)?,
+                        r.get::<_, Option<String>>(8)?,
+                        r.get::<_, Option<String>>(9)?,
+                        r.get::<_, Option<String>>(10)?,
+                        r.get::<_, Option<String>>(11)?,
+                        r.get::<_, Option<String>>(12)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Research log query failed: {}", e),
+            })?
+            .ok_or(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Research log entry not found: {}", id),
+            })?;
+
+        let (
+            id_text,
+            date_text,
+            objective,
+            repository_id,
+            repository_name,
+            search_terms,
+            source_id,
+            result,
+            findings,
+            citations_created,
+            next_steps,
+            person_refs,
+            tags,
+        ) = row;
+
+        Self::research_row_to_entry(ResearchRowData {
+            id_text,
+            date_text,
+            objective,
+            repository_id,
+            repository_name,
+            search_terms,
+            source_id,
+            result,
+            findings,
+            citations_created,
+            next_steps,
+            person_refs,
+            tags,
         })
     }
 
-    async fn get_research_log_entry(&self, _id: EntityId) -> Result<ResearchLogEntry, StorageError> {
-        Err(StorageError {
-            code: StorageErrorCode::Backend,
-            message: "Not implemented".to_string(),
-        })
-    }
+    async fn delete_research_log_entry(&self, id: EntityId) -> Result<(), StorageError> {
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
 
-    async fn delete_research_log_entry(&self, _id: EntityId) -> Result<(), StorageError> {
-        Err(StorageError {
+        conn.execute(
+            "DELETE FROM research_log WHERE id = ?",
+            rusqlite::params![id.to_string()],
+        )
+        .map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
-            message: "Not implemented".to_string(),
-        })
+            message: format!("Research log delete failed: {}", e),
+        })?;
+
+        Ok(())
     }
 
     async fn list_research_log_entries(
         &self,
-        _filter: &ResearchLogFilter,
-        _pagination: Pagination,
+        filter: &ResearchLogFilter,
+        pagination: Pagination,
     ) -> Result<Vec<ResearchLogEntry>, StorageError> {
-        Ok(Vec::new())
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        use rusqlite::types::Value as SqlValue;
+        let mut query = String::from(
+            "SELECT id, date, objective, repository_id, repository_name, search_terms,
+                    source_id, result, findings, citations_created, next_steps, person_refs, tags
+             FROM research_log WHERE 1=1",
+        );
+        let mut args: Vec<SqlValue> = Vec::new();
+
+        if let Some(person_ref) = filter.person_ref {
+            query.push_str(" AND EXISTS (SELECT 1 FROM json_each(research_log.person_refs) WHERE json_each.value = ?)");
+            args.push(SqlValue::Text(person_ref.to_string()));
+        }
+
+        if let Some(result) = &filter.result {
+            query.push_str(" AND result = ?");
+            args.push(SqlValue::Text(Self::search_result_to_db(result).to_string()));
+        }
+
+        if let Some(date_from) = &filter.date_from_iso {
+            query.push_str(" AND date >= ?");
+            args.push(SqlValue::Text(date_from.clone()));
+        }
+
+        if let Some(date_to) = &filter.date_to_iso {
+            query.push_str(" AND date <= ?");
+            args.push(SqlValue::Text(date_to.clone()));
+        }
+
+        query.push_str(" ORDER BY date DESC LIMIT ? OFFSET ?");
+        args.push(SqlValue::Integer(i64::from(pagination.limit)));
+        args.push(SqlValue::Integer(i64::from(pagination.offset)));
+
+        let mut stmt = conn.prepare(&query).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Research list prepare failed: {}", e),
+        })?;
+
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                Ok(ResearchRowData {
+                    id_text: r.get(0)?,
+                    date_text: r.get(1)?,
+                    objective: r.get(2)?,
+                    repository_id: r.get(3)?,
+                    repository_name: r.get(4)?,
+                    search_terms: r.get(5)?,
+                    source_id: r.get(6)?,
+                    result: r.get(7)?,
+                    findings: r.get(8)?,
+                    citations_created: r.get(9)?,
+                    next_steps: r.get(10)?,
+                    person_refs: r.get(11)?,
+                    tags: r.get(12)?,
+                })
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Research list query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Research list row collection failed: {}", e),
+            })?;
+
+        rows.into_iter()
+            .map(Self::research_row_to_entry)
+            .collect::<Result<Vec<_>, _>>()
     }
 
     async fn append_audit_log_entry(&self, entry: &AuditLogEntry) -> Result<(), StorageError> {
@@ -1351,6 +1653,29 @@ mod tests {
             created_at: chrono::Utc::now(),
             reviewed_at: None,
             reviewed_by: None,
+        }
+    }
+
+    fn sample_research_entry(
+        id: EntityId,
+        date: chrono::DateTime<chrono::Utc>,
+        result: SearchResult,
+        person_refs: Vec<EntityId>,
+    ) -> ResearchLogEntry {
+        ResearchLogEntry {
+            id,
+            date,
+            objective: "Find census hit".to_string(),
+            repository: None,
+            repository_name: Some("Archive".to_string()),
+            search_terms: vec!["john".to_string(), "census".to_string()],
+            source_searched: None,
+            result,
+            findings: Some("Some findings".to_string()),
+            citations_created: vec![],
+            next_steps: Some("More work".to_string()),
+            person_refs,
+            tags: vec!["tag1".to_string()],
         }
     }
 
@@ -1622,5 +1947,122 @@ mod tests {
             row.6.as_deref(),
             Some(json!({ "living": false }).to_string().as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn research_log_create_get_delete_round_trip() {
+        let backend = create_test_backend();
+        let entry_id = EntityId::new();
+        let entry = sample_research_entry(
+            entry_id,
+            chrono::Utc::now(),
+            SearchResult::PartiallyFound,
+            vec![EntityId::new()],
+        );
+
+        backend
+            .create_research_log_entry(&entry)
+            .await
+            .expect("create research entry");
+
+        let fetched = backend
+            .get_research_log_entry(entry_id)
+            .await
+            .expect("get research entry");
+        assert_eq!(fetched.id, entry.id);
+        assert_eq!(fetched.objective, entry.objective);
+        assert_eq!(fetched.result, SearchResult::PartiallyFound);
+
+        backend
+            .delete_research_log_entry(entry_id)
+            .await
+            .expect("delete research entry");
+
+        let after_delete = backend.get_research_log_entry(entry_id).await;
+        assert!(matches!(
+            after_delete,
+            Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn research_log_list_filters_work() {
+        let backend = create_test_backend();
+        let p1 = EntityId::new();
+        let p2 = EntityId::new();
+
+        let older = sample_research_entry(
+            EntityId::new(),
+            chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                .expect("parse older")
+                .with_timezone(&chrono::Utc),
+            SearchResult::Found,
+            vec![p1],
+        );
+        let newer = sample_research_entry(
+            EntityId::new(),
+            chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+                .expect("parse newer")
+                .with_timezone(&chrono::Utc),
+            SearchResult::NotFound,
+            vec![p2],
+        );
+
+        backend
+            .create_research_log_entry(&older)
+            .await
+            .expect("create older");
+        backend
+            .create_research_log_entry(&newer)
+            .await
+            .expect("create newer");
+
+        let by_person = backend
+            .list_research_log_entries(
+                &ResearchLogFilter {
+                    person_ref: Some(p1),
+                    result: None,
+                    date_from_iso: None,
+                    date_to_iso: None,
+                },
+                Pagination::default(),
+            )
+            .await
+            .expect("list by person");
+        assert_eq!(by_person.len(), 1);
+        assert_eq!(by_person[0].id, older.id);
+
+        let by_result = backend
+            .list_research_log_entries(
+                &ResearchLogFilter {
+                    person_ref: None,
+                    result: Some(SearchResult::NotFound),
+                    date_from_iso: None,
+                    date_to_iso: None,
+                },
+                Pagination::default(),
+            )
+            .await
+            .expect("list by result");
+        assert_eq!(by_result.len(), 1);
+        assert_eq!(by_result[0].id, newer.id);
+
+        let by_date = backend
+            .list_research_log_entries(
+                &ResearchLogFilter {
+                    person_ref: None,
+                    result: None,
+                    date_from_iso: Some("2024-06-01T00:00:00Z".to_string()),
+                    date_to_iso: Some("2025-12-31T23:59:59Z".to_string()),
+                },
+                Pagination::default(),
+            )
+            .await
+            .expect("list by date range");
+        assert_eq!(by_date.len(), 1);
+        assert_eq!(by_date[0].id, newer.id);
     }
 }
