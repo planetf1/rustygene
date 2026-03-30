@@ -3,13 +3,19 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rusqlite::Connection;
+use rustygene_core::evidence::{Media, Note, Repository, Source};
 use rustygene_core::event::Event;
 use rustygene_core::family::Family;
 use rustygene_core::person::Person;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
+use rustygene_gedcom::{
+    ExportPrivacyPolicy, family_to_fam_node, media_to_obje_node, note_to_note_node,
+    person_to_indi_node_with_policy, render_gedcom_file, repository_to_repo_node, source_to_sour_node,
+};
 use rustygene_storage::{
-    Pagination, ResearchLogFilter, Storage, run_migrations, sqlite_impl::SqliteBackend,
+    JsonExportMode, Pagination, ResearchLogFilter, Storage, run_migrations,
+    sqlite_impl::SqliteBackend,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -44,8 +50,8 @@ struct Cli {
     #[arg(long, global = true, default_value = "~/.rustygene/rustygene.db")]
     db: PathBuf,
 
-    /// Output format
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
+    /// Output rendering format for command responses
+    #[arg(long = "output-format", global = true, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
 
     #[command(subcommand)]
@@ -55,7 +61,14 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Import,
-    Export,
+    Export {
+        #[arg(long = "format", value_enum)]
+        export_format: ExportFormat,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        redact_living: bool,
+    },
     Query {
         #[command(subcommand)]
         command: QueryCommands,
@@ -69,6 +82,12 @@ enum Commands {
         command: ResearchLogCommands,
     },
     RebuildSnapshots,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExportFormat {
+    Gedcom,
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -196,12 +215,186 @@ fn main() {
         Commands::Show { command } => {
             run_show_command(command, &db_path, cli.format);
         }
-        Commands::Import
-        | Commands::Export => {
+        Commands::Export {
+            export_format,
+            output,
+            redact_living,
+        } => {
+            run_export_command(&backend, &db_path, export_format, output, redact_living);
+        }
+        Commands::Import => {
             eprintln!("command not implemented yet");
             std::process::exit(2);
         }
     }
+}
+
+fn run_export_command(
+    backend: &SqliteBackend,
+    db_path: &PathBuf,
+    format: ExportFormat,
+    output: Option<PathBuf>,
+    redact_living: bool,
+) {
+    match format {
+        ExportFormat::Json => {
+            let mode = match output {
+                Some(path) => {
+                    let is_json_file = path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext.eq_ignore_ascii_case("json"))
+                        .unwrap_or(false);
+                    if is_json_file {
+                        JsonExportMode::SingleFile { output_file: path }
+                    } else {
+                        JsonExportMode::Directory { output_dir: path }
+                    }
+                }
+                None => JsonExportMode::Directory {
+                    output_dir: PathBuf::from("."),
+                },
+            };
+
+            match backend.export_json_dump(mode) {
+                Ok(result) => {
+                    println!(
+                        "json export complete: {} (schema v{})",
+                        result.output_path.display(),
+                        result.manifest.schema_version
+                    );
+                }
+                Err(err) => {
+                    eprintln!("failed to export JSON: {}", err.message);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ExportFormat::Gedcom => {
+            let conn = match Connection::open(db_path) {
+                Ok(conn) => conn,
+                Err(err) => {
+                    eprintln!("failed to open database '{}': {}", db_path.display(), err);
+                    std::process::exit(1);
+                }
+            };
+
+            let persons: Vec<Person> = match load_snapshot_entities(&conn, "persons") {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("failed to load persons for GEDCOM export: {}", err);
+                    std::process::exit(1);
+                }
+            };
+            let families: Vec<Family> = match load_snapshot_entities(&conn, "families") {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("failed to load families for GEDCOM export: {}", err);
+                    std::process::exit(1);
+                }
+            };
+            let sources: Vec<Source> = match load_snapshot_entities(&conn, "sources") {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("failed to load sources for GEDCOM export: {}", err);
+                    std::process::exit(1);
+                }
+            };
+            let repositories: Vec<Repository> = match load_snapshot_entities(&conn, "repositories") {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("failed to load repositories for GEDCOM export: {}", err);
+                    std::process::exit(1);
+                }
+            };
+            let notes: Vec<Note> = match load_snapshot_entities(&conn, "notes") {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("failed to load notes for GEDCOM export: {}", err);
+                    std::process::exit(1);
+                }
+            };
+            let media: Vec<Media> = match load_snapshot_entities(&conn, "media") {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("failed to load media for GEDCOM export: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            let privacy_policy = if redact_living {
+                ExportPrivacyPolicy::RedactLiving
+            } else {
+                ExportPrivacyPolicy::None
+            };
+
+            let mut nodes = Vec::new();
+            for (idx, person) in persons.iter().enumerate() {
+                let xref = format!("@I{}@", idx + 1);
+                if let Some(node) = person_to_indi_node_with_policy(person, &xref, privacy_policy) {
+                    nodes.push(node);
+                }
+            }
+            for (idx, family) in families.iter().enumerate() {
+                let xref = format!("@F{}@", idx + 1);
+                nodes.push(family_to_fam_node(family, &xref));
+            }
+            for (idx, source) in sources.iter().enumerate() {
+                let xref = format!("@S{}@", idx + 1);
+                nodes.push(source_to_sour_node(source, &xref));
+            }
+            for (idx, repository) in repositories.iter().enumerate() {
+                let xref = format!("@R{}@", idx + 1);
+                nodes.push(repository_to_repo_node(repository, &xref));
+            }
+            for (idx, note) in notes.iter().enumerate() {
+                let xref = format!("@N{}@", idx + 1);
+                nodes.push(note_to_note_node(note, &xref));
+            }
+            for (idx, item) in media.iter().enumerate() {
+                let xref = format!("@O{}@", idx + 1);
+                nodes.push(media_to_obje_node(item, &xref));
+            }
+
+            let rendered = render_gedcom_file(&nodes);
+            if let Some(path) = output {
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                    && let Err(err) = std::fs::create_dir_all(parent)
+                {
+                    eprintln!("failed to create export directory '{}': {}", parent.display(), err);
+                    std::process::exit(1);
+                }
+
+                if let Err(err) = std::fs::write(&path, rendered) {
+                    eprintln!("failed to write GEDCOM file '{}': {}", path.display(), err);
+                    std::process::exit(1);
+                }
+                println!("gedcom export complete: {}", path.display());
+            } else {
+                println!("{}", rendered);
+            }
+        }
+    }
+}
+
+fn load_snapshot_entities<T: serde::de::DeserializeOwned>(
+    conn: &Connection,
+    table: &str,
+) -> Result<Vec<T>, String> {
+    let mut stmt = conn
+        .prepare(&format!("SELECT data FROM {} ORDER BY created_at", table))
+        .map_err(|e| format!("prepare {} query failed: {}", table, e))?;
+
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query {} failed: {}", table, e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("collect {} failed: {}", table, e))?;
+
+    rows.into_iter()
+        .map(|raw| serde_json::from_str::<T>(&raw).map_err(|e| format!("parse {} row failed: {}", table, e)))
+        .collect()
 }
 
 fn run_show_command(command: ShowCommands, db_path: &PathBuf, format: OutputFormat) {
@@ -780,8 +973,8 @@ fn resolve_db_path(path: &PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CliSearchResult, Commands, QueryCommands, ResearchLogCommands, ShowCommands,
-        parse_entity_id_arg, resolve_db_path,
+        Cli, CliSearchResult, Commands, ExportFormat, QueryCommands, ResearchLogCommands,
+        ShowCommands, parse_entity_id_arg, resolve_db_path,
     };
     use clap::Parser;
     use std::path::PathBuf;
@@ -921,6 +1114,55 @@ mod tests {
                 command: ShowCommands::Event { id },
             } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show event command"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_export_json_with_directory_output() {
+        let cli = Cli::parse_from([
+            "rustygene",
+            "export",
+            "--format",
+            "json",
+            "--output",
+            "./dump",
+        ]);
+
+        match cli.command {
+            Commands::Export {
+                export_format,
+                output,
+                redact_living,
+            } => {
+                assert_eq!(export_format, ExportFormat::Json);
+                assert_eq!(output, Some(PathBuf::from("./dump")));
+                assert!(!redact_living);
+            }
+            _ => panic!("expected export command"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_export_gedcom_with_redaction() {
+        let cli = Cli::parse_from([
+            "rustygene",
+            "export",
+            "--format",
+            "gedcom",
+            "--redact-living",
+        ]);
+
+        match cli.command {
+            Commands::Export {
+                export_format,
+                output,
+                redact_living,
+            } => {
+                assert_eq!(export_format, ExportFormat::Gedcom);
+                assert_eq!(output, None);
+                assert!(redact_living);
+            }
+            _ => panic!("expected export command"),
         }
     }
 }
