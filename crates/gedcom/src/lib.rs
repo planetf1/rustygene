@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::{collections::HashMap, num::ParseIntError};
+use std::{collections::{BTreeMap, HashMap}, num::ParseIntError};
 
 use chrono::Utc;
-use rustygene_core::assertion::{Assertion, AssertionStatus, EvidenceType};
+use rusqlite::Connection;
+use rustygene_core::assertion::{Assertion, AssertionStatus, EvidenceType, compute_assertion_idempotency_key};
 use rustygene_core::evidence::{Citation, CitationRef, Media, Note, NoteType, Repository, RepositoryRef, RepositoryType, Source};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
 use rustygene_core::family::{ChildLink, Family, LineageType, PartnerLink, Relationship, RelationshipType};
@@ -11,7 +12,7 @@ use rustygene_core::lds::{LdsOrdinance, LdsOrdinanceType, LdsStatus};
 use rustygene_core::person::{NameType, Person, PersonName, Surname, SurnameOrigin};
 use rustygene_core::types::DateValue;
 use rustygene_core::types::{ActorRef, EntityId, Gender};
-use rustygene_storage::{EntityType, JsonAssertion};
+use rustygene_storage::{EntityType, JsonAssertion, run_migrations};
 use serde_json::{json, to_value, Value};
 use uuid::Uuid;
 
@@ -1676,6 +1677,412 @@ pub fn generate_import_assertions(
     Ok(assertions)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GedcomImportReport {
+    pub entities_created_by_type: BTreeMap<String, usize>,
+    pub assertions_created: usize,
+    pub unknown_tags_preserved: usize,
+}
+
+#[derive(Debug)]
+pub enum GedcomImportError {
+    Tokenizer(GedcomTokenizerError),
+    Tree(GedcomTreeError),
+    Serialization(serde_json::Error),
+    Migration(String),
+    Sqlite(rusqlite::Error),
+}
+
+impl Display for GedcomImportError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GedcomImportError::Tokenizer(err) => write!(f, "tokenize failed: {}", err),
+            GedcomImportError::Tree(err) => write!(f, "tree build failed: {}", err),
+            GedcomImportError::Serialization(err) => write!(f, "serialization failed: {}", err),
+            GedcomImportError::Migration(err) => write!(f, "migration failed: {}", err),
+            GedcomImportError::Sqlite(err) => write!(f, "sqlite failed: {}", err),
+        }
+    }
+}
+
+impl Error for GedcomImportError {}
+
+impl From<GedcomTokenizerError> for GedcomImportError {
+    fn from(value: GedcomTokenizerError) -> Self {
+        Self::Tokenizer(value)
+    }
+}
+
+impl From<GedcomTreeError> for GedcomImportError {
+    fn from(value: GedcomTreeError) -> Self {
+        Self::Tree(value)
+    }
+}
+
+impl From<serde_json::Error> for GedcomImportError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Serialization(value)
+    }
+}
+
+impl From<rusqlite::Error> for GedcomImportError {
+    fn from(value: rusqlite::Error) -> Self {
+        Self::Sqlite(value)
+    }
+}
+
+pub fn import_gedcom_to_sqlite(
+    connection: &mut Connection,
+    import_job_id: &str,
+    input: &str,
+) -> Result<GedcomImportReport, GedcomImportError> {
+    run_migrations(connection).map_err(|e| GedcomImportError::Migration(e.to_string()))?;
+
+    let lines = tokenize_gedcom(input)?;
+    let roots = build_gedcom_tree(&lines)?;
+
+    let persons = map_indi_nodes_to_persons(&roots);
+    let source_mapping = map_source_chain(&roots);
+    let family_mapping = map_family_nodes(&roots);
+    let media_note_lds_mapping = map_media_note_lds(&roots);
+    let assertions = generate_import_assertions(
+        import_job_id,
+        &persons,
+        &family_mapping,
+        &source_mapping,
+        &media_note_lds_mapping,
+    )?;
+
+    let unknown_tags_preserved = count_unknown_tags(
+        &persons,
+        &family_mapping,
+        &source_mapping,
+        &media_note_lds_mapping,
+    );
+
+    let tx = connection.transaction()?;
+
+    let mut entities_created_by_type = BTreeMap::new();
+
+    let mut insert_entities = |label: &str, table: &str, entities: Vec<(EntityId, serde_json::Value)>| -> Result<(), GedcomImportError> {
+        for (id, data) in &entities {
+            insert_entity_snapshot_row(&tx, table, *id, data)?;
+        }
+        entities_created_by_type.insert(label.to_string(), entities.len());
+        Ok(())
+    };
+
+    insert_entities(
+        "person",
+        "persons",
+        persons
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "family",
+        "families",
+        family_mapping
+            .families
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "relationship",
+        "families",
+        family_mapping
+            .relationships
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "event",
+        "events",
+        family_mapping
+            .events
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "source",
+        "sources",
+        source_mapping
+            .sources
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "citation",
+        "citations",
+        source_mapping
+            .citations
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "repository",
+        "repositories",
+        source_mapping
+            .repositories
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "media",
+        "media",
+        media_note_lds_mapping
+            .media
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "note",
+        "notes",
+        media_note_lds_mapping
+            .notes
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    insert_entities(
+        "lds_ordinance",
+        "lds_ordinances",
+        media_note_lds_mapping
+            .lds_ordinances
+            .iter()
+            .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+
+    for assertion in &assertions {
+        insert_assertion_row(&tx, assertion)?;
+    }
+
+    tx.commit()?;
+
+    Ok(GedcomImportReport {
+        entities_created_by_type,
+        assertions_created: assertions.len(),
+        unknown_tags_preserved,
+    })
+}
+
+fn insert_entity_snapshot_row(
+    tx: &rusqlite::Transaction<'_>,
+    table: &str,
+    id: EntityId,
+    data: &serde_json::Value,
+) -> Result<(), GedcomImportError> {
+    let now = Utc::now().to_rfc3339();
+    tx.execute(
+        &format!(
+            "INSERT INTO {} (id, version, schema_version, data, created_at, updated_at) VALUES (?, 1, 1, ?, ?, ?)",
+            table
+        ),
+        rusqlite::params![id.to_string(), data.to_string(), now, now],
+    )?;
+    Ok(())
+}
+
+fn insert_assertion_row(
+    tx: &rusqlite::Transaction<'_>,
+    imported: &ImportedAssertionRecord,
+) -> Result<(), GedcomImportError> {
+    let preferred = if imported.assertion.status == AssertionStatus::Confirmed {
+        1_i64
+    } else {
+        0_i64
+    };
+
+    if preferred == 1 {
+        tx.execute(
+            "UPDATE assertions SET preferred = 0 WHERE entity_id = ? AND field = ?",
+            rusqlite::params![imported.entity_id.to_string(), &imported.field],
+        )?;
+    }
+
+    let idempotency_key = compute_assertion_idempotency_key(
+        imported.entity_id,
+        &imported.field,
+        &imported.assertion.value,
+        &imported.assertion.source_citations,
+    )?;
+    let source_citations_json = serde_json::to_string(&imported.assertion.source_citations)?;
+
+    let value_date: Option<String> = imported
+        .assertion
+        .value
+        .as_object()
+        .and_then(|obj| obj.get("date"))
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string);
+
+    let value_text: Option<String> = imported
+        .assertion
+        .value
+        .as_str()
+        .map(ToString::to_string)
+        .or_else(|| {
+            imported
+                .assertion
+                .value
+                .as_object()
+                .and_then(|obj| obj.get("value"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string)
+        });
+
+    tx.execute(
+        "INSERT OR IGNORE INTO assertions (
+            id, entity_id, entity_type, field, value, value_date, value_text,
+            confidence, status, preferred, source_citations,
+            proposed_by, reviewed_by, created_at, reviewed_at,
+            evidence_type, idempotency_key, sandbox_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        rusqlite::params![
+            imported.assertion.id.to_string(),
+            imported.entity_id.to_string(),
+            entity_type_to_db(imported.entity_type),
+            &imported.field,
+            imported.assertion.value.to_string(),
+            value_date,
+            value_text,
+            imported.assertion.confidence,
+            assertion_status_to_db(&imported.assertion.status),
+            preferred,
+            source_citations_json,
+            imported.assertion.proposed_by.to_string(),
+            imported.assertion
+                .reviewed_by
+                .as_ref()
+                .map(ToString::to_string),
+            imported.assertion.created_at.to_rfc3339(),
+            imported
+                .assertion
+                .reviewed_at
+                .as_ref()
+                .map(chrono::DateTime::to_rfc3339),
+            evidence_type_to_db(&imported.assertion.evidence_type),
+            idempotency_key,
+        ],
+    )?;
+
+    Ok(())
+}
+
+fn entity_type_to_db(entity_type: EntityType) -> &'static str {
+    match entity_type {
+        EntityType::Person => "person",
+        EntityType::Family => "family",
+        EntityType::Relationship => "relationship",
+        EntityType::Event => "event",
+        EntityType::Place => "place",
+        EntityType::Source => "source",
+        EntityType::Citation => "citation",
+        EntityType::Repository => "repository",
+        EntityType::Media => "media",
+        EntityType::Note => "note",
+        EntityType::LdsOrdinance => "lds_ordinance",
+    }
+}
+
+fn assertion_status_to_db(status: &AssertionStatus) -> &'static str {
+    match status {
+        AssertionStatus::Confirmed => "confirmed",
+        AssertionStatus::Proposed => "proposed",
+        AssertionStatus::Disputed => "disputed",
+        AssertionStatus::Rejected => "rejected",
+    }
+}
+
+fn evidence_type_to_db(evidence_type: &EvidenceType) -> &'static str {
+    match evidence_type {
+        EvidenceType::Direct => "direct",
+        EvidenceType::Indirect => "indirect",
+        EvidenceType::Negative => "negative",
+    }
+}
+
+fn count_unknown_tags(
+    persons: &[Person],
+    family_mapping: &FamilyMapping,
+    source_mapping: &SourceChainMapping,
+    media_note_lds_mapping: &MediaNoteLdsMapping,
+) -> usize {
+    let persons_count = persons
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let families_count = family_mapping
+        .families
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let relationships_count = family_mapping
+        .relationships
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let events_count = family_mapping
+        .events
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let sources_count = source_mapping
+        .sources
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let citations_count = source_mapping
+        .citations
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let repositories_count = source_mapping
+        .repositories
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let media_count = media_note_lds_mapping
+        .media
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let notes_count = media_note_lds_mapping
+        .notes
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+    let lds_count = media_note_lds_mapping
+        .lds_ordinances
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
+
+    persons_count
+        + families_count
+        + relationships_count
+        + events_count
+        + sources_count
+        + citations_count
+        + repositories_count
+        + media_count
+        + notes_count
+        + lds_count
+}
+
+fn count_raw_custom_keys(raw: &std::collections::BTreeMap<String, String>) -> usize {
+    raw.keys().filter(|key| key.starts_with("CUSTOM_")).count()
+}
+
 fn restore_node_levels(node: &mut GedcomNode, base_level: u8) {
     node.level = node.level.saturating_add(base_level);
     for child in &mut node.children {
@@ -2827,6 +3234,69 @@ mod tests {
                 && record.assertion.proposed_by == ActorRef::Import("job-42".to_string())
                 && record.assertion.source_citations == event_assertion.assertion.source_citations
         }));
+    }
+
+    #[test]
+    fn import_pipeline_persists_entities_assertions_and_report_counts() {
+        let input = include_str!("../../../testdata/gedcom/simpsons.ged");
+        let mut connection = Connection::open_in_memory().expect("open in-memory sqlite");
+
+        let report = import_gedcom_to_sqlite(&mut connection, "job-4-9", input)
+            .expect("import pipeline should succeed");
+
+        let person_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+            .expect("count persons");
+        let family_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM families", [], |row| row.get(0))
+            .expect("count families");
+        let event_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .expect("count events");
+        let source_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
+            .expect("count sources");
+        let assertion_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
+            .expect("count assertions");
+
+        assert_eq!(report.entities_created_by_type.get("person").copied().unwrap_or(0), person_count as usize);
+        let family_plus_relationship = report.entities_created_by_type.get("family").copied().unwrap_or(0)
+            + report
+                .entities_created_by_type
+                .get("relationship")
+                .copied()
+                .unwrap_or(0);
+        assert_eq!(family_plus_relationship, family_count as usize);
+        assert_eq!(report.entities_created_by_type.get("event").copied().unwrap_or(0), event_count as usize);
+        assert_eq!(report.entities_created_by_type.get("source").copied().unwrap_or(0), source_count as usize);
+        assert_eq!(report.assertions_created, assertion_count as usize);
+
+        let mut stmt = connection
+            .prepare(
+                "SELECT field, value FROM assertions WHERE field IN ('name','gender','event_type','date','participant') ORDER BY field, created_at LIMIT 20",
+            )
+            .expect("prepare spot check assertions query");
+        let assertion_fields = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .expect("query assertions")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect assertions");
+
+        assert!(assertion_fields.len() >= 5, "expected at least five spot-check assertions");
+        assert!(assertion_fields.iter().any(|(field, _)| field == "name"));
+        assert!(assertion_fields.iter().any(|(field, _)| field == "gender"));
+    }
+
+    #[test]
+    fn import_pipeline_reports_unknown_tags_preserved() {
+        let input = "0 @I1@ INDI\n1 NAME Jane /Doe/\n1 _MILT Naval Reserve\n2 TYPE service\n0 TRLR\n";
+        let mut connection = Connection::open_in_memory().expect("open in-memory sqlite");
+
+        let report = import_gedcom_to_sqlite(&mut connection, "job-raw-tags", input)
+            .expect("import pipeline should succeed");
+
+        assert!(report.unknown_tags_preserved >= 1);
     }
 
     // ========================================================================

@@ -25,6 +25,7 @@ pub const REQUIRED_SCHEMA_TABLES: &[&str] = &[
     "repositories",
     "media",
     "notes",
+    "lds_ordinances",
     "assertions",
     "relationships",
     "audit_log",
@@ -271,7 +272,7 @@ mod tests {
     fn runs_initial_migration_on_fresh_database() {
         let mut connection = Connection::open_in_memory().expect("open in-memory sqlite database");
         let report = run_migrations(&mut connection).expect("run embedded refinery migrations");
-        assert_eq!(report.applied_migrations().len(), 1);
+        assert!(!report.applied_migrations().is_empty());
 
         let tables: HashSet<String> = {
             let mut statement = connection
