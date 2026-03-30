@@ -2,7 +2,7 @@ use crate::{
     AuditLogEntry, EntityType, JsonAssertion, Pagination, RelationshipEdge, ResearchLogFilter,
     Storage, StorageError, StorageErrorCode,
 };
-use rustygene_core::assertion::AssertionStatus;
+use rustygene_core::assertion::{compute_assertion_idempotency_key, AssertionStatus, EvidenceType};
 use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
 use rustygene_core::event::Event;
 use rustygene_core::family::{Family, Relationship};
@@ -13,11 +13,25 @@ use rustygene_core::research::ResearchLogEntry;
 use rustygene_core::types::EntityId;
 use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
 use serde_json::Value;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 /// SQLite-backed implementation of the Storage trait.
 pub struct SqliteBackend {
     connection: Arc<Mutex<Connection>>,
+}
+
+struct AssertionRowData {
+    id_str: String,
+    value_text: String,
+    confidence: f64,
+    status_text: String,
+    evidence_type_text: String,
+    source_citations_text: Option<String>,
+    proposed_by_text: String,
+    created_at_text: String,
+    reviewed_at_text: Option<String>,
+    reviewed_by_text: Option<String>,
 }
 
 impl SqliteBackend {
@@ -239,6 +253,142 @@ impl SqliteBackend {
         }
 
         Ok(result)
+    }
+
+    fn entity_type_to_db(entity_type: EntityType) -> &'static str {
+        match entity_type {
+            EntityType::Person => "person",
+            EntityType::Family => "family",
+            EntityType::Relationship => "relationship",
+            EntityType::Event => "event",
+            EntityType::Place => "place",
+            EntityType::Source => "source",
+            EntityType::Citation => "citation",
+            EntityType::Repository => "repository",
+            EntityType::Media => "media",
+            EntityType::Note => "note",
+            EntityType::LdsOrdinance => "lds_ordinance",
+        }
+    }
+
+    fn assertion_status_to_db(status: &AssertionStatus) -> &'static str {
+        match status {
+            AssertionStatus::Confirmed => "confirmed",
+            AssertionStatus::Proposed => "proposed",
+            AssertionStatus::Disputed => "disputed",
+            AssertionStatus::Rejected => "rejected",
+        }
+    }
+
+    fn assertion_status_from_db(status: &str) -> Result<AssertionStatus, StorageError> {
+        match status {
+            "confirmed" => Ok(AssertionStatus::Confirmed),
+            "proposed" => Ok(AssertionStatus::Proposed),
+            "disputed" => Ok(AssertionStatus::Disputed),
+            "rejected" => Ok(AssertionStatus::Rejected),
+            other => Err(StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Unknown assertion status: {}", other),
+            }),
+        }
+    }
+
+    fn evidence_type_to_db(evidence_type: &EvidenceType) -> &'static str {
+        match evidence_type {
+            EvidenceType::Direct => "direct",
+            EvidenceType::Indirect => "indirect",
+            EvidenceType::Negative => "negative",
+        }
+    }
+
+    fn evidence_type_from_db(evidence_type: &str) -> Result<EvidenceType, StorageError> {
+        match evidence_type {
+            "direct" => Ok(EvidenceType::Direct),
+            "indirect" => Ok(EvidenceType::Indirect),
+            "negative" => Ok(EvidenceType::Negative),
+            other => Err(StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Unknown evidence type: {}", other),
+            }),
+        }
+    }
+
+    fn row_to_assertion(data: AssertionRowData) -> Result<JsonAssertion, StorageError> {
+        let AssertionRowData {
+            id_str,
+            value_text,
+            confidence,
+            status_text,
+            evidence_type_text,
+            source_citations_text,
+            proposed_by_text,
+            created_at_text,
+            reviewed_at_text,
+            reviewed_by_text,
+        } = data;
+
+        let id: EntityId = serde_json::from_str(&format!("\"{}\"", id_str)).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Invalid assertion id '{}': {}", id_str, e),
+        })?;
+        let value: Value = serde_json::from_str(&value_text).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Invalid assertion value JSON: {}", e),
+        })?;
+        let status = Self::assertion_status_from_db(&status_text)?;
+        let evidence_type = Self::evidence_type_from_db(&evidence_type_text)?;
+        let source_citations = match source_citations_text {
+            Some(raw) => serde_json::from_str(&raw).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Invalid source_citations JSON: {}", e),
+            })?,
+            None => Vec::new(),
+        };
+        let proposed_by = rustygene_core::types::ActorRef::from_str(&proposed_by_text).map_err(|e| {
+            StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Invalid proposed_by '{}': {}", proposed_by_text, e),
+            }
+        })?;
+        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_text)
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Invalid created_at '{}': {}", created_at_text, e),
+            })?
+            .with_timezone(&chrono::Utc);
+        let reviewed_at = match reviewed_at_text {
+            Some(ts) => Some(
+                chrono::DateTime::parse_from_rfc3339(&ts)
+                    .map_err(|e| StorageError {
+                        code: StorageErrorCode::Serialization,
+                        message: format!("Invalid reviewed_at '{}': {}", ts, e),
+                    })?
+                    .with_timezone(&chrono::Utc),
+            ),
+            None => None,
+        };
+        let reviewed_by = match reviewed_by_text {
+            Some(actor) => Some(
+                rustygene_core::types::ActorRef::from_str(&actor).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Invalid reviewed_by '{}': {}", actor, e),
+                })?,
+            ),
+            None => None,
+        };
+
+        Ok(JsonAssertion {
+            id,
+            value,
+            confidence,
+            status,
+            evidence_type,
+            source_citations,
+            proposed_by,
+            created_at,
+            reviewed_at,
+            reviewed_by,
+        })
     }
 }
 
@@ -506,44 +656,351 @@ impl Storage for SqliteBackend {
         self.list_sync::<LdsOrdinance>("lds_ordinances", pagination)
     }
 
-    // Stubs
     async fn create_assertion(
         &self,
-        _entity_id: EntityId,
-        _entity_type: EntityType,
-        _field: &str,
-        _assertion: &JsonAssertion,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        field: &str,
+        assertion: &JsonAssertion,
     ) -> Result<(), StorageError> {
-        Err(StorageError {
+        let idempotency_key = compute_assertion_idempotency_key(
+            entity_id,
+            field,
+            &assertion.value,
+            &assertion.source_citations,
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Idempotency key computation failed: {}", e),
+        })?;
+
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let existing_id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM assertions WHERE idempotency_key = ?",
+                rusqlite::params![&idempotency_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Idempotency lookup failed: {}", e),
+            })?;
+
+        if existing_id.is_some() {
+            return Ok(());
+        }
+
+        let preferred = if assertion.status == AssertionStatus::Confirmed {
+            let existing_preferred: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM assertions WHERE entity_id = ? AND field = ? AND preferred = 1 AND status = 'confirmed'",
+                    rusqlite::params![entity_id.to_string(), field],
+                    |row| row.get(0),
+                )
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Preferred lookup failed: {}", e),
+                })?;
+            if existing_preferred == 0 {
+                1
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        let source_citations_json = serde_json::to_string(&assertion.source_citations).map_err(|e| {
+            StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Source citations serialization failed: {}", e),
+            }
+        })?;
+
+        conn.execute(
+            "INSERT INTO assertions (
+                id, entity_id, entity_type, field, value, value_date, value_text,
+                confidence, status, preferred, source_citations, proposed_by,
+                reviewed_by, created_at, reviewed_at, evidence_type, idempotency_key
+             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                assertion.id.to_string(),
+                entity_id.to_string(),
+                Self::entity_type_to_db(entity_type),
+                field,
+                assertion.value.to_string(),
+                assertion.value.as_str(),
+                assertion.confidence,
+                Self::assertion_status_to_db(&assertion.status),
+                preferred,
+                source_citations_json,
+                assertion.proposed_by.to_string(),
+                assertion.reviewed_by.as_ref().map(ToString::to_string),
+                assertion.created_at.to_rfc3339(),
+                assertion.reviewed_at.as_ref().map(chrono::DateTime::to_rfc3339),
+                Self::evidence_type_to_db(&assertion.evidence_type),
+                idempotency_key,
+            ],
+        )
+        .map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
-            message: "Not implemented".to_string(),
-        })
+            message: format!("Assertion insert failed: {}", e),
+        })?;
+
+        Ok(())
     }
 
     async fn list_assertions_for_entity(
         &self,
-        _entity_id: EntityId,
+        entity_id: EntityId,
     ) -> Result<Vec<JsonAssertion>, StorageError> {
-        Ok(Vec::new())
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, value, confidence, status, evidence_type, source_citations,
+                        proposed_by, created_at, reviewed_at, reviewed_by
+                 FROM assertions
+                 WHERE entity_id = ?
+                 ORDER BY created_at DESC",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare failed: {}", e),
+            })?;
+
+        let mapped = stmt
+            .query_map(rusqlite::params![entity_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Query failed: {}", e),
+            })?;
+
+        let rows = mapped.collect::<SqliteResult<Vec<_>>>().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Row collection failed: {}", e),
+        })?;
+
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    value,
+                    confidence,
+                    status,
+                    evidence_type,
+                    source_citations,
+                    proposed_by,
+                    created_at,
+                    reviewed_at,
+                    reviewed_by,
+                )| {
+                    Self::row_to_assertion(AssertionRowData {
+                        id_str: id,
+                        value_text: value,
+                        confidence,
+                        status_text: status,
+                        evidence_type_text: evidence_type,
+                        source_citations_text: source_citations,
+                        proposed_by_text: proposed_by,
+                        created_at_text: created_at,
+                        reviewed_at_text: reviewed_at,
+                        reviewed_by_text: reviewed_by,
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Row mapping failed: {:?}", e),
+            })
     }
 
     async fn list_assertions_for_field(
         &self,
-        _entity_id: EntityId,
-        _field: &str,
+        entity_id: EntityId,
+        field: &str,
     ) -> Result<Vec<JsonAssertion>, StorageError> {
-        Ok(Vec::new())
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, value, confidence, status, evidence_type, source_citations,
+                        proposed_by, created_at, reviewed_at, reviewed_by
+                 FROM assertions
+                 WHERE entity_id = ? AND field = ?
+                 ORDER BY preferred DESC, confidence DESC, created_at DESC",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare failed: {}", e),
+            })?;
+
+        let mapped = stmt
+            .query_map(rusqlite::params![entity_id.to_string(), field], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Query failed: {}", e),
+            })?;
+
+        let rows = mapped.collect::<SqliteResult<Vec<_>>>().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Row collection failed: {}", e),
+        })?;
+
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    value,
+                    confidence,
+                    status,
+                    evidence_type,
+                    source_citations,
+                    proposed_by,
+                    created_at,
+                    reviewed_at,
+                    reviewed_by,
+                )| {
+                    Self::row_to_assertion(AssertionRowData {
+                        id_str: id,
+                        value_text: value,
+                        confidence,
+                        status_text: status,
+                        evidence_type_text: evidence_type,
+                        source_citations_text: source_citations,
+                        proposed_by_text: proposed_by,
+                        created_at_text: created_at,
+                        reviewed_at_text: reviewed_at,
+                        reviewed_by_text: reviewed_by,
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Row mapping failed: {:?}", e),
+            })
     }
 
     async fn update_assertion_status(
         &self,
-        _assertion_id: EntityId,
-        _status: AssertionStatus,
+        assertion_id: EntityId,
+        status: AssertionStatus,
     ) -> Result<(), StorageError> {
-        Err(StorageError {
-            code: StorageErrorCode::Backend,
-            message: "Not implemented".to_string(),
-        })
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let found: Option<(String, String)> = conn
+            .query_row(
+                "SELECT entity_id, field FROM assertions WHERE id = ?",
+                rusqlite::params![assertion_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Assertion lookup failed: {}", e),
+            })?;
+
+        let (entity_id, field) = found.ok_or(StorageError {
+            code: StorageErrorCode::NotFound,
+            message: format!("Assertion not found with id {}", assertion_id),
+        })?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let new_status = Self::assertion_status_to_db(&status);
+
+        if status == AssertionStatus::Confirmed {
+            conn.execute(
+                "UPDATE assertions
+                 SET preferred = 0
+                 WHERE entity_id = ? AND field = ? AND id != ?",
+                rusqlite::params![entity_id, field, assertion_id.to_string()],
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Clearing existing preferred assertion failed: {}", e),
+            })?;
+        }
+
+        let preferred = if status == AssertionStatus::Confirmed {
+            1
+        } else {
+            0
+        };
+
+        let rows = conn
+            .execute(
+                "UPDATE assertions
+                 SET status = ?, preferred = ?, reviewed_at = ?
+                 WHERE id = ?",
+                rusqlite::params![new_status, preferred, now, assertion_id.to_string()],
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Assertion status update failed: {}", e),
+            })?;
+
+        if rows == 0 {
+            return Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Assertion not found with id {}", assertion_id),
+            });
+        }
+
+        Ok(())
     }
 
     async fn create_research_log_entry(
@@ -619,6 +1076,9 @@ impl Storage for SqliteBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustygene_core::assertion::EvidenceType;
+    use rustygene_core::types::ActorRef;
+    use serde_json::json;
 
 
     fn create_test_backend() -> SqliteBackend {
@@ -692,5 +1152,134 @@ mod tests {
             .await
             .expect("list");
         assert_eq!(p1.len(), 2);
+    }
+
+    fn sample_assertion(value: Value, status: AssertionStatus) -> JsonAssertion {
+        JsonAssertion {
+            id: EntityId::new(),
+            value,
+            confidence: 0.9,
+            status,
+            evidence_type: EvidenceType::Direct,
+            source_citations: Vec::new(),
+            proposed_by: ActorRef::User("tester".to_string()),
+            created_at: chrono::Utc::now(),
+            reviewed_at: None,
+            reviewed_by: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn assertion_create_and_query_by_entity_and_field() {
+        let backend = create_test_backend();
+        let entity_id = EntityId::new();
+
+        let name_assertion = sample_assertion(json!("John Doe"), AssertionStatus::Confirmed);
+        let birth_assertion = sample_assertion(json!("1850-05-01"), AssertionStatus::Proposed);
+
+        backend
+            .create_assertion(entity_id, EntityType::Person, "name", &name_assertion)
+            .await
+            .expect("create name assertion");
+        backend
+            .create_assertion(entity_id, EntityType::Person, "birth_date", &birth_assertion)
+            .await
+            .expect("create birth assertion");
+
+        let all = backend
+            .list_assertions_for_entity(entity_id)
+            .await
+            .expect("list by entity");
+        assert_eq!(all.len(), 2);
+
+        let names = backend
+            .list_assertions_for_field(entity_id, "name")
+            .await
+            .expect("list by field");
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].id, name_assertion.id);
+        assert_eq!(names[0].value, json!("John Doe"));
+    }
+
+    #[tokio::test]
+    async fn assertion_idempotency_duplicate_is_noop() {
+        let backend = create_test_backend();
+        let entity_id = EntityId::new();
+
+        let assertion = sample_assertion(json!("John Doe"), AssertionStatus::Proposed);
+
+        backend
+            .create_assertion(entity_id, EntityType::Person, "name", &assertion)
+            .await
+            .expect("first create");
+
+        let duplicate = JsonAssertion {
+            id: EntityId::new(),
+            ..assertion.clone()
+        };
+
+        backend
+            .create_assertion(entity_id, EntityType::Person, "name", &duplicate)
+            .await
+            .expect("duplicate should be no-op");
+
+        let names = backend
+            .list_assertions_for_field(entity_id, "name")
+            .await
+            .expect("list by field");
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].id, assertion.id);
+    }
+
+    #[tokio::test]
+    async fn assertion_status_update_sets_preferred() {
+        let backend = create_test_backend();
+        let entity_id = EntityId::new();
+
+        let a1 = sample_assertion(json!("John A Doe"), AssertionStatus::Confirmed);
+        let a2 = sample_assertion(json!("John B Doe"), AssertionStatus::Proposed);
+
+        backend
+            .create_assertion(entity_id, EntityType::Person, "name", &a1)
+            .await
+            .expect("create first assertion");
+        backend
+            .create_assertion(entity_id, EntityType::Person, "name", &a2)
+            .await
+            .expect("create second assertion");
+
+        backend
+            .update_assertion_status(a2.id, AssertionStatus::Confirmed)
+            .await
+            .expect("promote second assertion");
+
+        let names = backend
+            .list_assertions_for_field(entity_id, "name")
+            .await
+            .expect("list by field");
+        assert_eq!(names.len(), 2);
+
+        let first = &names[0];
+        assert_eq!(first.id, a2.id);
+        assert_eq!(first.status, AssertionStatus::Confirmed);
+
+        let conn = backend.connection.lock().expect("lock");
+        let a1_preferred: i64 = conn
+            .query_row(
+                "SELECT preferred FROM assertions WHERE id = ?",
+                rusqlite::params![a1.id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("a1 preferred");
+        let a2_preferred: i64 = conn
+            .query_row(
+                "SELECT preferred FROM assertions WHERE id = ?",
+                rusqlite::params![a2.id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("a2 preferred");
+
+        assert_eq!(a1_preferred, 0);
+        assert_eq!(a2_preferred, 1);
     }
 }
