@@ -3,3 +3,7 @@
 .dolt/
 *.db
 .beads-credential-key
+
+target/
+.DS_Store
+Cargo.lock

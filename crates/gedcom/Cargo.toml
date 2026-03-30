@@ -1,0 +1,7 @@
+[package]
+name = "rustygene-gedcom"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustygene-storage = { version = "0.1.0", path = "../storage" }

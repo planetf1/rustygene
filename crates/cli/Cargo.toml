@@ -1,0 +1,7 @@
+[package]
+name = "rustygene-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustygene-gedcom = { version = "0.1.0", path = "../gedcom" }
