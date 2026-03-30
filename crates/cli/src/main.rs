@@ -2,12 +2,35 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rusqlite::Connection;
-use rustygene_storage::{run_migrations, sqlite_impl::SqliteBackend};
+use rustygene_core::research::{ResearchLogEntry, SearchResult};
+use rustygene_core::types::EntityId;
+use rustygene_storage::{
+    Pagination, ResearchLogFilter, Storage, run_migrations, sqlite_impl::SqliteBackend,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
     Json,
     Text,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum CliSearchResult {
+    Found,
+    NotFound,
+    PartiallyFound,
+    Inconclusive,
+}
+
+impl From<CliSearchResult> for SearchResult {
+    fn from(value: CliSearchResult) -> Self {
+        match value {
+            CliSearchResult::Found => SearchResult::Found,
+            CliSearchResult::NotFound => SearchResult::NotFound,
+            CliSearchResult::PartiallyFound => SearchResult::PartiallyFound,
+            CliSearchResult::Inconclusive => SearchResult::Inconclusive,
+        }
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -31,40 +54,63 @@ enum Commands {
     Export,
     Query,
     Show,
-    ResearchLog,
+    ResearchLog {
+        #[command(subcommand)]
+        command: ResearchLogCommands,
+    },
     RebuildSnapshots,
+}
+
+#[derive(Debug, Subcommand)]
+enum ResearchLogCommands {
+    Add {
+        #[arg(long)]
+        objective: String,
+        #[arg(long, value_enum)]
+        result: CliSearchResult,
+        #[arg(long)]
+        person: Option<String>,
+        #[arg(long)]
+        repository: Option<String>,
+    },
+    List {
+        #[arg(long)]
+        person: Option<String>,
+        #[arg(long, value_enum)]
+        result: Option<CliSearchResult>,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
+    let db_path = resolve_db_path(&cli.db);
+    if let Some(parent) = db_path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "failed to create database directory '{}': {}",
+            parent.display(),
+            err
+        );
+        std::process::exit(1);
+    }
+    let mut connection = match Connection::open(&db_path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("failed to open database '{}': {}", db_path.display(), err);
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(err) = run_migrations(&mut connection) {
+        eprintln!("failed to run migrations: {}", err);
+        std::process::exit(1);
+    }
+
+    let backend = SqliteBackend::new(connection);
 
     match cli.command {
         Commands::RebuildSnapshots => {
-            let db_path = resolve_db_path(&cli.db);
-            if let Some(parent) = db_path.parent()
-                && let Err(err) = std::fs::create_dir_all(parent)
-            {
-                eprintln!(
-                    "failed to create database directory '{}': {}",
-                    parent.display(),
-                    err
-                );
-                std::process::exit(1);
-            }
-            let mut connection = match Connection::open(&db_path) {
-                Ok(conn) => conn,
-                Err(err) => {
-                    eprintln!("failed to open database '{}': {}", db_path.display(), err);
-                    std::process::exit(1);
-                }
-            };
-
-            if let Err(err) = run_migrations(&mut connection) {
-                eprintln!("failed to run migrations: {}", err);
-                std::process::exit(1);
-            }
-
-            let backend = SqliteBackend::new(connection);
             match backend.rebuild_all_snapshots() {
                 Ok(rebuilt_count) => match cli.format {
                     OutputFormat::Text => {
@@ -80,15 +126,146 @@ fn main() {
                 }
             }
         }
+        Commands::ResearchLog { command } => {
+            run_research_log_command(command, &backend, cli.format);
+        }
         Commands::Import
         | Commands::Export
         | Commands::Query
-        | Commands::Show
-        | Commands::ResearchLog => {
+        | Commands::Show => {
             eprintln!("command not implemented yet");
             std::process::exit(2);
         }
     }
+}
+
+fn run_research_log_command(
+    command: ResearchLogCommands,
+    backend: &SqliteBackend,
+    format: OutputFormat,
+) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("failed to initialize runtime: {}", err);
+            std::process::exit(1);
+        }
+    };
+
+    match command {
+        ResearchLogCommands::Add {
+            objective,
+            result,
+            person,
+            repository,
+        } => {
+            let person_ref = person.as_deref().map(parse_entity_id_arg).transpose();
+            let person_ref = match person_ref {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("invalid --person id: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            let repository_ref = repository.as_deref().map(parse_entity_id_arg).transpose();
+            let repository_ref = match repository_ref {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("invalid --repository id: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            let entry = ResearchLogEntry {
+                id: EntityId::new(),
+                date: chrono::Utc::now(),
+                objective,
+                repository: repository_ref,
+                repository_name: None,
+                search_terms: Vec::new(),
+                source_searched: None,
+                result: result.into(),
+                findings: None,
+                citations_created: Vec::new(),
+                next_steps: None,
+                person_refs: person_ref.into_iter().collect(),
+                tags: Vec::new(),
+            };
+
+            let result = runtime.block_on(backend.create_research_log_entry(&entry));
+            match result {
+                Ok(()) => match format {
+                    OutputFormat::Text => println!("research-log add complete: id={}", entry.id),
+                    OutputFormat::Json => {
+                        println!("{{\"id\":\"{}\",\"status\":\"created\"}}", entry.id)
+                    }
+                },
+                Err(err) => {
+                    eprintln!("failed to add research log entry: {}", err.message);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ResearchLogCommands::List { person, result } => {
+            let person_ref = person.as_deref().map(parse_entity_id_arg).transpose();
+            let person_ref = match person_ref {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("invalid --person id: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            let filter = ResearchLogFilter {
+                person_ref,
+                result: result.map(Into::into),
+                date_from_iso: None,
+                date_to_iso: None,
+            };
+
+            let entries = runtime.block_on(backend.list_research_log_entries(
+                &filter,
+                Pagination {
+                    limit: 100,
+                    offset: 0,
+                },
+            ));
+
+            match entries {
+                Ok(entries) => match format {
+                    OutputFormat::Text => {
+                        if entries.is_empty() {
+                            println!("no research-log entries found");
+                        } else {
+                            for e in entries {
+                                println!("{} {} {:?} {}", e.id, e.date.to_rfc3339(), e.result, e.objective);
+                            }
+                        }
+                    }
+                    OutputFormat::Json => match serde_json::to_string(&entries) {
+                        Ok(json) => println!("{}", json),
+                        Err(err) => {
+                            eprintln!("failed to serialize output: {}", err);
+                            std::process::exit(1);
+                        }
+                    },
+                },
+                Err(err) => {
+                    eprintln!("failed to list research log entries: {}", err.message);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+fn parse_entity_id_arg(raw: &str) -> Result<EntityId, String> {
+    serde_json::from_str::<EntityId>(&format!("\"{}\"", raw))
+        .map_err(|e| format!("{} ({})", raw, e))
 }
 
 fn resolve_db_path(path: &PathBuf) -> PathBuf {
@@ -108,7 +285,10 @@ fn resolve_db_path(path: &PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_db_path;
+    use super::{
+        Cli, CliSearchResult, Commands, ResearchLogCommands, parse_entity_id_arg, resolve_db_path,
+    };
+    use clap::Parser;
     use std::path::PathBuf;
 
     #[test]
@@ -122,5 +302,65 @@ mod tests {
         let home = std::env::var_os("HOME").expect("HOME must be set for test");
         let resolved = resolve_db_path(&PathBuf::from("~/.rustygene/test.db"));
         assert_eq!(resolved, PathBuf::from(home).join(".rustygene/test.db"));
+    }
+
+    #[test]
+    fn parse_entity_id_arg_accepts_uuid() {
+        let id = parse_entity_id_arg("550e8400-e29b-41d4-a716-446655440000").expect("parse id");
+        assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[test]
+    fn clap_parses_research_log_add() {
+        let cli = Cli::parse_from([
+            "rustygene",
+            "research-log",
+            "add",
+            "--objective",
+            "Find census",
+            "--result",
+            "partially-found",
+            "--person",
+            "550e8400-e29b-41d4-a716-446655440000",
+        ]);
+
+        match cli.command {
+            Commands::ResearchLog {
+                command:
+                    ResearchLogCommands::Add {
+                        objective,
+                        result,
+                        person,
+                        repository,
+                    },
+            } => {
+                assert_eq!(objective, "Find census");
+                assert_eq!(result, CliSearchResult::PartiallyFound);
+                assert!(person.is_some());
+                assert!(repository.is_none());
+            }
+            _ => panic!("expected research-log add command"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_research_log_list() {
+        let cli = Cli::parse_from([
+            "rustygene",
+            "research-log",
+            "list",
+            "--result",
+            "not-found",
+        ]);
+
+        match cli.command {
+            Commands::ResearchLog {
+                command: ResearchLogCommands::List { person, result },
+            } => {
+                assert!(person.is_none());
+                assert_eq!(result, Some(CliSearchResult::NotFound));
+            }
+            _ => panic!("expected research-log list command"),
+        }
     }
 }
