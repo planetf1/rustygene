@@ -1,6 +1,7 @@
 use crate::{
-    AuditLogEntry, EntityType, JsonAssertion, Pagination, RelationshipEdge, ResearchLogFilter,
-    Storage, StorageError, StorageErrorCode,
+    AuditLogEntry, EntityType, JsonAssertion, JsonExportManifest, JsonExportMode,
+    JsonExportResult, Pagination, RelationshipEdge, ResearchLogFilter, Storage, StorageError,
+    StorageErrorCode,
 };
 use rustygene_core::assertion::{compute_assertion_idempotency_key, AssertionStatus, EvidenceType};
 use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
@@ -13,6 +14,9 @@ use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -108,6 +112,207 @@ impl SqliteBackend {
         })?;
 
         Ok(rebuilt)
+    }
+
+    pub fn export_json_dump(&self, mode: JsonExportMode) -> Result<JsonExportResult, StorageError> {
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let mut payload = serde_json::Map::new();
+        let mut entity_counts: BTreeMap<String, usize> = BTreeMap::new();
+
+        let entity_tables = [
+            ("persons", true),
+            ("families", true),
+            ("events", true),
+            ("places", true),
+            ("sources", true),
+            ("citations", true),
+            ("repositories", true),
+            ("media", true),
+            ("notes", true),
+            ("lds_ordinances", true),
+            ("assertions", false),
+            ("relationships", false),
+            ("audit_log", false),
+            ("research_log", false),
+        ];
+
+        for (table, is_entity_snapshot_table) in entity_tables {
+            let rows = if is_entity_snapshot_table {
+                Self::query_entity_snapshot_rows(&conn, table)?
+            } else {
+                Self::query_raw_rows(&conn, table)?
+            };
+            entity_counts.insert(table.to_string(), rows.len());
+            payload.insert(table.to_string(), Value::Array(rows));
+        }
+
+        let schema_version: i64 = conn
+            .query_row("SELECT COALESCE(MAX(version), 0) FROM refinery_schema_history", [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(0);
+
+        let manifest = JsonExportManifest {
+            exported_at: chrono::Utc::now().to_rfc3339(),
+            schema_version,
+            entity_counts,
+        };
+
+        payload.insert(
+            "manifest".to_string(),
+            serde_json::to_value(&manifest).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Manifest serialization failed: {}", e),
+            })?,
+        );
+
+        drop(conn);
+
+        let root = Value::Object(payload);
+
+        match mode {
+            JsonExportMode::Directory { output_dir } => {
+                fs::create_dir_all(&output_dir).map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Failed to create export directory: {}", e),
+                })?;
+
+                write_json_file(output_dir.join("manifest.json"), &manifest)?;
+
+                let root_obj = root.as_object().ok_or(StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: "Export root payload must be a JSON object".to_string(),
+                })?;
+
+                for (name, value) in root_obj {
+                    if name == "manifest" {
+                        continue;
+                    }
+                    write_json_file(output_dir.join(format!("{}.json", name)), value)?;
+                }
+
+                Ok(JsonExportResult {
+                    manifest,
+                    output_path: output_dir,
+                })
+            }
+            JsonExportMode::SingleFile { output_file } => {
+                if let Some(parent) = output_file.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    fs::create_dir_all(parent).map_err(|e| StorageError {
+                        code: StorageErrorCode::Backend,
+                        message: format!("Failed to create export parent directory: {}", e),
+                    })?;
+                }
+
+                write_json_file(&output_file, &root)?;
+
+                Ok(JsonExportResult {
+                    manifest,
+                    output_path: output_file,
+                })
+            }
+        }
+    }
+
+    fn query_entity_snapshot_rows(conn: &Connection, table: &str) -> Result<Vec<Value>, StorageError> {
+        let mut stmt = conn
+            .prepare(&format!("SELECT data FROM {} ORDER BY created_at DESC", table))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare {} query failed: {}", table, e),
+            })?;
+
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Query {} failed: {}", table, e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Collect {} failed: {}", table, e),
+            })?;
+
+        rows.into_iter()
+            .map(|row| {
+                serde_json::from_str::<Value>(&row).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("{} JSON parse failed: {}", table, e),
+                })
+            })
+            .collect()
+    }
+
+    fn query_raw_rows(conn: &Connection, table: &str) -> Result<Vec<Value>, StorageError> {
+        let mut stmt = conn
+            .prepare(&format!("SELECT * FROM {}", table))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare {} query failed: {}", table, e),
+            })?;
+
+        let column_names: Vec<String> = stmt
+            .column_names()
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+
+        let mut rows = stmt.query([]).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Query {} failed: {}", table, e),
+        })?;
+
+        let mut output = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Row iteration for {} failed: {}", table, e),
+        })? {
+            let mut obj = serde_json::Map::new();
+            for (idx, column_name) in column_names.iter().enumerate() {
+                let as_string: Result<Option<String>, _> = row.get(idx);
+                match as_string {
+                    Ok(Some(v)) => {
+                        let parsed = serde_json::from_str::<Value>(&v).unwrap_or(Value::String(v));
+                        obj.insert(column_name.clone(), parsed);
+                    }
+                    Ok(None) => {
+                        obj.insert(column_name.clone(), Value::Null);
+                    }
+                    Err(_) => {
+                        let as_i64: Result<Option<i64>, _> = row.get(idx);
+                        if let Ok(Some(v)) = as_i64 {
+                            obj.insert(column_name.clone(), Value::Number(v.into()));
+                            continue;
+                        }
+
+                        let as_f64: Result<Option<f64>, _> = row.get(idx);
+                        if let Ok(Some(v)) = as_f64 {
+                            if let Some(n) = serde_json::Number::from_f64(v) {
+                                obj.insert(column_name.clone(), Value::Number(n));
+                            } else {
+                                obj.insert(column_name.clone(), Value::Null);
+                            }
+                            continue;
+                        }
+
+                        obj.insert(column_name.clone(), Value::Null);
+                    }
+                }
+            }
+            output.push(Value::Object(obj));
+        }
+
+        Ok(output)
     }
 
     fn serialize<T: serde::Serialize>(entity: &T) -> Result<Value, StorageError> {
@@ -663,6 +868,18 @@ impl SqliteBackend {
 
         Ok(())
     }
+}
+
+fn write_json_file(path: impl AsRef<Path>, value: &impl serde::Serialize) -> Result<(), StorageError> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| StorageError {
+        code: StorageErrorCode::Serialization,
+        message: format!("JSON serialization failed: {}", e),
+    })?;
+
+    fs::write(path.as_ref(), bytes).map_err(|e| StorageError {
+        code: StorageErrorCode::Backend,
+        message: format!("Failed to write JSON file '{}': {}", path.as_ref().display(), e),
+    })
 }
 
 #[async_trait::async_trait]
@@ -1815,6 +2032,7 @@ mod tests {
     use rustygene_core::assertion::EvidenceType;
     use rustygene_core::types::ActorRef;
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
 
     fn create_test_backend() -> SqliteBackend {
@@ -2435,5 +2653,120 @@ mod tests {
             .expect("read person snapshot");
         let value: serde_json::Value = serde_json::from_str(&data).expect("parse person json");
         assert_eq!(value["name"], json!("Rebuilt Name"));
+    }
+
+    #[tokio::test]
+    async fn json_export_directory_writes_manifest_and_tables() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+        backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        let assertion = sample_assertion(json!("Exported Name"), AssertionStatus::Confirmed);
+        backend
+            .create_assertion(person_id, EntityType::Person, "name", &assertion)
+            .await
+            .expect("create assertion");
+
+        let research = sample_research_entry(
+            EntityId::new(),
+            chrono::Utc::now(),
+            SearchResult::Found,
+            vec![person_id],
+        );
+        backend
+            .create_research_log_entry(&research)
+            .await
+            .expect("create research entry");
+
+        backend
+            .append_audit_log_entry(&AuditLogEntry {
+                actor: "user:export-test".to_string(),
+                entity_id: person_id,
+                entity_type: EntityType::Person,
+                action: "update".to_string(),
+                old_value_json: None,
+                new_value_json: Some(json!({"name": "Exported Name"})),
+                timestamp_iso: chrono::Utc::now().to_rfc3339(),
+            })
+            .await
+            .expect("append audit");
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let out_dir = std::env::temp_dir().join(format!("rustygene-json-export-{suffix}"));
+
+        let result = backend
+            .export_json_dump(JsonExportMode::Directory {
+                output_dir: out_dir.clone(),
+            })
+            .expect("export directory");
+
+        assert_eq!(result.output_path, out_dir);
+        assert!(out_dir.join("manifest.json").exists());
+        assert!(out_dir.join("persons.json").exists());
+        assert!(out_dir.join("assertions.json").exists());
+        assert!(out_dir.join("audit_log.json").exists());
+        assert!(out_dir.join("research_log.json").exists());
+        assert!(result.manifest.entity_counts.get("persons").copied().unwrap_or(0) >= 1);
+        assert!(result
+            .manifest
+            .entity_counts
+            .get("assertions")
+            .copied()
+            .unwrap_or(0)
+            >= 1);
+
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    #[tokio::test]
+    async fn json_export_single_file_writes_combined_payload() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+        backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let out_file = std::env::temp_dir().join(format!("rustygene-export-{suffix}.json"));
+
+        let result = backend
+            .export_json_dump(JsonExportMode::SingleFile {
+                output_file: out_file.clone(),
+            })
+            .expect("export single file");
+
+        assert_eq!(result.output_path, out_file);
+        let payload = std::fs::read_to_string(&out_file).expect("read exported file");
+        let parsed: serde_json::Value = serde_json::from_str(&payload).expect("parse exported json");
+
+        assert!(parsed.get("manifest").is_some());
+        assert!(parsed.get("persons").is_some());
+        assert!(parsed["persons"].as_array().is_some());
+
+        let _ = std::fs::remove_file(&out_file);
     }
 }

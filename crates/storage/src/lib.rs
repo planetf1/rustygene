@@ -12,6 +12,8 @@ use rustygene_core::person::Person;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 embed_migrations!("migrations");
 
@@ -124,6 +126,25 @@ pub struct RelationshipEdge {
     pub rel_type: String,
     pub directed: bool,
     pub assertion_id: Option<EntityId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsonExportMode {
+    Directory { output_dir: PathBuf },
+    SingleFile { output_file: PathBuf },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct JsonExportManifest {
+    pub exported_at: String,
+    pub schema_version: i64,
+    pub entity_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonExportResult {
+    pub manifest: JsonExportManifest,
+    pub output_path: PathBuf,
 }
 
 pub type JsonAssertion = Assertion<Value>;
