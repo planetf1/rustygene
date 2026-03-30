@@ -52,13 +52,32 @@ struct Cli {
 enum Commands {
     Import,
     Export,
-    Query,
+    Query {
+        #[command(subcommand)]
+        command: QueryCommands,
+    },
     Show,
     ResearchLog {
         #[command(subcommand)]
         command: ResearchLogCommands,
     },
     RebuildSnapshots,
+}
+
+#[derive(Debug, Subcommand)]
+enum QueryCommands {
+    Person {
+        #[arg(long)]
+        name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct QueryPersonRow {
+    id: String,
+    preferred_name: Option<String>,
+    birth_date: Option<String>,
+    death_date: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -129,12 +148,146 @@ fn main() {
         Commands::ResearchLog { command } => {
             run_research_log_command(command, &backend, cli.format);
         }
+        Commands::Query { command } => {
+            run_query_command(command, &db_path, cli.format);
+        }
         Commands::Import
         | Commands::Export
-        | Commands::Query
         | Commands::Show => {
             eprintln!("command not implemented yet");
             std::process::exit(2);
+        }
+    }
+}
+
+fn run_query_command(command: QueryCommands, db_path: &PathBuf, format: OutputFormat) {
+    match command {
+        QueryCommands::Person { name } => {
+            let conn = match Connection::open(db_path) {
+                Ok(conn) => conn,
+                Err(err) => {
+                    eprintln!("failed to open database '{}': {}", db_path.display(), err);
+                    std::process::exit(1);
+                }
+            };
+
+            let needle_json = match serde_json::to_string(&name) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("failed to serialize search name: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            let mut stmt = match conn.prepare(
+                "SELECT
+                    p.id,
+                    (
+                        SELECT value FROM assertions a
+                        WHERE a.entity_id = p.id
+                          AND a.entity_type = 'person'
+                          AND a.field = 'name'
+                          AND a.status = 'confirmed'
+                          AND a.preferred = 1
+                        LIMIT 1
+                    ) AS preferred_name,
+                    (
+                        SELECT value FROM assertions a
+                        WHERE a.entity_id = p.id
+                          AND a.entity_type = 'person'
+                          AND a.field = 'birth_date'
+                          AND a.status = 'confirmed'
+                          AND a.preferred = 1
+                        LIMIT 1
+                    ) AS birth_date,
+                    (
+                        SELECT value FROM assertions a
+                        WHERE a.entity_id = p.id
+                          AND a.entity_type = 'person'
+                          AND a.field = 'death_date'
+                          AND a.status = 'confirmed'
+                          AND a.preferred = 1
+                        LIMIT 1
+                    ) AS death_date
+                 FROM persons p
+                 WHERE EXISTS (
+                    SELECT 1 FROM assertions a
+                    WHERE a.entity_id = p.id
+                      AND a.entity_type = 'person'
+                      AND a.field = 'name'
+                      AND a.status = 'confirmed'
+                      AND a.preferred = 1
+                      AND a.value = ?
+                 )
+                 ORDER BY p.id",
+            ) {
+                Ok(stmt) => stmt,
+                Err(err) => {
+                    eprintln!("failed to prepare query: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            let rows = match stmt.query_map(rusqlite::params![needle_json], |row| {
+                let parse_value = |raw: Option<String>| -> Result<Option<String>, rusqlite::Error> {
+                    match raw {
+                        Some(raw) => {
+                            let value: Result<serde_json::Value, _> = serde_json::from_str(&raw);
+                            match value {
+                                Ok(v) => Ok(v.as_str().map(ToString::to_string).or(Some(v.to_string()))),
+                                Err(_) => Ok(Some(raw)),
+                            }
+                        }
+                        None => Ok(None),
+                    }
+                };
+
+                Ok(QueryPersonRow {
+                    id: row.get::<_, String>(0)?,
+                    preferred_name: parse_value(row.get::<_, Option<String>>(1)?)?,
+                    birth_date: parse_value(row.get::<_, Option<String>>(2)?)?,
+                    death_date: parse_value(row.get::<_, Option<String>>(3)?)?,
+                })
+            }) {
+                Ok(rows) => rows,
+                Err(err) => {
+                    eprintln!("failed to run query: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            let rows: Vec<QueryPersonRow> = match rows.collect() {
+                Ok(rows) => rows,
+                Err(err) => {
+                    eprintln!("failed to read query rows: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            match format {
+                OutputFormat::Json => match serde_json::to_string(&rows) {
+                    Ok(json) => println!("{}", json),
+                    Err(err) => {
+                        eprintln!("failed to serialize query output: {}", err);
+                        std::process::exit(1);
+                    }
+                },
+                OutputFormat::Text => {
+                    if rows.is_empty() {
+                        println!("no matching persons found");
+                    } else {
+                        for row in rows {
+                            println!(
+                                "id={} name={} birth={} death={}",
+                                row.id,
+                                row.preferred_name.unwrap_or_else(|| "-".to_string()),
+                                row.birth_date.unwrap_or_else(|| "-".to_string()),
+                                row.death_date.unwrap_or_else(|| "-".to_string())
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -286,7 +439,8 @@ fn resolve_db_path(path: &PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CliSearchResult, Commands, ResearchLogCommands, parse_entity_id_arg, resolve_db_path,
+        Cli, CliSearchResult, Commands, QueryCommands, ResearchLogCommands, parse_entity_id_arg,
+        resolve_db_path,
     };
     use clap::Parser;
     use std::path::PathBuf;
@@ -361,6 +515,20 @@ mod tests {
                 assert_eq!(result, Some(CliSearchResult::NotFound));
             }
             _ => panic!("expected research-log list command"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_query_person() {
+        let cli = Cli::parse_from(["rustygene", "query", "person", "--name", "Jones"]);
+
+        match cli.command {
+            Commands::Query {
+                command: QueryCommands::Person { name },
+            } => {
+                assert_eq!(name, "Jones");
+            }
+            _ => panic!("expected query person command"),
         }
     }
 }
