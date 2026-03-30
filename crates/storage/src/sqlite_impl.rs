@@ -271,6 +271,42 @@ impl SqliteBackend {
         }
     }
 
+    fn entity_table_for_type(entity_type: EntityType) -> &'static str {
+        match entity_type {
+            EntityType::Person => "persons",
+            EntityType::Family => "families",
+            EntityType::Relationship => "families",
+            EntityType::Event => "events",
+            EntityType::Place => "places",
+            EntityType::Source => "sources",
+            EntityType::Citation => "citations",
+            EntityType::Repository => "repositories",
+            EntityType::Media => "media",
+            EntityType::Note => "notes",
+            EntityType::LdsOrdinance => "lds_ordinances",
+        }
+    }
+
+    fn entity_type_from_db(value: &str) -> Result<EntityType, StorageError> {
+        match value {
+            "person" => Ok(EntityType::Person),
+            "family" => Ok(EntityType::Family),
+            "relationship" => Ok(EntityType::Relationship),
+            "event" => Ok(EntityType::Event),
+            "place" => Ok(EntityType::Place),
+            "source" => Ok(EntityType::Source),
+            "citation" => Ok(EntityType::Citation),
+            "repository" => Ok(EntityType::Repository),
+            "media" => Ok(EntityType::Media),
+            "note" => Ok(EntityType::Note),
+            "lds_ordinance" => Ok(EntityType::LdsOrdinance),
+            other => Err(StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Unknown entity type in assertions table: {}", other),
+            }),
+        }
+    }
+
     fn assertion_status_to_db(status: &AssertionStatus) -> &'static str {
         match status {
             AssertionStatus::Confirmed => "confirmed",
@@ -389,6 +425,96 @@ impl SqliteBackend {
             reviewed_at,
             reviewed_by,
         })
+    }
+
+    fn recompute_entity_snapshot_tx(
+        tx: &rusqlite::Transaction<'_>,
+        entity_id: EntityId,
+        entity_type: EntityType,
+    ) -> Result<(), StorageError> {
+        let table = Self::entity_table_for_type(entity_type);
+        let current_data_str: Option<String> = tx
+            .query_row(
+                &format!("SELECT data FROM {} WHERE id = ?", table),
+                rusqlite::params![entity_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Snapshot read failed: {}", e),
+            })?;
+
+        let current_data_str = current_data_str.ok_or(StorageError {
+            code: StorageErrorCode::NotFound,
+            message: format!("Entity {} not found in table {}", entity_id, table),
+        })?;
+
+        let mut snapshot_json: Value = serde_json::from_str(&current_data_str).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Existing snapshot JSON parse failed: {}", e),
+        })?;
+
+        let obj = snapshot_json.as_object_mut().ok_or(StorageError {
+            code: StorageErrorCode::Serialization,
+            message: "Entity snapshot is not a JSON object".to_string(),
+        })?;
+
+        let mut stmt = tx
+            .prepare(
+                "SELECT field, value
+                 FROM assertions
+                 WHERE entity_id = ? AND status = 'confirmed' AND preferred = 1",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Snapshot assertion query prepare failed: {}", e),
+            })?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![entity_id.to_string()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Snapshot assertion query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Snapshot assertion row collection failed: {}", e),
+            })?;
+
+        for (field, value_text) in rows {
+            let value: Value = serde_json::from_str(&value_text).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Assertion value parse failed for field '{}': {}", field, e),
+            })?;
+            obj.insert(field, value);
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let updated = tx
+            .execute(
+                &format!(
+                    "UPDATE {} SET data = ?, version = version + 1, updated_at = ? WHERE id = ?",
+                    table
+                ),
+                rusqlite::params![snapshot_json.to_string(), now, entity_id.to_string()],
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Snapshot update failed: {}", e),
+            })?;
+
+        if updated == 0 {
+            return Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Entity {} not found in table {}", entity_id, table),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -674,7 +800,7 @@ impl Storage for SqliteBackend {
             message: format!("Idempotency key computation failed: {}", e),
         })?;
 
-        let conn = self
+        let mut conn = self
             .connection
             .lock()
             .map_err(|e| StorageError {
@@ -682,7 +808,12 @@ impl Storage for SqliteBackend {
                 message: format!("Mutex lock failed: {}", e),
             })?;
 
-        let existing_id: Option<String> = conn
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        let existing_id: Option<String> = tx
             .query_row(
                 "SELECT id FROM assertions WHERE idempotency_key = ?",
                 rusqlite::params![&idempotency_key],
@@ -695,11 +826,15 @@ impl Storage for SqliteBackend {
             })?;
 
         if existing_id.is_some() {
+            tx.commit().map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Transaction commit failed: {}", e),
+            })?;
             return Ok(());
         }
 
         let preferred = if assertion.status == AssertionStatus::Confirmed {
-            let existing_preferred: i64 = conn
+            let existing_preferred: i64 = tx
                 .query_row(
                     "SELECT COUNT(*) FROM assertions WHERE entity_id = ? AND field = ? AND preferred = 1 AND status = 'confirmed'",
                     rusqlite::params![entity_id.to_string(), field],
@@ -725,7 +860,7 @@ impl Storage for SqliteBackend {
             }
         })?;
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO assertions (
                 id, entity_id, entity_type, field, value, value_date, value_text,
                 confidence, status, preferred, source_citations, proposed_by,
@@ -753,6 +888,13 @@ impl Storage for SqliteBackend {
         .map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
             message: format!("Assertion insert failed: {}", e),
+        })?;
+
+        Self::recompute_entity_snapshot_tx(&tx, entity_id, entity_type)?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
         })?;
 
         Ok(())
@@ -934,7 +1076,7 @@ impl Storage for SqliteBackend {
         assertion_id: EntityId,
         status: AssertionStatus,
     ) -> Result<(), StorageError> {
-        let conn = self
+        let mut conn = self
             .connection
             .lock()
             .map_err(|e| StorageError {
@@ -942,11 +1084,16 @@ impl Storage for SqliteBackend {
                 message: format!("Mutex lock failed: {}", e),
             })?;
 
-        let found: Option<(String, String)> = conn
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        let found: Option<(String, String, String)> = tx
             .query_row(
-                "SELECT entity_id, field FROM assertions WHERE id = ?",
+                "SELECT entity_id, entity_type, field FROM assertions WHERE id = ?",
                 rusqlite::params![assertion_id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(|e| StorageError {
@@ -954,16 +1101,17 @@ impl Storage for SqliteBackend {
                 message: format!("Assertion lookup failed: {}", e),
             })?;
 
-        let (entity_id, field) = found.ok_or(StorageError {
+        let (entity_id, entity_type_text, field) = found.ok_or(StorageError {
             code: StorageErrorCode::NotFound,
             message: format!("Assertion not found with id {}", assertion_id),
         })?;
+        let entity_type = Self::entity_type_from_db(&entity_type_text)?;
 
         let now = chrono::Utc::now().to_rfc3339();
         let new_status = Self::assertion_status_to_db(&status);
 
         if status == AssertionStatus::Confirmed {
-            conn.execute(
+            tx.execute(
                 "UPDATE assertions
                  SET preferred = 0
                  WHERE entity_id = ? AND field = ? AND id != ?",
@@ -981,7 +1129,7 @@ impl Storage for SqliteBackend {
             0
         };
 
-        let rows = conn
+        let rows = tx
             .execute(
                 "UPDATE assertions
                  SET status = ?, preferred = ?, reviewed_at = ?
@@ -999,6 +1147,20 @@ impl Storage for SqliteBackend {
                 message: format!("Assertion not found with id {}", assertion_id),
             });
         }
+
+        let parsed_entity_id: EntityId = serde_json::from_str(&format!("\"{}\"", entity_id)).map_err(|e| {
+            StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Invalid entity id '{}': {}", entity_id, e),
+            }
+        })?;
+
+        Self::recompute_entity_snapshot_tx(&tx, parsed_entity_id, entity_type)?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
 
         Ok(())
     }
@@ -1173,6 +1335,15 @@ mod tests {
     async fn assertion_create_and_query_by_entity_and_field() {
         let backend = create_test_backend();
         let entity_id = EntityId::new();
+        let person = Person {
+            id: entity_id,
+            names: vec![],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: true,
+            private: false,
+            _raw_gedcom: Default::default(),
+        };
+        backend.create_person(&person).await.expect("create person");
 
         let name_assertion = sample_assertion(json!("John Doe"), AssertionStatus::Confirmed);
         let birth_assertion = sample_assertion(json!("1850-05-01"), AssertionStatus::Proposed);
@@ -1205,6 +1376,15 @@ mod tests {
     async fn assertion_idempotency_duplicate_is_noop() {
         let backend = create_test_backend();
         let entity_id = EntityId::new();
+        let person = Person {
+            id: entity_id,
+            names: vec![],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: true,
+            private: false,
+            _raw_gedcom: Default::default(),
+        };
+        backend.create_person(&person).await.expect("create person");
 
         let assertion = sample_assertion(json!("John Doe"), AssertionStatus::Proposed);
 
@@ -1235,6 +1415,15 @@ mod tests {
     async fn assertion_status_update_sets_preferred() {
         let backend = create_test_backend();
         let entity_id = EntityId::new();
+        let person = Person {
+            id: entity_id,
+            names: vec![],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: true,
+            private: false,
+            _raw_gedcom: Default::default(),
+        };
+        backend.create_person(&person).await.expect("create person");
 
         let a1 = sample_assertion(json!("John A Doe"), AssertionStatus::Confirmed);
         let a2 = sample_assertion(json!("John B Doe"), AssertionStatus::Proposed);
@@ -1281,5 +1470,80 @@ mod tests {
 
         assert_eq!(a1_preferred, 0);
         assert_eq!(a2_preferred, 1);
+    }
+
+    #[tokio::test]
+    async fn snapshot_recomputed_on_assertion_create() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+        let person = Person {
+            id: person_id,
+            names: vec![],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: true,
+            private: false,
+            _raw_gedcom: Default::default(),
+        };
+        backend.create_person(&person).await.expect("create person");
+
+        let assertion = sample_assertion(json!("John Snapshot"), AssertionStatus::Confirmed);
+        backend
+            .create_assertion(person_id, EntityType::Person, "name", &assertion)
+            .await
+            .expect("create assertion");
+
+        let conn = backend.connection.lock().expect("lock");
+        let snapshot_data: String = conn
+            .query_row(
+                "SELECT data FROM persons WHERE id = ?",
+                rusqlite::params![person_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("read person snapshot");
+        let snapshot_json: Value = serde_json::from_str(&snapshot_data).expect("parse snapshot");
+        assert_eq!(snapshot_json["name"], json!("John Snapshot"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_recomputed_on_assertion_status_change() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+        let person = Person {
+            id: person_id,
+            names: vec![],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: true,
+            private: false,
+            _raw_gedcom: Default::default(),
+        };
+        backend.create_person(&person).await.expect("create person");
+
+        let first = sample_assertion(json!("John Old"), AssertionStatus::Confirmed);
+        let second = sample_assertion(json!("John New"), AssertionStatus::Proposed);
+
+        backend
+            .create_assertion(person_id, EntityType::Person, "name", &first)
+            .await
+            .expect("create first assertion");
+        backend
+            .create_assertion(person_id, EntityType::Person, "name", &second)
+            .await
+            .expect("create second assertion");
+
+        backend
+            .update_assertion_status(second.id, AssertionStatus::Confirmed)
+            .await
+            .expect("confirm second assertion");
+
+        let conn = backend.connection.lock().expect("lock");
+        let snapshot_data: String = conn
+            .query_row(
+                "SELECT data FROM persons WHERE id = ?",
+                rusqlite::params![person_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("read person snapshot");
+        let snapshot_json: Value = serde_json::from_str(&snapshot_data).expect("parse snapshot");
+        assert_eq!(snapshot_json["name"], json!("John New"));
     }
 }
