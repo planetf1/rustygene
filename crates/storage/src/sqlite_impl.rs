@@ -1197,11 +1197,34 @@ impl Storage for SqliteBackend {
         Ok(Vec::new())
     }
 
-    async fn append_audit_log_entry(&self, _entry: &AuditLogEntry) -> Result<(), StorageError> {
-        Err(StorageError {
+    async fn append_audit_log_entry(&self, entry: &AuditLogEntry) -> Result<(), StorageError> {
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        conn.execute(
+            "INSERT INTO audit_log (timestamp, actor, entity_id, entity_type, action, old_value, new_value)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                &entry.timestamp_iso,
+                &entry.actor,
+                entry.entity_id.to_string(),
+                Self::entity_type_to_db(entry.entity_type),
+                &entry.action,
+                entry.old_value_json.as_ref().map(serde_json::Value::to_string),
+                entry.new_value_json.as_ref().map(serde_json::Value::to_string),
+            ],
+        )
+        .map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
-            message: "Not implemented".to_string(),
-        })
+            message: format!("Audit log insert failed: {}", e),
+        })?;
+
+        Ok(())
     }
 
     async fn upsert_relationship_edge(&self, _edge: &RelationshipEdge) -> Result<(), StorageError> {
@@ -1545,5 +1568,59 @@ mod tests {
             .expect("read person snapshot");
         let snapshot_json: Value = serde_json::from_str(&snapshot_data).expect("parse snapshot");
         assert_eq!(snapshot_json["name"], json!("John New"));
+    }
+
+    #[tokio::test]
+    async fn append_audit_log_entry_persists_row() {
+        let backend = create_test_backend();
+        let entity_id = EntityId::new();
+
+        let entry = AuditLogEntry {
+            actor: "user:tester".to_string(),
+            entity_id,
+            entity_type: EntityType::Person,
+            action: "update_person".to_string(),
+            old_value_json: Some(json!({ "living": true })),
+            new_value_json: Some(json!({ "living": false })),
+            timestamp_iso: chrono::Utc::now().to_rfc3339(),
+        };
+
+        backend
+            .append_audit_log_entry(&entry)
+            .await
+            .expect("append audit log entry");
+
+        let conn = backend.connection.lock().expect("lock");
+        let row: (String, String, String, String, String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT timestamp, actor, entity_id, entity_type, action, old_value, new_value
+                 FROM audit_log ORDER BY id DESC LIMIT 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
+            )
+            .expect("read audit row");
+
+        assert_eq!(row.1, entry.actor);
+        assert_eq!(row.2, entity_id.to_string());
+        assert_eq!(row.3, "person");
+        assert_eq!(row.4, entry.action);
+        assert_eq!(
+            row.5.as_deref(),
+            Some(json!({ "living": true }).to_string().as_str())
+        );
+        assert_eq!(
+            row.6.as_deref(),
+            Some(json!({ "living": false }).to_string().as_str())
+        );
     }
 }
