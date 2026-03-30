@@ -1,7 +1,7 @@
 ### Technical Specification: RustyGene — AI-Assisted Genealogy Engine
 
 **Document Revision Date:** 2026-03-30
-**Revision:** 11 (rev 8: canonicality principles, entity invariants, Phase 1A scoping, GEDCOM fidelity tiers; rev 9: snapshot consistency, relationship direction, idempotency key, Place simplification, migration tooling, audit log diffs; rev 10: competitive advantages, citation propagation, media gallery, DNA-as-source; rev 11: embedded Axum server architecture, security model, language-agnostic agent contract, sidecar packaging, web deployment portability, document lifecycle note)
+**Revision:** 12 (rev 8: canonicality principles, entity invariants, Phase 1A scoping, GEDCOM fidelity tiers; rev 9: snapshot consistency, relationship direction, idempotency key, Place simplification, migration tooling, audit log diffs; rev 10: competitive advantages, citation propagation, media gallery, DNA-as-source; rev 11: embedded Axum server architecture, security model, language-agnostic agent contract, sidecar packaging, web deployment portability, document lifecycle note; rev 12: GEDCOM merge import — diff/selective import workflow, entity matching engine, staging queue integration)
 
 ---
 
@@ -45,7 +45,7 @@ These are recurring pain points from genealogy communities (Reddit, GitHub, gene
 |---|---|---|
 | **"The citation slog ruins my love for genealogy"** — entering the same source citation 6 times for a single census page | Ancestry, Gramps, RootsMagic | Events are shared objects with typed participants. One census Event, one Citation, automatic propagation to all participant assertions in one transaction (§3.1). |
 | **"My media is an unsearchable mess"** — images sorted by upload order or hash filenames, no logical grouping | RootsMagic, Ancestry, FTM | Content-addressed storage for dedup + virtual albums, custom tags, structured captions, and sort/filter by date, entity, or tag in the media gallery (§10.3). |
-| **"Sync corrupted my tree / created ghost records"** — two-way cloud sync with destructive merge behaviour | Family Tree Maker ↔ Ancestry | No two-way sync. Local-first SQLite is the single source of truth. External data enters only via the staging queue as proposals — never written directly. Corruption is structurally impossible. |
+| **"Sync corrupted my tree / created ghost records"** — two-way cloud sync with destructive merge behaviour | Family Tree Maker ↔ Ancestry | No two-way sync. Local-first SQLite is the single source of truth. External data enters only via the staging queue as proposals — never written directly. Corruption is structurally impossible. GEDCOM merge import (§7.2) lets you diff and selectively import from external files — per-assertion granularity, not destructive whole-tree merge. |
 | **"I can't model my family accurately"** — rigid husband/wife templates, no support for same-sex couples, single parents, trans ancestors, non-nuclear families | Ancestry, MyHeritage, Legacy | `Family` (grouping) and `Relationship` (pairwise, typed) are separate entities. Any two persons can have any typed relationship. `ChildLink` supports biological/adopted/foster/step/unknown. No gendered templates. |
 | **"D3 breaks when cousins marry"** — pedigree collapse crashes tree visualisations or duplicates nodes | Most D3.js-based tools, Ancestry's tree view | Cytoscape.js handles arbitrary DAG topologies natively. A person appears once in the graph regardless of how many ancestor paths converge on them. |
 | **"I'm terrified of deleting data"** — destructive merges and edits with no undo, no way to test a hypothesis without committing | Gramps, Ancestry, RootsMagic | Research sandboxes (§3.8): lightweight overlay branches for hypothesis testing. Append-only audit log enables full undo. Assertions are never deleted, only superseded. |
@@ -380,7 +380,7 @@ For tree sharing and collaboration:
     * `partial`: Only assertions with source citations are imported; unsourced assertions are discarded.
     * `untrusted`: Link is recorded for reference only; no assertions are imported.
 * **Trust propagation:** Assertions originating from a linked tree carry a `provenance` field identifying the external source. If the trust level is later downgraded, imported assertions can be bulk-reassessed.
-* **Merge support:** When two Person records are determined to be the same individual (local dedup or cross-tree match), one becomes the primary and the other is marked `Deprecated`. All references are rewritten. The audit log records the merge for reversal.
+* **Merge support:** When two Person records are determined to be the same individual (local dedup or cross-tree match), one becomes the primary and the other is marked `Deprecated`. All references are rewritten. The audit log records the merge for reversal. The entity matching engine (§7.2) provides the scoring infrastructure for both interactive merge import and automated dedup.
 * **Unmerge support:** Merges can be reversed. The audit log stores the complete pre-merge state of both entities. Unmerge restores both persons to their pre-merge state and rewrites references back. This is messy (assertions may have been added post-merge that reference both original entities) — the UI flags these for manual review after unmerge.
 
 ##### 3.1.3 DNA Data Model (Phase 4+)
@@ -1057,6 +1057,101 @@ See also the phased fidelity note in §3.1 Design Notes. The tiers are:
 2. **Tag coverage** (Phase 1B): All standard GEDCOM 5.5.1 tags are handled (not just the common subset). Corpus testing against real-world files from major vendors.
 3. **Textual fidelity** (Phase 3+): Minimise diff between input and output. Preserve ordering and formatting where feasible. "Any delta is a bug" as the aspirational bar.
 
+##### 7.2 GEDCOM Merge Import (Diff / Selective Import)
+
+Phase 1A import assumes an empty database — every record is new. Real-world usage quickly demands importing a GEDCOM file *into an existing database*: merging a cousin's export with your own tree, re-importing an updated Ancestry export, or comparing two independently researched branches of the same family.
+
+**Three import modes:**
+
+| Mode | Behaviour | Phase |
+|---|---|---|
+| `fresh` | Current behaviour — create assertions for every record. Fails if the database already contains entities (unless `--force` overrides). | 1A |
+| `diff` | Parse the GEDCOM, match entities against the existing graph, produce a read-only comparison report. No writes. | 1B |
+| `merge` | Parse, match, then submit differing/new assertions to the staging queue as proposals for human review. | 1B (deterministic matching), 3+ (agent-assisted matching) |
+
+**Entity matching engine:**
+
+The matcher is a standalone module in `crates/gedcom` (or a shared `crates/matching` crate) reused by the dedup agent (§5) and the merge import pipeline. It produces candidate matches with confidence scores:
+
+```
+GedcomPerson(incoming) × Person(existing) → Vec<CandidateMatch { existing_id, score, evidence }>
+```
+
+Matching signals, combined via weighted scoring:
+
+| Signal | Weight | Notes |
+|---|---|---|
+| Name similarity | High | Exact match, phonetic (Soundex/Double Metaphone), known alternates (William ↔ Wm), surname-origin-aware (patronymic *ap* prefixes) |
+| Birth date overlap | High | Fuzzy tolerance via `DateValue` — "about 1850" overlaps 1848–1852 |
+| Death date overlap | Medium | Same fuzzy logic |
+| Birth/death place | Medium | Hierarchical place matching — "Llanpumsaint, Carmarthenshire" matches "Llanpumsaint" with higher confidence than "Carmarthenshire" alone. Geographic specificity weighting per §4.6. |
+| Family structure | Medium | Shared parent/child/spouse names strengthen a match. Two persons with the same name + same father's name + same birth year are almost certainly the same person. |
+| Gender | Low (filter) | Mismatch eliminates candidate unless gender is unknown on either side |
+| External IDs | Definitive | Matching `_UID`, REFN, or other external identifiers → automatic match |
+
+**Score thresholds (configurable):**
+* `>= 0.95` — **Auto-match.** High confidence. Shown as matched in the report, linked automatically in merge mode (user can still override).
+* `0.70 – 0.94` — **Candidate match.** Requires human confirmation. Presented with a side-by-side comparison.
+* `< 0.70` — **No match.** Treated as a new entity.
+
+**Diff report structure:**
+
+The diff report groups results into four categories:
+
+1. **Matched — identical.** Incoming entity matched an existing entity, and all assertions are equivalent. No action needed. Count only.
+2. **Matched — differences found.** Incoming entity matched, but some assertions differ (new facts, conflicting values, additional sources). Listed per-assertion with a side-by-side comparison: `existing value | incoming value | conflict type (new/changed/additional_source)`.
+3. **Incoming only.** Entity exists in the GEDCOM but has no match in the database. New person/family/event/source.
+4. **Existing only.** Entity exists in the database but has no match in the GEDCOM. Informational — the merge import never deletes existing data.
+
+**Merge mode workflow:**
+
+1. **Parse.** GEDCOM → intermediate representation (same as fresh import).
+2. **Match.** Run the matching engine. Auto-matches are linked. Candidate matches are flagged for review.
+3. **Human review (candidate matches).** For each candidate, the user chooses: *match* (link entities), *not a match* (treat incoming as new), or *skip* (exclude from this import entirely).
+4. **Diff.** For all matched pairs, compute per-assertion diffs.
+5. **Select.** The user reviews diffs and selects what to import. Granularity options:
+   * **Per-assertion** (default): Cherry-pick individual facts. "Accept incoming birth date, keep existing death date, take the new census event."
+   * **Per-entity**: Accept or reject all incoming assertions for a matched entity.
+   * **Bulk**: "Import all new entities", "Import all new assertions for matched entities", "Import nothing — report only."
+6. **Submit.** Selected assertions enter the staging queue as proposals with `proposed_by: import:<job_id>`. Each proposal carries a reference to the GEDCOM source (file path + line number) as provenance.
+7. **Review.** Normal staging queue review workflow (approve/reject per proposal or bulk). This is the same flow used for agent proposals — no new UI needed beyond the import-specific match/diff views.
+
+**Conflict handling:**
+
+When an incoming assertion conflicts with an existing `Confirmed` assertion for the same entity and field:
+
+* The incoming value enters the staging queue as a `Proposed` assertion — it does not overwrite.
+* The diff report highlights the conflict with both values.
+* If the user approves the incoming assertion, it becomes a second `Confirmed` assertion (competing assertions coexist per §3.2). The user can then mark one as `preferred`.
+* If the incoming assertion carries a source citation not present on the existing assertion, it can be added as additional evidence for the existing assertion rather than creating a competing one. The UI offers this as an explicit choice: "Add as new assertion" vs "Add source to existing assertion."
+
+**CLI:**
+
+```
+rustygene import <file.ged>                          # fresh import (Phase 1A, existing behaviour)
+rustygene import <file.ged> --mode diff              # diff report only, no writes
+rustygene import <file.ged> --mode diff --format json # machine-readable diff report
+rustygene import <file.ged> --mode merge             # interactive merge import
+rustygene import <file.ged> --mode merge --auto-accept-threshold 0.95  # override auto-match threshold
+rustygene import <file.ged> --mode merge --bulk-new  # auto-queue all unmatched entities (skip per-entity review)
+```
+
+**API:**
+
+| Resource | Methods | Notes |
+|---|---|---|
+| `/api/v1/import` | `POST` | `?mode=fresh|diff|merge`. Default: `fresh` if database empty, `diff` if non-empty. Returns job ID. |
+| `/api/v1/import/{job_id}` | `GET` | Job status, progress, and diff report (when complete). |
+| `/api/v1/import/{job_id}/matches` | `GET` | List candidate matches for human review. |
+| `/api/v1/import/{job_id}/matches/{match_id}` | `PUT` | Confirm or reject a candidate match. Body: `{decision: "match"|"not_match"|"skip"}` |
+| `/api/v1/import/{job_id}/diffs` | `GET` | Per-assertion diffs for all matched entities. Filterable by entity, conflict type. |
+| `/api/v1/import/{job_id}/submit` | `POST` | Submit selected assertions to staging queue. Body: `{selections: [...], bulk_strategy: "all_new"|"all_diffs"|"selected"}` |
+
+**Phase notes:**
+* **Phase 1B:** Deterministic matching engine (name + date + place + family structure). CLI `diff` and `merge` modes. Report output. Staging queue submission (internal, no API). This is the workhorse — covers 80% of real-world merge scenarios.
+* **Phase 3:** REST API endpoints above. Desktop UI: import wizard with side-by-side entity comparison, per-assertion checkboxes, bulk actions. Integration with staging queue review dashboard.
+* **Phase 4–5:** Agent-assisted matching. The dedup agent (§5, Phase 5) can be invoked to score ambiguous candidate matches using LLM reasoning over the full evidence context. The matching engine calls out to the agent for candidates in the 0.50–0.70 range that deterministic scoring cannot resolve.
+
 ---
 
 #### 8. Document Processing & Image Recognition
@@ -1204,7 +1299,9 @@ Three interface layers, all backed by the same Rust core and REST API:
 The primary interface for Phase 1 development and power users. Built with `clap`.
 
 ```
-rustygene import <file.ged>           # GEDCOM import
+rustygene import <file.ged>           # GEDCOM import (fresh or auto-detect)
+rustygene import <file.ged> --mode diff   # diff report against existing data
+rustygene import <file.ged> --mode merge  # interactive selective merge (§7.2)
 rustygene export --format gedcom      # GEDCOM export
 rustygene export --format json        # JSON export
 rustygene query persons --name "Smith" --birth-range 1850..1870
@@ -1693,7 +1790,7 @@ The spec describes a platform. Building it all in one wave is a delivery risk. T
 | Phase | Scope | Explicitly deferred to later phase |
 |---|---|---|
 | **1A** | Rust core domain model (all entity types, assertion wrapper), SQLite storage (schema, CRUD, audit log), GEDCOM 5.5.1 import (semantic fidelity — see §7.1), GEDCOM 5.5.1 export (best-effort, not perfect round-trip yet), CLI (`import`, `export`, `query`, `show`, `search`), JSON export, core validation rules, research log (CLI) | Sandboxes (data model columns OK, no UI/logic), connectors, agents, REST API, event bus, TUI, desktop app, DNA, Gramps XML import |
-| **1B** | GEDCOM round-trip hardening (corpus testing, tag coverage), Gramps XML import, FTS5 search with phonetic/fuzzy matching, generated columns for hot query fields, sandbox assertion overlay logic (no UI), staging queue (internal, no API) | Sandbox UI, REST API, agents, connectors, desktop app |
+| **1B** | GEDCOM round-trip hardening (corpus testing, tag coverage), Gramps XML import, GEDCOM merge import — deterministic matching engine + CLI `diff`/`merge` modes (§7.2), FTS5 search with phonetic/fuzzy matching, generated columns for hot query fields, sandbox assertion overlay logic (no UI), staging queue (internal, no API) | Sandbox UI, REST API, agents, connectors, desktop app |
 | **2** | Tauri desktop app (Svelte 5 + Cytoscape.js + D3.js), person/family/event CRUD, pedigree + fan chart + graph views, document attachment + viewer, full-text search UI, backup/restore, source-driven form entry, session restore | Sandbox UI, REST API, agents, connectors |
 | **3** | Research sandbox UI (create/switch/compare/promote/discard), Axum REST API + OpenAPI spec, event bus (internal channels + SSE/polling), staging queue + review dashboard, agent registry, sandbox comparison + validator scoring, negative evidence prompt | Connectors, agents |
 | **4** | FamilySearch connector, Discovery API connector, document processor (vision/OCR), validator agent, naming convention inferrer agent | Server edition, DNA integration |
