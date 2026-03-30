@@ -1530,33 +1530,229 @@ impl Storage for SqliteBackend {
     }
 
     async fn upsert_relationship_edge(&self, _edge: &RelationshipEdge) -> Result<(), StorageError> {
-        Err(StorageError {
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let edge = if _edge.directed {
+            _edge.clone()
+        } else if _edge.from_entity <= _edge.to_entity {
+            _edge.clone()
+        } else {
+            RelationshipEdge {
+                from_entity: _edge.to_entity,
+                to_entity: _edge.from_entity,
+                rel_type: _edge.rel_type.clone(),
+                directed: false,
+                assertion_id: _edge.assertion_id,
+            }
+        };
+
+        let edge_id = format!(
+            "{}:{}:{}:{}",
+            edge.from_entity,
+            edge.to_entity,
+            edge.rel_type,
+            if edge.directed { 1 } else { 0 }
+        );
+
+        conn.execute(
+            "INSERT INTO relationships (
+                id, from_entity, from_type, to_entity, to_type, rel_type, assertion_id, directed
+             ) VALUES (?, ?, 'person', ?, 'person', ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                assertion_id = excluded.assertion_id,
+                rel_type = excluded.rel_type,
+                directed = excluded.directed",
+            rusqlite::params![
+                edge_id,
+                edge.from_entity.to_string(),
+                edge.to_entity.to_string(),
+                &edge.rel_type,
+                edge.assertion_id.map(|v| v.to_string()),
+                if edge.directed { 1 } else { 0 },
+            ],
+        )
+        .map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
-            message: "Not implemented".to_string(),
-        })
+            message: format!("Relationship upsert failed: {}", e),
+        })?;
+
+        Ok(())
     }
 
     async fn list_relationship_edges_for_entity(
         &self,
-        _entity_id: EntityId,
+        entity_id: EntityId,
     ) -> Result<Vec<RelationshipEdge>, StorageError> {
-        Ok(Vec::new())
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT from_entity, to_entity, rel_type, directed, assertion_id
+                 FROM relationships
+                 WHERE from_entity = ? OR to_entity = ?",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Relationship list prepare failed: {}", e),
+            })?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![entity_id.to_string(), entity_id.to_string()],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Relationship list query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Relationship list row collection failed: {}", e),
+            })?;
+
+        rows.into_iter()
+            .map(|(from, to, rel_type, directed, assertion_id)| {
+                Ok(RelationshipEdge {
+                    from_entity: Self::parse_entity_id_str(&from)?,
+                    to_entity: Self::parse_entity_id_str(&to)?,
+                    rel_type,
+                    directed: directed != 0,
+                    assertion_id: assertion_id
+                        .as_deref()
+                        .map(Self::parse_entity_id_str)
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
     }
 
     async fn ancestors(
         &self,
-        _person_id: EntityId,
-        _max_depth: u32,
+        person_id: EntityId,
+        max_depth: u32,
     ) -> Result<Vec<EntityId>, StorageError> {
-        Ok(Vec::new())
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let mut stmt = conn
+            .prepare(
+                "WITH RECURSIVE anc(id, depth) AS (
+                    SELECT from_entity, 1
+                    FROM relationships
+                    WHERE directed = 1 AND rel_type = 'parent_of' AND to_entity = ?
+                    UNION ALL
+                    SELECT r.from_entity, anc.depth + 1
+                    FROM relationships r
+                    JOIN anc ON r.to_entity = anc.id
+                    WHERE r.directed = 1
+                      AND r.rel_type = 'parent_of'
+                      AND anc.depth < ?
+                )
+                SELECT DISTINCT id FROM anc",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Ancestors prepare failed: {}", e),
+            })?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![person_id.to_string(), i64::from(max_depth)],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Ancestors query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Ancestors row collection failed: {}", e),
+            })?;
+
+        rows.into_iter()
+            .map(|id| Self::parse_entity_id_str(&id))
+            .collect::<Result<Vec<_>, _>>()
     }
 
     async fn descendants(
         &self,
-        _person_id: EntityId,
-        _max_depth: u32,
+        person_id: EntityId,
+        max_depth: u32,
     ) -> Result<Vec<EntityId>, StorageError> {
-        Ok(Vec::new())
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+
+        let mut stmt = conn
+            .prepare(
+                "WITH RECURSIVE des(id, depth) AS (
+                    SELECT to_entity, 1
+                    FROM relationships
+                    WHERE directed = 1 AND rel_type = 'parent_of' AND from_entity = ?
+                    UNION ALL
+                    SELECT r.to_entity, des.depth + 1
+                    FROM relationships r
+                    JOIN des ON r.from_entity = des.id
+                    WHERE r.directed = 1
+                      AND r.rel_type = 'parent_of'
+                      AND des.depth < ?
+                )
+                SELECT DISTINCT id FROM des",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Descendants prepare failed: {}", e),
+            })?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![person_id.to_string(), i64::from(max_depth)],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Descendants query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Descendants row collection failed: {}", e),
+            })?;
+
+        rows.into_iter()
+            .map(|id| Self::parse_entity_id_str(&id))
+            .collect::<Result<Vec<_>, _>>()
     }
 }
 
@@ -2064,5 +2260,81 @@ mod tests {
             .expect("list by date range");
         assert_eq!(by_date.len(), 1);
         assert_eq!(by_date[0].id, newer.id);
+    }
+
+    #[tokio::test]
+    async fn relationship_upsert_and_list_supports_undirected_normalization() {
+        let backend = create_test_backend();
+        let a = EntityId::new();
+        let b = EntityId::new();
+
+        let edge = RelationshipEdge {
+            from_entity: b,
+            to_entity: a,
+            rel_type: "partner_in".to_string(),
+            directed: false,
+            assertion_id: None,
+        };
+
+        backend
+            .upsert_relationship_edge(&edge)
+            .await
+            .expect("upsert undirected edge");
+
+        let a_edges = backend
+            .list_relationship_edges_for_entity(a)
+            .await
+            .expect("list edges for a");
+        let b_edges = backend
+            .list_relationship_edges_for_entity(b)
+            .await
+            .expect("list edges for b");
+
+        assert_eq!(a_edges.len(), 1);
+        assert_eq!(b_edges.len(), 1);
+        assert!(!a_edges[0].directed);
+        assert_eq!(a_edges[0].rel_type, "partner_in");
+    }
+
+    #[tokio::test]
+    async fn relationship_ancestors_and_descendants_follow_parent_of_edges() {
+        let backend = create_test_backend();
+
+        let grandparent = EntityId::new();
+        let parent = EntityId::new();
+        let child = EntityId::new();
+
+        backend
+            .upsert_relationship_edge(&RelationshipEdge {
+                from_entity: grandparent,
+                to_entity: parent,
+                rel_type: "parent_of".to_string(),
+                directed: true,
+                assertion_id: None,
+            })
+            .await
+            .expect("upsert grandparent->parent");
+
+        backend
+            .upsert_relationship_edge(&RelationshipEdge {
+                from_entity: parent,
+                to_entity: child,
+                rel_type: "parent_of".to_string(),
+                directed: true,
+                assertion_id: None,
+            })
+            .await
+            .expect("upsert parent->child");
+
+        let ancestors = backend.ancestors(child, 4).await.expect("ancestors");
+        assert!(ancestors.contains(&parent));
+        assert!(ancestors.contains(&grandparent));
+
+        let descendants = backend
+            .descendants(grandparent, 4)
+            .await
+            .expect("descendants");
+        assert!(descendants.contains(&parent));
+        assert!(descendants.contains(&child));
     }
 }
