@@ -232,7 +232,11 @@ pub fn map_source_chain(nodes: &[GedcomNode]) -> SourceChainMapping {
     let mut sources = Vec::new();
     let mut source_xref_to_id: HashMap<String, EntityId> = HashMap::new();
 
-    for node in nodes.iter().filter(|n| n.tag == "SOUR") {
+    // Only process SOUR nodes that are root-level records (have xref), not metadata in HEAD
+    for node in nodes
+        .iter()
+        .filter(|n| n.tag == "SOUR" && n.xref.is_some())
+    {
         let source = map_source_node(node, &repo_xref_to_id);
         if let Some(xref) = &node.xref {
             source_xref_to_id.insert(xref.clone(), source.id);
@@ -244,7 +248,11 @@ pub fn map_source_chain(nodes: &[GedcomNode]) -> SourceChainMapping {
     let mut entity_citation_refs = Vec::new();
     let mut node_citation_refs = Vec::new();
 
-    for owner in nodes {
+    // Skip HEAD and TRLR nodes when collecting citations
+    for owner in nodes
+        .iter()
+        .filter(|n| n.tag != "HEAD" && n.tag != "TRLR")
+    {
         collect_citations_from_owner(
             owner,
             owner,
@@ -3730,5 +3738,232 @@ mod tests {
         };
 
         assert!(person_to_indi_node_with_policy(&person, "@I1@", ExportPrivacyPolicy::RedactLiving).is_none());
+    }
+
+    #[test]
+    fn gedcom_round_trip_simpsons_preserves_assertion_graph() {
+        let input = include_str!("../../../testdata/gedcom/simpsons.ged");
+
+        // Create first database and import original GEDCOM
+        let mut conn1 = Connection::open_in_memory().expect("open in-memory db 1");
+        let _report1 = import_gedcom_to_sqlite(&mut conn1, "job-round-trip-1", input)
+            .expect("import round trip 1");
+
+        // Debug: query source data
+        let mut stmt = conn1.prepare("SELECT data FROM sources ORDER BY rowid") .expect("prepare sources");
+        let sources_data: Vec<String> = stmt.query_map([], |row| row.get(0))
+            .expect("query sources")
+            .collect::<Result<Vec<String>, _>>()
+            .unwrap_or_default();
+        
+        eprintln!("\n=== FIRST IMPORT SOURCES ===");
+        for (idx, json_str) in sources_data.iter().enumerate() {
+            eprintln!("Source {}: {}", idx, json_str);
+        }
+
+        // Debug: query entity counts by table
+        eprintln!("\n=== FIRST IMPORT ===");
+        let entity_counts_1 = query_entity_counts(&conn1).expect("query entity counts 1");
+        for (table, count) in &entity_counts_1 {
+            eprintln!("{}: {}", table, count);
+        }
+
+        // Query assertion counts from first database
+        let assertion_count_1: i64 = conn1
+            .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
+            .expect("count assertions 1");
+
+        eprintln!("Total assertions: {}", assertion_count_1);
+        let field_dist_1 = query_assertion_field_distribution(&conn1).expect("query field dist 1");
+        for (field, count) in &field_dist_1 {
+            eprintln!("  {}: {}", field, count);
+        }
+
+        // Export entities from first database
+        let entity_nodes = export_entities_from_connection(&conn1).expect("export entities");
+        eprintln!("Exported {} entity nodes", entity_nodes.len());
+        let exported_gedcom = render_gedcom_file(&entity_nodes);
+        eprintln!("Exported GEDCOM length: {} bytes", exported_gedcom.len());
+
+        // Create second database and re-import exported GEDCOM
+        let mut conn2 = Connection::open_in_memory().expect("open in-memory db 2");
+        let _report2 = import_gedcom_to_sqlite(&mut conn2, "job-round-trip-2", &exported_gedcom)
+            .expect("import round trip 2");
+
+        // Debug: query source data after re-import
+        let mut stmt = conn2.prepare("SELECT data FROM sources ORDER BY rowid").expect("prepare sources");
+        let sources_data2: Vec<String> = stmt.query_map([], |row| row.get(0))
+            .expect("query sources")
+            .collect::<Result<Vec<String>, _>>()
+            .unwrap_or_default();
+        
+        eprintln!("\n=== SECOND IMPORT SOURCES ===");
+        for (idx, json_str) in sources_data2.iter().enumerate() {
+            eprintln!("Source {}: {}", idx, json_str);
+        }
+
+        // Debug: query entities by table
+        eprintln!("\n=== SECOND IMPORT ===");
+        let entity_counts_2 = query_entity_counts(&conn2).expect("query entity counts 2");
+        for (table, count) in &entity_counts_2 {
+            eprintln!("{}: {}", table, count);
+        }
+
+        // Query assertion counts from second database
+        let assertion_count_2: i64 = conn2
+            .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
+            .expect("count assertions 2");
+
+        eprintln!("Total assertions: {}", assertion_count_2);
+        let field_dist_2 = query_assertion_field_distribution(&conn2).expect("query field dist 2");
+        for (field, count) in &field_dist_2 {
+            eprintln!("  {}: {}", field, count);
+        }
+
+        // Verify entity counts match
+        assert_eq!(
+            entity_counts_1, entity_counts_2,
+            "Entity counts mismatch after round-trip"
+        );
+
+        // Verify assertion counts match
+        assert_eq!(
+            assertion_count_1, assertion_count_2,
+            "Assertion count mismatch after round-trip: {} vs {}",
+            assertion_count_1, assertion_count_2
+        );
+    }
+
+    // TODO: Add Kennedy and torture551 round-trip tests once DateValue serialization
+    // and UTF-8 encoding issues are resolved in the import pipeline
+
+    // Helper function: query entity counts by table
+    fn query_entity_counts(conn: &Connection) -> Result<std::collections::BTreeMap<String, i64>, rusqlite::Error> {
+        let tables = vec!["persons", "families", "events", "places", "sources", "citations", "repositories", "media", "notes", "lds_ordinances"];
+        let mut result = std::collections::BTreeMap::new();
+        for table in tables {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {} LIMIT 1", table), [], |row| row.get(0))
+                .unwrap_or(0);
+            if count > 0 {
+                result.insert(table.to_string(), count);
+            }
+        }
+        Ok(result)
+    }
+
+    // Helper function: export all entities from a connection
+    fn export_entities_from_connection(conn: &Connection) -> Result<Vec<GedcomNode>, Box<dyn std::error::Error>> {
+        let mut nodes = Vec::new();
+        let mut x_counter = 1usize;
+
+        // Export persons
+        let mut stmt = conn.prepare("SELECT data FROM persons ORDER BY rowid") ?;
+        let persons = stmt.query_map([], |row| {
+            let json_str: String = row.get(0) ?;
+            Ok(serde_json::from_str::<Person>(&json_str))
+        }) ?;
+
+        for person_result in persons {
+            let person: Person = person_result ??;
+            let xref = format!("@I{}@", x_counter);
+            x_counter += 1;
+            let node = person_to_indi_node_with_policy(&person, &xref, ExportPrivacyPolicy::None)
+                .unwrap_or_else(|| person_to_indi_node(&person, &xref));
+            nodes.push(node);
+        }
+
+        // Export families - query all families table, then filter by entity type
+        let mut stmt = conn.prepare("SELECT data FROM families ORDER BY rowid") ?;
+        let families_data = stmt.query_map([], |row| {
+            let json_str: String = row.get(0) ?;
+            Ok(json_str)
+        }) ?;
+
+        let mut family_count = 0;
+        let mut relationship_count = 0;
+
+        for family_json_result in families_data {
+            let json_str = family_json_result ?;
+            if let Ok(family) = serde_json::from_str::<Family>(&json_str) {
+                family_count += 1;
+                let xref = format!("@F{}@", x_counter);
+                x_counter += 1;
+                nodes.push(family_to_fam_node(&family, &xref));
+            } else if let Ok(_relationship) = serde_json::from_str::<Relationship>(&json_str) {
+                relationship_count += 1;
+                // Relationships are not exported as separate GEDCOM records
+                // They're only referenced through the Family's couple_relationship field
+            }
+        }
+
+        // Re-export family count for debugging
+        if family_count > 0 || relationship_count > 0 {
+            eprintln!(
+                "Exported {} families and skipped {} relationships",
+                family_count, relationship_count
+            );
+        }
+
+        // Export sources
+        let mut stmt = conn.prepare("SELECT data FROM sources ORDER BY rowid") ?;
+        let sources = stmt.query_map([], |row| {
+            let json_str: String = row.get(0) ?;
+            Ok(serde_json::from_str::<Source>(&json_str))
+        }) ?;
+
+        for source_result in sources {
+            let source: Source = source_result ??;
+            let xref = format!("@S{}@", x_counter);
+            x_counter += 1;
+            nodes.push(source_to_sour_node(&source, &xref));
+        }
+
+        // Export repositories
+        let mut stmt = conn.prepare("SELECT data FROM repositories ORDER BY rowid") ?;
+        let repositories = stmt.query_map([], |row| {
+            let json_str: String = row.get(0) ?;
+            Ok(serde_json::from_str::<Repository>(&json_str))
+        }) ?;
+
+        for repo_result in repositories {
+            let repository: Repository = repo_result ??;
+            let xref = format!("@R{}@", x_counter);
+            x_counter += 1;
+            nodes.push(repository_to_repo_node(&repository, &xref));
+        }
+
+        // Export notes
+        let mut stmt = conn.prepare("SELECT data FROM notes ORDER BY rowid") ?;
+        let notes = stmt.query_map([], |row| {
+            let json_str: String = row.get(0) ?;
+            Ok(serde_json::from_str::<Note>(&json_str))
+        }) ?;
+
+        for note_result in notes {
+            let note: Note = note_result ??;
+            let xref = format!("@N{}@", x_counter);
+            x_counter += 1;
+            nodes.push(note_to_note_node(&note, &xref));
+        }
+
+        Ok(nodes)
+    }
+
+    // Helper function: get assertion field distribution
+    fn query_assertion_field_distribution(conn: &Connection) -> Result<std::collections::BTreeMap<String, i64>, rusqlite::Error> {
+        let mut stmt = conn.prepare("SELECT field, COUNT(*) as count FROM assertions GROUP BY field ORDER BY field") ?;
+        let field_counts = stmt.query_map([], |row| {
+            let field: String = row.get(0) ?;
+            let count: i64 = row.get(1) ?;
+            Ok((field, count))
+        }) ?;
+
+        let mut result = std::collections::BTreeMap::new();
+        for row_result in field_counts {
+            let (field, count) = row_result ?;
+            result.insert(field, count);
+        }
+        Ok(result)
     }
 }
