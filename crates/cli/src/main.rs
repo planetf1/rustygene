@@ -371,11 +371,7 @@ fn run_import_command(
     }
 }
 
-fn preserved_or_generated_xref(
-    original_xref: Option<&str>,
-    prefix: char,
-    index: usize,
-) -> String {
+fn preserved_or_generated_xref(original_xref: Option<&str>, prefix: char, index: usize) -> String {
     original_xref
         .map(std::borrow::ToOwned::to_owned)
         .unwrap_or_else(|| format!("@{}{}@", prefix, index + 1))
@@ -1376,10 +1372,7 @@ mod tests {
 
     #[test]
     fn preserved_or_generated_xref_prefers_original_id() {
-        assert_eq!(
-            preserved_or_generated_xref(Some("@I23@"), 'I', 0),
-            "@I23@"
-        );
+        assert_eq!(preserved_or_generated_xref(Some("@I23@"), 'I', 0), "@I23@");
     }
 
     #[test]

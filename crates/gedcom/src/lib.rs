@@ -3891,7 +3891,9 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM families", [], |row| row.get(0))
             .expect("count families");
         let relationship_count: i64 = connection
-            .query_row("SELECT COUNT(*) FROM family_relationships", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM family_relationships", [], |row| {
+                row.get(0)
+            })
             .expect("count relationships");
         let event_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))

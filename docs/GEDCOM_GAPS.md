@@ -177,27 +177,41 @@ The following issues were discovered and fixed during Phase 8.2:
 The following items are required by `INITIAL_SPEC.md` Steps 4.3, 5.1, and 5.5
 and must be completed before Phase 1A can be closed. Each has a tracking bead.
 
-1. **Person event import** (bead `rustygene-46m`): Parse BIRT, DEAT, BURI, CHR,
-   etc. from INDI records into Event entities. Currently silently dropped by
-   `map_indi_node_to_person`.
-2. **Event export** (bead `rustygene-ed8`): Pass loaded events to
-   `person_to_indi_node_with_policy` and `family_to_fam_node`; emit BIRT,
-   DEAT, MARR, etc. as proper GEDCOM subrecords with date and place sub-nodes.
-3. **Citation round-trip** (bead `rustygene-h88`): Resolve `SOUR` references
-   within event subrecords to Citation entities.
-4. **Gate test fidelity** (bead `rustygene-yvk`): Update e2e_gate_test.rs to
-   compare full assertion graphs, not just name counts.
+1. **Replace forbidden `_ => {}` catch-all patterns** (bead `rustygene-skt`, P0):
+   4 locations in `crates/gedcom/src/lib.rs` silently drop standard GEDCOM tags.
+   Must be replaced with explicit handling, deferred-tag counters, or unknown-tag
+   counters.
+2. **Citation round-trip** (bead `rustygene-dy8`, P1): Resolve `SOUR` references
+   within event subrecords to Citation entities. kennedy.ged imports 0 citations
+   despite having `SOUR` references.
+3. **Map PLAC tags to Place entities** (bead `rustygene-um3`, P1): Place strings
+   are stored inline on events but not mapped to `Place` domain entities.
+4. **Gate test fidelity** (bead `rustygene-dri`, P0, blocked by skt + dy8):
+   Update e2e_gate_test.rs to compare full assertion graphs per-entity-type and
+   per-field, not just given names or total counts.
+
+## Resolved Phase 1A Work Items
+
+Previously tracked as gaps, now implemented:
+
+| Item | Old Bead | Resolution |
+|---|---|---|
+| Person event import (BIRT, DEAT, etc.) | `rustygene-46m` | Events parsed from INDI records into Event entities |
+| Event export (person + family) | `rustygene-ed8` | `person_to_indi_node_with_policy` and `family_to_fam_node` now accept and emit event subrecords |
 
 ## Phase 2+ Work Items
 
 The following improvements are deferred to a later phase:
 
-1. **NOTE/REPO/OBJE entity handling** (bead `rustygene-ht5`): Model as
-   first-class entity types.
+1. **NOTE/REPO/OBJE entity handling**: Model as first-class entity types.
 2. **ASSO record import**: Store witness/association links.
-3. **xref alias table** (bead `rustygene-0zz`): Optionally preserve original
-   xref IDs across import/export.
-4. **Name type import/export**: Parse `2 TYPE` annotation into `NameType` field
+3. **xref alias table**: Optionally preserve original xref IDs across
+   import/export.
+4. **Name type import/export**: Parse `2 TYPE` annotation into `NameType` field.
+5. **Storage integration tests** (bead `rustygene-41z`): Cover Place, Note,
+   Media, and LDS entity CRUD paths.
+6. **CLI show/query expansion** (bead `rustygene-c7h`): Add commands for
+   Source, Citation, Repository, Note, and Media entities.
    (currently hardcoded to `Birth`); emit on export for non-birth names.
 5. **HEAD block completeness** (bead `rustygene-8mg`): Emit DATE, SUBM,
    GEDC.FORM, LANG on export.

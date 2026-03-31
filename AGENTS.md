@@ -54,6 +54,47 @@ Dependencies flow strictly **downward**. Circular dependencies are an architectu
 - **Never defer spec-mandated Phase 1A work**: If `INITIAL_SPEC.md` places a capability in Phase 1A, implement it in Phase 1A. `GEDCOM_GAPS.md` documents *edge-case limitations*, not skipped core requirements.
 - **Assertion graph comparison must compare field distributions**: Matching total counts is insufficient. Compare per-entity-type, per-field breakdowns (e.g., "Person: N name, N gender, N event_participation assertions").
 
+### Anti-Cheating Verification Rules
+
+These rules exist because previous sessions closed beads with work incomplete. AI agents MUST follow these rigorously.
+
+- **Verify with tooling, not trust**: Before closing a bead, run the verification commands listed in the bead's acceptance criteria. Do not self-certify — prove it.
+- **grep-level anti-cheat checks**: Bead acceptance criteria may include grep/SQL commands that must return specific results (e.g., `grep -rn '_ => {}' crates/gedcom/src/lib.rs` must return 0 matches). Run these. If they fail, the bead is not done.
+- **No partial closes**: If a bead has 5 acceptance criteria and you completed 3, the bead is NOT closable. Open a new bead for the remaining 2 items and mark it as blocking the original, then close neither until all are done.
+- **No acceptance criteria weakening**: If you cannot meet a bead's acceptance criteria, you MUST NOT edit the criteria to match your implementation. Instead: (1) leave the bead open, (2) open a new bead describing the blocker, (3) add a dependency so the original bead is blocked by the new one.
+- **Count-only comparisons are insufficient**: Tests that compare only entity counts or assertion totals are not acceptance-quality. Per-entity-type, per-field distribution comparisons are required for semantic fidelity tests.
+- **Export must emit what import extracts**: If the importer extracts field X for entity type Y, the exporter for Y MUST emit field X. Asymmetric signatures where the exporter cannot accept data the importer produces are structural bugs. Do not close an import bead if the corresponding export is broken.
+
+### Splitting Beads Into Smaller Pieces
+
+Large beads SHOULD be split into smaller, independently deliverable pieces. This is encouraged — not a sign of failure. Smaller beads are easier to verify, harder to cheat, and produce cleaner commits.
+
+**When to split:**
+- A bead touches more than 2 crates or more than ~300 lines of new code.
+- A bead has acceptance criteria spanning multiple independent concerns (e.g., "fix import AND export AND gate test").
+- You realise mid-implementation that the bead has a prerequisite you didn't anticipate.
+
+**How to split:**
+1. Create the sub-beads with `bd create`. Each must have its own clear acceptance criteria.
+2. Add dependencies: `bd dep add <parent> <child>` if the parent can't close until the child is done.
+3. If the sub-beads are truly independent (no ordering constraint), skip the dependency — just close each when done.
+4. The original bead can become a "tracker" — close it only when all sub-beads are closed.
+
+**Rules:**
+- Every sub-bead must be independently testable and closable — no "part 1 of 3 that only works when all 3 are merged."
+- Sub-beads inherit the parent's priority unless there's a reason to differ.
+- Splitting does NOT mean deferring. All sub-beads for Phase 1A work must remain Phase 1A priority.
+
+### Follow-Up Bead Policy
+
+When a bead cannot be fully completed in the current session:
+
+1. **Open a follow-up bead** immediately with `bd create`. Describe exactly what remains and why it was blocked.
+2. **Add a dependency**: `bd dep add <original> <follow-up>` so the original bead stays blocked.
+3. **Do NOT close the original bead** until all follow-ups are resolved.
+4. **Time-box deferrals**: Follow-up beads for Phase 1A work MUST have priority ≤ P2. Phase 1A gaps cannot be deferred to "Phase 2+" indefinitely — they accumulate and block the gate test. If a follow-up has been open for more than 2 sessions without progress, escalate its priority.
+5. **Document in GEDCOM_GAPS.md**: Every open follow-up that affects GEDCOM fidelity must have a matching entry in `docs/GEDCOM_GAPS.md` with the bead ID.
+
 ---
 
 ## Development Process Rules
