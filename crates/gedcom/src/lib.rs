@@ -3762,6 +3762,63 @@ mod tests {
     }
 
     #[test]
+    fn generate_import_assertions_links_citations_to_person_level_events() {
+        // Test that SOUR tags nested within INDI event nodes (BIRT, DEAT, etc.)
+        // are properly collected and linked to event assertions.
+        let input = "0 @S1@ SOUR\n1 TITL Birth Record\n0 @I1@ INDI\n1 NAME John /Doe/\n1 BIRT\n2 DATE 12 JUN 1920\n2 SOUR @S1@\n3 PAGE 42\n";
+
+        let lines = tokenize_gedcom(input).expect("tokenize should succeed");
+        let roots = build_gedcom_tree(&lines).expect("tree build should succeed");
+        let persons = map_indi_nodes_to_persons(&roots);
+        let person_events = map_indi_nodes_to_events(&roots);
+        let source_mapping = map_source_chain(&roots);
+        let family_mapping = map_family_nodes(&roots);
+        let media_note_lds_mapping = map_media_note_lds(&roots);
+
+        let assertions = generate_import_assertions(
+            "job-43",
+            &persons,
+            &family_mapping,
+            &source_mapping,
+            &media_note_lds_mapping,
+            &person_events,
+        )
+        .expect("generate assertions");
+
+        // Find the BIRT event
+        let birth_event = person_events
+            .iter()
+            .find(|event| event.event_type == EventType::Birth)
+            .expect("birth event should exist");
+
+        // Find event_type assertion for the birth event
+        let event_assertion = assertions
+            .iter()
+            .find(|record| {
+                record.entity_type == EntityType::Event
+                    && record.entity_id == birth_event.id
+                    && record.field == "event_type"
+            })
+            .expect("birth event_type assertion should exist");
+
+        // Verify the assertion has the citation attached
+        assert_eq!(
+            event_assertion.assertion.source_citations.len(),
+            1,
+            "birth event should have exactly 1 citation"
+        );
+
+        // Verify the citation page number was captured
+        let citation_ref = &event_assertion.assertion.source_citations[0];
+        let citation = source_mapping
+            .citations
+            .iter()
+            .find(|c| c.id == citation_ref.citation_id)
+            .expect("citation should exist");
+        assert_eq!(citation.page.as_deref(), Some("42"));
+    }
+
+    #[test]
     fn import_pipeline_persists_entities_assertions_and_report_counts() {
         let input = include_str!("../../../testdata/gedcom/simpsons.ged");
         let mut connection = Connection::open_in_memory().expect("open in-memory sqlite");
