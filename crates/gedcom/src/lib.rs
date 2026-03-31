@@ -1932,6 +1932,56 @@ pub fn generate_import_assertions(
         }
     }
 
+    // Generate assertions for media entities
+    for media in &media_note_lds_mapping.media {
+        assertions.push(build_import_assertion(
+            media.id,
+            EntityType::Media,
+            "file_path",
+            to_value(&media.file_path)?,
+            Vec::new(),
+            &proposed_by,
+        ));
+        assertions.push(build_import_assertion(
+            media.id,
+            EntityType::Media,
+            "mime_type",
+            to_value(&media.mime_type)?,
+            Vec::new(),
+            &proposed_by,
+        ));
+        if let Some(caption) = &media.caption {
+            assertions.push(build_import_assertion(
+                media.id,
+                EntityType::Media,
+                "caption",
+                to_value(caption)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+    }
+
+    // Generate assertions for note entities
+    for note in &media_note_lds_mapping.notes {
+        assertions.push(build_import_assertion(
+            note.id,
+            EntityType::Note,
+            "text",
+            to_value(&note.text)?,
+            Vec::new(),
+            &proposed_by,
+        ));
+        assertions.push(build_import_assertion(
+            note.id,
+            EntityType::Note,
+            "note_type",
+            to_value(&note.note_type)?,
+            Vec::new(),
+            &proposed_by,
+        ));
+    }
+
     Ok(assertions)
 }
 
