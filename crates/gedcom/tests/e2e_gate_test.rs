@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use rusqlite::Connection;
+use rustygene_core::event::Event;
 use rustygene_core::family::Family;
 use rustygene_core::person::Person;
 use rustygene_gedcom::{
@@ -83,6 +84,19 @@ fn load_families_from_snapshot(conn: &Connection) -> Vec<Family> {
 }
 
 /// Count total confirmed assertions in a database.
+fn load_events_from_snapshot(conn: &Connection) -> Vec<Event> {
+    let mut stmt = conn
+        .prepare("SELECT data FROM events ORDER BY created_at")
+        .expect("prepare events");
+    stmt.query_map([], |row| row.get::<_, String>(0))
+        .expect("query events")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect events")
+        .into_iter()
+        .map(|raw| serde_json::from_str::<Event>(&raw).expect("parse event json"))
+        .collect()
+}
+
 /// Count total assertions (any status) in a database.
 fn count_all_assertions(conn: &Connection) -> usize {
     conn.query_row("SELECT COUNT(*) FROM assertions", [], |row| {
@@ -185,19 +199,23 @@ async fn e2e_phase1a_gate_test() {
     // =========================================================================
     let persons_for_export = load_persons_from_snapshot(&conn1_for_reads);
     let families_for_export = load_families_from_snapshot(&conn1_for_reads);
+    let events_for_export = load_events_from_snapshot(&conn1_for_reads);
 
     let mut export_nodes = Vec::new();
     for (idx, person) in persons_for_export.iter().enumerate() {
         let xref = format!("@I{}@", idx + 1);
-        if let Some(node) =
-            person_to_indi_node_with_policy(person, &xref, ExportPrivacyPolicy::None)
-        {
+        if let Some(node) = person_to_indi_node_with_policy(
+            person,
+            &events_for_export,
+            &xref,
+            ExportPrivacyPolicy::None,
+        ) {
             export_nodes.push(node);
         }
     }
     for (idx, family) in families_for_export.iter().enumerate() {
         let xref = format!("@F{}@", idx + 1);
-        export_nodes.push(family_to_fam_node(family, &xref));
+        export_nodes.push(family_to_fam_node(family, &events_for_export, &xref));
     }
     // Also export sources (they survive round-trip via raw GEDCOM or structured fields)
     let sources_for_export: Vec<rustygene_core::evidence::Source> = {
@@ -251,6 +269,8 @@ async fn e2e_phase1a_gate_test() {
 
     let person_count2 = *report2.entities_created_by_type.get("person").unwrap_or(&0);
     let family_count2 = *report2.entities_created_by_type.get("family").unwrap_or(&0);
+    let event_count1 = *report1.entities_created_by_type.get("event").unwrap_or(&0);
+    let event_count2 = *report2.entities_created_by_type.get("event").unwrap_or(&0);
 
     // =========================================================================
     // Step 6: Compare assertion graphs after GEDCOM round-trip
@@ -266,6 +286,11 @@ async fn e2e_phase1a_gate_test() {
         family_count2, family_count1,
         "GEDCOM round-trip must preserve the same number of families \
          (original={family_count1}, reimport={family_count2})"
+    );
+    assert_eq!(
+        event_count2, event_count1,
+        "GEDCOM round-trip must preserve the same number of events \
+         (original={event_count1}, reimport={event_count2})"
     );
 
     // Assert that named persons in DB2 match DB1 by comparing sorted name sets.

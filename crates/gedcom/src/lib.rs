@@ -948,6 +948,128 @@ fn parse_u8(value: Option<&str>) -> Result<u8, ParseIntError> {
     value.unwrap_or_default().trim().parse::<u8>()
 }
 
+/// Map a GEDCOM individual event/attribute tag to an `EventType`.
+fn indi_event_tag_to_type(tag: &str) -> Option<EventType> {
+    match tag {
+        "BIRT" => Some(EventType::Birth),
+        "DEAT" => Some(EventType::Death),
+        "BURI" => Some(EventType::Burial),
+        "CHR" => Some(EventType::Custom("christening".to_string())),
+        "CREM" => Some(EventType::Custom("cremation".to_string())),
+        "ADOP" => Some(EventType::Custom("adoption".to_string())),
+        "BAPM" => Some(EventType::Baptism),
+        "BARM" => Some(EventType::Custom("bar_mitzvah".to_string())),
+        "BASM" => Some(EventType::Custom("bas_mitzvah".to_string())),
+        "BLES" => Some(EventType::Custom("blessing".to_string())),
+        "CHRA" => Some(EventType::Custom("adult_christening".to_string())),
+        "CONF" => Some(EventType::Custom("confirmation".to_string())),
+        "FCOM" => Some(EventType::Custom("first_communion".to_string())),
+        "ORDN" => Some(EventType::Custom("ordination".to_string())),
+        "CENS" => Some(EventType::Census),
+        "EMIG" => Some(EventType::Emigration),
+        "IMMI" => Some(EventType::Immigration),
+        "NATU" => Some(EventType::Naturalization),
+        "PROB" => Some(EventType::Probate),
+        "WILL" => Some(EventType::Will),
+        "GRAD" => Some(EventType::Graduation),
+        "RETI" => Some(EventType::Retirement),
+        "OCCU" => Some(EventType::Occupation),
+        "RESI" => Some(EventType::Residence),
+        "CAST" => Some(EventType::Custom("caste".to_string())),
+        "DSCR" => Some(EventType::Custom("physical_description".to_string())),
+        "EDUC" => Some(EventType::Custom("education".to_string())),
+        "IDNO" => Some(EventType::Custom("id_number".to_string())),
+        "NATI" => Some(EventType::Custom("nationality".to_string())),
+        "NCHI" => Some(EventType::Custom("num_children".to_string())),
+        "NMR" => Some(EventType::Custom("num_marriages".to_string())),
+        "PROP" => Some(EventType::Custom("possession".to_string())),
+        "RELI" => Some(EventType::Custom("religion".to_string())),
+        "SSN" => Some(EventType::Custom("social_security".to_string())),
+        "TITL" => Some(EventType::Custom("title".to_string())),
+        "EVEN" => Some(EventType::Custom("general_event".to_string())),
+        _ => None,
+    }
+}
+
+/// Extract all event and attribute sub-records from a single INDI node.
+fn map_indi_node_to_events(indi_node: &GedcomNode) -> Vec<Event> {
+    let person_id = indi_node
+        .xref
+        .as_deref()
+        .map(|xref| entity_id_from_xref("INDI", xref))
+        .unwrap_or_default();
+
+    let mut events = Vec::new();
+
+    for child in &indi_node.children {
+        let Some(event_type) = indi_event_tag_to_type(&child.tag) else {
+            continue;
+        };
+
+        let mut event = Event {
+            id: EntityId::new(),
+            event_type,
+            date: None,
+            place_ref: None,
+            participants: vec![EventParticipant {
+                person_id,
+                role: EventRole::Principal,
+                census_role: None,
+            }],
+            description: None,
+            _raw_gedcom: std::collections::BTreeMap::new(),
+        };
+
+        // Store INDI xref and tag so the citation lookup can find them.
+        if let Some(xref) = &indi_node.xref {
+            event
+                ._raw_gedcom
+                .insert("INDI_XREF".to_string(), xref.clone());
+        }
+        event
+            ._raw_gedcom
+            .insert("EVENT_TAG".to_string(), child.tag.clone());
+
+        for nested in &child.children {
+            match nested.tag.as_str() {
+                "DATE" => {
+                    if let Some(value) = &nested.value {
+                        event.date = Some(DateValue::Textual {
+                            value: value.clone(),
+                        });
+                    }
+                }
+                "PLAC" => {
+                    if let Some(value) = &nested.value {
+                        event.description = Some(format!("place: {value}"));
+                    }
+                }
+                "SOUR" => { /* citations handled by source chain mapper */ }
+                tag if tag.starts_with('_') => {
+                    event
+                        ._raw_gedcom
+                        .insert(format!("CUSTOM_{tag}"), serialize_subtree(nested));
+                }
+                _ => {}
+            }
+        }
+
+        events.push(event);
+    }
+
+    events
+}
+
+/// Extract all person-level events and attributes from a collection of GEDCOM nodes.
+#[must_use]
+pub fn map_indi_nodes_to_events(nodes: &[GedcomNode]) -> Vec<Event> {
+    nodes
+        .iter()
+        .filter(|node| node.tag == "INDI")
+        .flat_map(map_indi_node_to_events)
+        .collect()
+}
+
 fn map_indi_node_to_person(node: &GedcomNode) -> Person {
     let mut person = Person {
         id: node
@@ -982,7 +1104,22 @@ fn map_indi_node_to_person(node: &GedcomNode) -> Person {
             "NAME" => {
                 person.names.push(parse_name_node(child));
             }
-            _ => {}
+            // Event and attribute tags are extracted by map_indi_node_to_events.
+            "BIRT" | "CHR" | "DEAT" | "BURI" | "CREM" | "ADOP" | "BAPM" | "BARM" | "BASM"
+            | "BLES" | "CHRA" | "CONF" | "FCOM" | "ORDN" | "CENS" | "EMIG" | "IMMI" | "NATU"
+            | "PROB" | "WILL" | "GRAD" | "RETI" | "OCCU" | "RESI" | "CAST" | "DSCR" | "EDUC"
+            | "IDNO" | "NATI" | "NCHI" | "NMR" | "PROP" | "RELI" | "SSN" | "TITL" | "EVEN" => {
+                // Delegated to map_indi_node_to_events — intentional no-op here.
+            }
+            // Linking and cross-reference tags handled by family/source mappers.
+            "FAMS" | "FAMC" | "SUBM" | "ALIA" | "ANCI" | "DESI" | "RFN" | "AFN" | "REFN"
+            | "RIN" | "CHAN" | "NOTE" | "SOUR" | "OBJE" | "ASSOC" | "RESN" => {
+                // Delegated to another mapper — intentional no-op here.
+            }
+            _ => {
+                // Truly unknown or custom tag; underscore-prefixed tags are
+                // already captured by collect_custom_tag_subtrees above.
+            }
         }
     }
 
@@ -1313,6 +1450,7 @@ pub fn generate_import_assertions(
     family_mapping: &FamilyMapping,
     source_mapping: &SourceChainMapping,
     media_note_lds_mapping: &MediaNoteLdsMapping,
+    person_events: &[Event],
 ) -> Result<Vec<ImportedAssertionRecord>, serde_json::Error> {
     let proposed_by = ActorRef::Import(import_job_id.to_string());
     let mut assertions = Vec::new();
@@ -1453,6 +1591,87 @@ pub fn generate_import_assertions(
 
     for event in &family_mapping.events {
         let source_citations = event_citations.get(&event.id).cloned().unwrap_or_default();
+
+        assertions.push(build_import_assertion(
+            event.id,
+            EntityType::Event,
+            "event_type",
+            to_value(&event.event_type)?,
+            source_citations.clone(),
+            &proposed_by,
+        ));
+
+        if let Some(date) = &event.date {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "date",
+                date_value_to_json(date),
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        if let Some(description) = &event.description {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "description",
+                to_value(description)?,
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        for participant in &event.participants {
+            let participation_value = json!({
+                "event_id": event.id,
+                "event_type": event.event_type,
+                "role": participant.role,
+                "census_role": participant.census_role,
+            });
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "participant",
+                participation_value.clone(),
+                source_citations.clone(),
+                &proposed_by,
+            ));
+            assertions.push(build_import_assertion(
+                participant.person_id,
+                EntityType::Person,
+                "event_participation",
+                participation_value,
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+    }
+
+    // Generate assertions for person-level events extracted from INDI records.
+    let person_event_citations: HashMap<EntityId, Vec<CitationRef>> = person_events
+        .iter()
+        .map(|event| {
+            let citations = citations_for_node(
+                &source_mapping.node_citation_refs,
+                "INDI",
+                event._raw_gedcom.get("INDI_XREF").map(String::as_str),
+                event
+                    ._raw_gedcom
+                    .get("EVENT_TAG")
+                    .map(String::as_str)
+                    .unwrap_or("EVEN"),
+            );
+            (event.id, citations)
+        })
+        .collect();
+
+    for event in person_events {
+        let source_citations = person_event_citations
+            .get(&event.id)
+            .cloned()
+            .unwrap_or_default();
 
         assertions.push(build_import_assertion(
             event.id,
@@ -1781,6 +2000,7 @@ pub fn import_gedcom_to_sqlite(
     let roots = build_gedcom_tree(&lines)?;
 
     let persons = map_indi_nodes_to_persons(&roots);
+    let person_events = map_indi_nodes_to_events(&roots);
     let source_mapping = map_source_chain(&roots);
     let family_mapping = map_family_nodes(&roots);
     let media_note_lds_mapping = map_media_note_lds(&roots);
@@ -1790,6 +2010,7 @@ pub fn import_gedcom_to_sqlite(
         &family_mapping,
         &source_mapping,
         &media_note_lds_mapping,
+        &person_events,
     )?;
 
     let unknown_tags_preserved = count_unknown_tags(
@@ -1797,6 +2018,7 @@ pub fn import_gedcom_to_sqlite(
         &family_mapping,
         &source_mapping,
         &media_note_lds_mapping,
+        &person_events,
     );
 
     let tx = connection.transaction()?;
@@ -1846,6 +2068,7 @@ pub fn import_gedcom_to_sqlite(
         family_mapping
             .events
             .iter()
+            .chain(person_events.iter())
             .map(|e| serde_json::to_value(e).map(|v| (e.id, v)))
             .collect::<Result<Vec<_>, _>>()?,
     )?;
@@ -2059,6 +2282,7 @@ fn count_unknown_tags(
     family_mapping: &FamilyMapping,
     source_mapping: &SourceChainMapping,
     media_note_lds_mapping: &MediaNoteLdsMapping,
+    person_events: &[Event],
 ) -> usize {
     let persons_count = persons
         .iter()
@@ -2109,11 +2333,16 @@ fn count_unknown_tags(
         .iter()
         .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
         .sum::<usize>();
+    let person_events_count = person_events
+        .iter()
+        .map(|entity| count_raw_custom_keys(&entity._raw_gedcom))
+        .sum::<usize>();
 
     persons_count
         + families_count
         + relationships_count
         + events_count
+        + person_events_count
         + sources_count
         + citations_count
         + repositories_count
@@ -2240,19 +2469,143 @@ fn append_raw_gedcom_subtrees(
 // GEDCOM EXPORT FUNCTIONS (Step 5.1)
 // ============================================================================
 
+/// Map an `EventType` back to a GEDCOM INDI-level event tag for export.
+fn event_type_to_indi_tag(event_type: &EventType) -> Option<&'static str> {
+    match event_type {
+        EventType::Birth => Some("BIRT"),
+        EventType::Death => Some("DEAT"),
+        EventType::Burial => Some("BURI"),
+        EventType::Baptism => Some("BAPM"),
+        EventType::Census => Some("CENS"),
+        EventType::Emigration => Some("EMIG"),
+        EventType::Immigration => Some("IMMI"),
+        EventType::Naturalization => Some("NATU"),
+        EventType::Probate => Some("PROB"),
+        EventType::Will => Some("WILL"),
+        EventType::Graduation => Some("GRAD"),
+        EventType::Retirement => Some("RETI"),
+        EventType::Occupation => Some("OCCU"),
+        EventType::Residence => Some("RESI"),
+        EventType::Custom(val) => match val.as_str() {
+            "christening" => Some("CHR"),
+            "cremation" => Some("CREM"),
+            "adoption" => Some("ADOP"),
+            "confirmation" => Some("CONF"),
+            "bar_mitzvah" => Some("BARM"),
+            "bas_mitzvah" => Some("BASM"),
+            "blessing" => Some("BLES"),
+            "adult_christening" => Some("CHRA"),
+            "first_communion" => Some("FCOM"),
+            "ordination" => Some("ORDN"),
+            "caste" => Some("CAST"),
+            "physical_description" => Some("DSCR"),
+            "education" => Some("EDUC"),
+            "id_number" => Some("IDNO"),
+            "nationality" => Some("NATI"),
+            "num_children" => Some("NCHI"),
+            "num_marriages" => Some("NMR"),
+            "possession" => Some("PROP"),
+            "religion" => Some("RELI"),
+            "social_security" => Some("SSN"),
+            "title" => Some("TITL"),
+            "general_event" => Some("EVEN"),
+            _ => None,
+        },
+        // Marriage and other family events are emitted by family_to_fam_node.
+        _ => None,
+    }
+}
+
+/// Map an `EventType` to a GEDCOM FAM-level event tag for export.
+fn event_type_to_fam_tag(event_type: &EventType) -> Option<&'static str> {
+    match event_type {
+        EventType::Marriage => Some("MARR"),
+        EventType::Custom(val) if val == "divorce" => Some("DIV"),
+        _ => None,
+    }
+}
+
+/// Format a `DateValue` as a GEDCOM DATE field string.
+fn date_value_to_gedcom_string(date: &DateValue) -> String {
+    match date {
+        DateValue::Textual { value } => value.clone(),
+        DateValue::Exact { date, .. } => match (date.month, date.day) {
+            (Some(m), Some(d)) => {
+                let months = [
+                    "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV",
+                    "DEC",
+                ];
+                format!("{} {} {}", d, months[m as usize - 1], date.year)
+            }
+            (Some(m), None) => {
+                let months = [
+                    "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV",
+                    "DEC",
+                ];
+                format!("{} {}", months[m as usize - 1], date.year)
+            }
+            _ => format!("{}", date.year),
+        },
+        DateValue::Before { date, .. } => {
+            format!(
+                "BEF {}",
+                date_value_to_gedcom_string(&DateValue::Exact {
+                    date: *date,
+                    calendar: Default::default()
+                })
+            )
+        }
+        DateValue::After { date, .. } => {
+            format!(
+                "AFT {}",
+                date_value_to_gedcom_string(&DateValue::Exact {
+                    date: *date,
+                    calendar: Default::default()
+                })
+            )
+        }
+        DateValue::About { date, .. } => {
+            format!(
+                "ABT {}",
+                date_value_to_gedcom_string(&DateValue::Exact {
+                    date: *date,
+                    calendar: Default::default()
+                })
+            )
+        }
+        DateValue::Range { from, to, .. } => {
+            let from_str = date_value_to_gedcom_string(&DateValue::Exact {
+                date: *from,
+                calendar: Default::default(),
+            });
+            let to_str = date_value_to_gedcom_string(&DateValue::Exact {
+                date: *to,
+                calendar: Default::default(),
+            });
+            format!("BET {from_str} AND {to_str}")
+        }
+        DateValue::Tolerance { date, .. } => date_value_to_gedcom_string(&DateValue::Exact {
+            date: *date,
+            calendar: Default::default(),
+        }),
+        DateValue::Quarter { year, quarter } => format!("Q{quarter} {year}"),
+    }
+}
+
 /// Converts a Person entity to a GEDCOM INDI node.
 ///
 /// Follows GEDCOM 5.5.1 standard for INDI records.
 /// Serializes names, gender, and any raw GEDCOM custom tags.
 #[must_use]
-pub fn person_to_indi_node(person: &Person, xref: &str) -> GedcomNode {
-    person_to_indi_node_with_policy(person, xref, ExportPrivacyPolicy::None)
+pub fn person_to_indi_node(person: &Person, events: &[Event], xref: &str) -> GedcomNode {
+    person_to_indi_node_with_policy(person, events, xref, ExportPrivacyPolicy::None)
         .expect("person export without redaction should produce a GEDCOM node")
 }
 
 #[must_use]
 pub fn person_to_indi_node_with_policy(
     person: &Person,
+    events: &[Event],
     xref: &str,
     privacy_policy: ExportPrivacyPolicy,
 ) -> Option<GedcomNode> {
@@ -2295,6 +2648,47 @@ pub fn person_to_indi_node_with_policy(
                 tag: "SEX".to_string(),
                 value: Some(val),
                 children: Vec::new(),
+            });
+        }
+    }
+
+    // Emit person-level events where this person is principal (not redacted).
+    if !redact_living {
+        for event in events.iter().filter(|e| {
+            e.participants
+                .iter()
+                .any(|p| p.person_id == person.id && matches!(p.role, EventRole::Principal))
+        }) {
+            let Some(tag) = event_type_to_indi_tag(&event.event_type) else {
+                continue;
+            };
+            let mut event_children = Vec::new();
+            if let Some(date) = &event.date {
+                event_children.push(GedcomNode {
+                    level: 2,
+                    xref: None,
+                    tag: "DATE".to_string(),
+                    value: Some(date_value_to_gedcom_string(date)),
+                    children: Vec::new(),
+                });
+            }
+            if let Some(desc) = &event.description
+                && let Some(place) = desc.strip_prefix("place: ")
+            {
+                event_children.push(GedcomNode {
+                    level: 2,
+                    xref: None,
+                    tag: "PLAC".to_string(),
+                    value: Some(place.to_string()),
+                    children: Vec::new(),
+                });
+            }
+            children.push(GedcomNode {
+                level: 1,
+                xref: None,
+                tag: tag.to_string(),
+                value: None,
+                children: event_children,
             });
         }
     }
@@ -2386,7 +2780,7 @@ fn person_name_to_name_node(name: &PersonName) -> GedcomNode {
 /// Converts a Family entity to a GEDCOM FAM node.
 /// Maps partner refs, child refs with PEDI tags, and relationship type.
 #[must_use]
-pub fn family_to_fam_node(family: &Family, xref: &str) -> GedcomNode {
+pub fn family_to_fam_node(family: &Family, events: &[Event], xref: &str) -> GedcomNode {
     let mut children = Vec::new();
 
     // HUSB: husband (partner1_id encoded as xref)
@@ -2437,6 +2831,57 @@ pub fn family_to_fam_node(family: &Family, xref: &str) -> GedcomNode {
             tag: "CHIL".to_string(),
             value: Some(format!("@I{}@", child_link.child_id.0.simple())),
             children: chil_children,
+        });
+    }
+
+    // Emit family-level events (MARR, DIV, etc.) for events where BOTH of this
+    // family's partners are participants. Using an OR (any-partner) filter would
+    // incorrectly match marriage events from a different family when a person has
+    // been married more than once.
+    for event in events.iter().filter(|e| {
+        let has_p1 = family
+            .partner1_id
+            .is_some_and(|p1| e.participants.iter().any(|p| p.person_id == p1));
+        let has_p2 = family
+            .partner2_id
+            .is_some_and(|p2| e.participants.iter().any(|p| p.person_id == p2));
+        match (family.partner1_id, family.partner2_id) {
+            (Some(_), Some(_)) => has_p1 && has_p2,
+            (Some(_), None) => has_p1,
+            (None, Some(_)) => has_p2,
+            (None, None) => false,
+        }
+    }) {
+        let Some(tag) = event_type_to_fam_tag(&event.event_type) else {
+            continue;
+        };
+        let mut event_children = Vec::new();
+        if let Some(date) = &event.date {
+            event_children.push(GedcomNode {
+                level: 2,
+                xref: None,
+                tag: "DATE".to_string(),
+                value: Some(date_value_to_gedcom_string(date)),
+                children: Vec::new(),
+            });
+        }
+        if let Some(desc) = &event.description
+            && let Some(place) = desc.strip_prefix("place: ")
+        {
+            event_children.push(GedcomNode {
+                level: 2,
+                xref: None,
+                tag: "PLAC".to_string(),
+                value: Some(place.to_string()),
+                children: Vec::new(),
+            });
+        }
+        children.push(GedcomNode {
+            level: 1,
+            xref: None,
+            tag: tag.to_string(),
+            value: None,
+            children: event_children,
         });
     }
 
@@ -3264,6 +3709,7 @@ mod tests {
             &family_mapping,
             &source_mapping,
             &media_note_lds_mapping,
+            &[],
         )
         .expect("generate assertions");
 
@@ -3433,7 +3879,7 @@ mod tests {
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
-        let node = person_to_indi_node(&person, "@I1@");
+        let node = person_to_indi_node(&person, &[], "@I1@");
 
         assert_eq!(node.level, 0);
         assert_eq!(node.xref, Some("@I1@".to_string()));
@@ -3499,7 +3945,7 @@ mod tests {
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
-        let node = family_to_fam_node(&family, "@F1@");
+        let node = family_to_fam_node(&family, &[], "@F1@");
 
         assert_eq!(node.level, 0);
         assert_eq!(node.xref, Some("@F1@".to_string()));
@@ -3530,7 +3976,7 @@ mod tests {
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
-        let node = family_to_fam_node(&family, "@F1@");
+        let node = family_to_fam_node(&family, &[], "@F1@");
 
         // Find CHIL node
         let chil_node = node.children.iter().find(|n| n.tag == "CHIL");
@@ -3692,7 +4138,7 @@ mod tests {
             _raw_gedcom: raw,
         };
 
-        let node = person_to_indi_node(&person, "@I1@");
+        let node = person_to_indi_node(&person, &[], "@I1@");
 
         let uid_node = node.children.iter().find(|child| child.tag == "_UID");
         assert!(uid_node.is_some());
@@ -3797,7 +4243,7 @@ mod tests {
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
-        let entity_nodes = vec![person_to_indi_node(&person, "@I1@")];
+        let entity_nodes = vec![person_to_indi_node(&person, &[], "@I1@")];
         let rendered = render_gedcom_file(&entity_nodes);
 
         assert!(rendered.starts_with("0 HEAD\n1 SOUR RUSTYGENE\n"));
@@ -3834,9 +4280,13 @@ mod tests {
             )]),
         };
 
-        let node =
-            person_to_indi_node_with_policy(&person, "@I1@", ExportPrivacyPolicy::RedactLiving)
-                .expect("living person should be redacted, not omitted");
+        let node = person_to_indi_node_with_policy(
+            &person,
+            &[],
+            "@I1@",
+            ExportPrivacyPolicy::RedactLiving,
+        )
+        .expect("living person should be redacted, not omitted");
 
         let name_node = node
             .children
@@ -3873,8 +4323,13 @@ mod tests {
         };
 
         assert!(
-            person_to_indi_node_with_policy(&person, "@I1@", ExportPrivacyPolicy::RedactLiving)
-                .is_none()
+            person_to_indi_node_with_policy(
+                &person,
+                &[],
+                "@I1@",
+                ExportPrivacyPolicy::RedactLiving
+            )
+            .is_none()
         );
     }
 
@@ -4350,12 +4805,30 @@ mod tests {
             Ok(serde_json::from_str::<Person>(&json_str))
         })?;
 
+        // Load all events so they can be passed to the exporters.
+        let all_events: Vec<Event> = {
+            let mut stmt = conn.prepare("SELECT data FROM events ORDER BY rowid")?;
+            stmt.query_map([], |row| {
+                let json_str: String = row.get(0)?;
+                Ok(serde_json::from_str::<Event>(&json_str))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect()
+        };
+
         for person_result in persons {
             let person: Person = person_result??;
             let xref = format!("@I{}@", x_counter);
             x_counter += 1;
-            let node = person_to_indi_node_with_policy(&person, &xref, ExportPrivacyPolicy::None)
-                .unwrap_or_else(|| person_to_indi_node(&person, &xref));
+            let node = person_to_indi_node_with_policy(
+                &person,
+                &all_events,
+                &xref,
+                ExportPrivacyPolicy::None,
+            )
+            .unwrap_or_else(|| person_to_indi_node(&person, &all_events, &xref));
             nodes.push(node);
         }
 
@@ -4375,7 +4848,7 @@ mod tests {
                 family_count += 1;
                 let xref = format!("@F{}@", x_counter);
                 x_counter += 1;
-                nodes.push(family_to_fam_node(&family, &xref));
+                nodes.push(family_to_fam_node(&family, &all_events, &xref));
             } else if let Ok(_relationship) = serde_json::from_str::<Relationship>(&json_str) {
                 relationship_count += 1;
                 // Relationships are not exported as separate GEDCOM records

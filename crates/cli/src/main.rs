@@ -471,16 +471,27 @@ fn run_export_command(
                 ExportPrivacyPolicy::None
             };
 
+            let events: Vec<rustygene_core::event::Event> =
+                match load_snapshot_entities(&conn, "events") {
+                    Ok(v) => v,
+                    Err(err) => {
+                        eprintln!("failed to load events for GEDCOM export: {}", err);
+                        std::process::exit(1);
+                    }
+                };
+
             let mut nodes = Vec::new();
             for (idx, person) in persons.iter().enumerate() {
                 let xref = format!("@I{}@", idx + 1);
-                if let Some(node) = person_to_indi_node_with_policy(person, &xref, privacy_policy) {
+                if let Some(node) =
+                    person_to_indi_node_with_policy(person, &events, &xref, privacy_policy)
+                {
                     nodes.push(node);
                 }
             }
             for (idx, family) in families.iter().enumerate() {
                 let xref = format!("@F{}@", idx + 1);
-                nodes.push(family_to_fam_node(family, &xref));
+                nodes.push(family_to_fam_node(family, &events, &xref));
             }
             for (idx, source) in sources.iter().enumerate() {
                 let xref = format!("@S{}@", idx + 1);
