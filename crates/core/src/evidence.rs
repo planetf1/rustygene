@@ -21,6 +21,9 @@ pub struct Repository {
     pub address: Option<String>,
     #[serde(default)]
     pub urls: Vec<String>,
+    /// Original GEDCOM xref ID (e.g., "@R5@") for round-trip preservation
+    #[serde(default)]
+    pub original_xref: Option<String>,
     #[serde(default)]
     pub _raw_gedcom: BTreeMap<String, String>,
 }
@@ -41,6 +44,9 @@ pub struct Source {
     pub abbreviation: Option<String>,
     #[serde(default)]
     pub repository_refs: Vec<RepositoryRef>,
+    /// Original GEDCOM xref ID (e.g., "@S2@") for round-trip preservation
+    #[serde(default)]
+    pub original_xref: Option<String>,
     #[serde(default)]
     pub _raw_gedcom: BTreeMap<String, String>,
 }
@@ -101,6 +107,9 @@ pub struct Media {
     pub dimensions_px: Option<DimensionsPx>,
     pub physical_dimensions_mm: Option<DimensionsMm>,
     pub caption: Option<String>,
+    /// Original GEDCOM xref ID (e.g., "@O8@") for round-trip preservation
+    #[serde(default)]
+    pub original_xref: Option<String>,
     #[serde(default)]
     pub _raw_gedcom: BTreeMap<String, String>,
 }
@@ -129,6 +138,9 @@ pub struct Note {
     pub id: EntityId,
     pub text: String,
     pub note_type: NoteType,
+    /// Original GEDCOM xref ID (e.g., "@N3@") for round-trip preservation
+    #[serde(default)]
+    pub original_xref: Option<String>,
     #[serde(default)]
     pub _raw_gedcom: BTreeMap<String, String>,
 }
@@ -151,6 +163,7 @@ mod tests {
             repository_type: RepositoryType::Archive,
             address: Some("Kew, London".to_string()),
             urls: vec!["https://www.nationalarchives.gov.uk".to_string()],
+            original_xref: Some("@R1@".to_string()),
             _raw_gedcom: BTreeMap::new(),
         };
 
@@ -165,6 +178,7 @@ mod tests {
                 call_number: Some("RG11".to_string()),
                 media_type: Some("Microfilm".to_string()),
             }],
+            original_xref: Some("@S1@".to_string()),
             _raw_gedcom: BTreeMap::new(),
         };
 
@@ -217,6 +231,7 @@ mod tests {
                 height_mm: 297,
             }),
             caption: Some("1881 Census page".to_string()),
+            original_xref: Some("@O1@".to_string()),
             _raw_gedcom: BTreeMap::new(),
         };
 
@@ -235,6 +250,7 @@ mod tests {
             id: EntityId::new(),
             text: "Possible transcription ambiguity in surname.".to_string(),
             note_type: NoteType::Research,
+            original_xref: Some("@N1@".to_string()),
             _raw_gedcom: BTreeMap::new(),
         };
 

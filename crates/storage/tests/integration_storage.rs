@@ -44,6 +44,7 @@ fn person(id: EntityId) -> Person {
         gender: Gender::Unknown,
         living: true,
         private: false,
+        original_xref: None,
         _raw_gedcom: BTreeMap::new(),
     }
 }
@@ -100,6 +101,7 @@ async fn sqlite_end_to_end_storage_flow() {
                 lineage_type: LineageType::Biological,
             },
         ],
+        original_xref: None,
         _raw_gedcom: BTreeMap::new(),
     };
     backend.create_family(&family).await.expect("create family");
@@ -144,6 +146,7 @@ async fn sqlite_end_to_end_storage_flow() {
         repository_type: RepositoryType::Archive,
         address: None,
         urls: vec![],
+        original_xref: None,
         _raw_gedcom: BTreeMap::new(),
     };
     backend
@@ -158,6 +161,7 @@ async fn sqlite_end_to_end_storage_flow() {
         publication_info: None,
         abbreviation: None,
         repository_refs: vec![],
+        original_xref: None,
         _raw_gedcom: BTreeMap::new(),
     };
     backend.create_source(&source).await.expect("create source");

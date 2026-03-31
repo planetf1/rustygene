@@ -64,6 +64,9 @@ pub struct Family {
     pub couple_relationship: Option<EntityId>,
     #[serde(default)]
     pub child_links: Vec<ChildLink>,
+    /// Original GEDCOM xref ID (e.g., "@F12@") for round-trip preservation
+    #[serde(default)]
+    pub original_xref: Option<String>,
     #[serde(default)]
     pub _raw_gedcom: BTreeMap<String, String>,
 }
@@ -98,6 +101,7 @@ mod tests {
                 child_id: child,
                 lineage_type: LineageType::Biological,
             }],
+            original_xref: Some("@F1@".to_string()),
             _raw_gedcom: BTreeMap::new(),
         };
 
@@ -132,6 +136,7 @@ mod tests {
             partner_link: PartnerLink::Married,
             couple_relationship: Some(relationship.id),
             child_links: vec![],
+            original_xref: Some("@F2@".to_string()),
             _raw_gedcom: BTreeMap::new(),
         };
 

@@ -371,6 +371,16 @@ fn run_import_command(
     }
 }
 
+fn preserved_or_generated_xref(
+    original_xref: Option<&str>,
+    prefix: char,
+    index: usize,
+) -> String {
+    original_xref
+        .map(std::borrow::ToOwned::to_owned)
+        .unwrap_or_else(|| format!("@{}{}@", prefix, index + 1))
+}
+
 fn run_export_command(
     backend: &SqliteBackend,
     db_path: &PathBuf,
@@ -482,7 +492,7 @@ fn run_export_command(
 
             let mut nodes = Vec::new();
             for (idx, person) in persons.iter().enumerate() {
-                let xref = format!("@I{}@", idx + 1);
+                let xref = preserved_or_generated_xref(person.original_xref.as_deref(), 'I', idx);
                 if let Some(node) =
                     person_to_indi_node_with_policy(person, &events, &xref, privacy_policy)
                 {
@@ -490,23 +500,24 @@ fn run_export_command(
                 }
             }
             for (idx, family) in families.iter().enumerate() {
-                let xref = format!("@F{}@", idx + 1);
+                let xref = preserved_or_generated_xref(family.original_xref.as_deref(), 'F', idx);
                 nodes.push(family_to_fam_node(family, &events, &xref));
             }
             for (idx, source) in sources.iter().enumerate() {
-                let xref = format!("@S{}@", idx + 1);
+                let xref = preserved_or_generated_xref(source.original_xref.as_deref(), 'S', idx);
                 nodes.push(source_to_sour_node(source, &xref));
             }
             for (idx, repository) in repositories.iter().enumerate() {
-                let xref = format!("@R{}@", idx + 1);
+                let xref =
+                    preserved_or_generated_xref(repository.original_xref.as_deref(), 'R', idx);
                 nodes.push(repository_to_repo_node(repository, &xref));
             }
             for (idx, note) in notes.iter().enumerate() {
-                let xref = format!("@N{}@", idx + 1);
+                let xref = preserved_or_generated_xref(note.original_xref.as_deref(), 'N', idx);
                 nodes.push(note_to_note_node(note, &xref));
             }
             for (idx, item) in media.iter().enumerate() {
-                let xref = format!("@O{}@", idx + 1);
+                let xref = preserved_or_generated_xref(item.original_xref.as_deref(), 'O', idx);
                 nodes.push(media_to_obje_node(item, &xref));
             }
 
@@ -1177,7 +1188,7 @@ fn resolve_db_path(path: &Path) -> PathBuf {
 mod tests {
     use super::{
         Cli, CliSearchResult, Commands, ExportFormat, QueryCommands, ResearchLogCommands,
-        ShowCommands, parse_entity_id_arg, resolve_db_path,
+        ShowCommands, parse_entity_id_arg, preserved_or_generated_xref, resolve_db_path,
     };
     use clap::Parser;
     use std::path::PathBuf;
@@ -1361,5 +1372,18 @@ mod tests {
             }
             _ => panic!("expected export command"),
         }
+    }
+
+    #[test]
+    fn preserved_or_generated_xref_prefers_original_id() {
+        assert_eq!(
+            preserved_or_generated_xref(Some("@I23@"), 'I', 0),
+            "@I23@"
+        );
+    }
+
+    #[test]
+    fn preserved_or_generated_xref_falls_back_to_sequential_id() {
+        assert_eq!(preserved_or_generated_xref(None, 'F', 2), "@F3@");
     }
 }

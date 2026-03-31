@@ -170,11 +170,12 @@ async fn e2e_phase1a_gate_test() {
         .await
         .expect("list_families from DB1 must succeed");
 
-    // Families include both Family and Relationship rows via list_families.
-    // We care that at least family_count1 entries are present.
-    assert!(
-        families_queried.len() >= family_count1,
-        "Storage list_families must include all imported families"
+    // Families are now stored in their own dedicated table.
+    // We expect exactly family_count1 entries (no relationship rows mixed in).
+    assert_eq!(
+        families_queried.len(),
+        family_count1,
+        "Storage list_families must return only Family entities (no Relationships)"
     );
 
     // =========================================================================
@@ -202,8 +203,20 @@ async fn e2e_phase1a_gate_test() {
     let events_for_export = load_events_from_snapshot(&conn1_for_reads);
 
     let mut export_nodes = Vec::new();
+    let original_person_xrefs: std::collections::BTreeSet<String> = persons_for_export
+        .iter()
+        .filter_map(|person| person.original_xref.clone())
+        .collect();
+    let original_family_xrefs: std::collections::BTreeSet<String> = families_for_export
+        .iter()
+        .filter_map(|family| family.original_xref.clone())
+        .collect();
+
     for (idx, person) in persons_for_export.iter().enumerate() {
-        let xref = format!("@I{}@", idx + 1);
+        let xref = person
+            .original_xref
+            .clone()
+            .unwrap_or_else(|| format!("@I{}@", idx + 1));
         if let Some(node) = person_to_indi_node_with_policy(
             person,
             &events_for_export,
@@ -214,7 +227,10 @@ async fn e2e_phase1a_gate_test() {
         }
     }
     for (idx, family) in families_for_export.iter().enumerate() {
-        let xref = format!("@F{}@", idx + 1);
+        let xref = family
+            .original_xref
+            .clone()
+            .unwrap_or_else(|| format!("@F{}@", idx + 1));
         export_nodes.push(family_to_fam_node(family, &events_for_export, &xref));
     }
     // Also export sources (they survive round-trip via raw GEDCOM or structured fields)
@@ -233,8 +249,15 @@ async fn e2e_phase1a_gate_test() {
             })
             .collect()
     };
+    let original_source_xrefs: std::collections::BTreeSet<String> = sources_for_export
+        .iter()
+        .filter_map(|source| source.original_xref.clone())
+        .collect();
     for (idx, source) in sources_for_export.iter().enumerate() {
-        let xref = format!("@S{}@", idx + 1);
+        let xref = source
+            .original_xref
+            .clone()
+            .unwrap_or_else(|| format!("@S{}@", idx + 1));
         export_nodes.push(source_to_sour_node(source, &xref));
     }
 
@@ -307,6 +330,49 @@ async fn e2e_phase1a_gate_test() {
     assert_eq!(
         names1, names2,
         "GEDCOM round-trip must preserve all person given names identically"
+    );
+
+    let person_xrefs2: std::collections::BTreeSet<String> = persons2
+        .iter()
+        .filter_map(|person| person.original_xref.clone())
+        .collect();
+    assert_eq!(
+        person_xrefs2, original_person_xrefs,
+        "GEDCOM round-trip must preserve original person xref IDs"
+    );
+
+    let families2 = load_families_from_snapshot(&conn2_for_reads);
+    let family_xrefs2: std::collections::BTreeSet<String> = families2
+        .iter()
+        .filter_map(|family| family.original_xref.clone())
+        .collect();
+    assert_eq!(
+        family_xrefs2, original_family_xrefs,
+        "GEDCOM round-trip must preserve original family xref IDs"
+    );
+
+    let sources2: Vec<rustygene_core::evidence::Source> = {
+        let mut stmt = conn2_for_reads
+            .prepare("SELECT data FROM sources ORDER BY created_at")
+            .expect("prepare DB2 sources");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("query DB2 sources")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect DB2 sources")
+            .into_iter()
+            .map(|raw| {
+                serde_json::from_str::<rustygene_core::evidence::Source>(&raw)
+                    .expect("parse DB2 source json")
+            })
+            .collect()
+    };
+    let source_xrefs2: std::collections::BTreeSet<String> = sources2
+        .iter()
+        .filter_map(|source| source.original_xref.clone())
+        .collect();
+    assert_eq!(
+        source_xrefs2, original_source_xrefs,
+        "GEDCOM round-trip must preserve original source xref IDs"
     );
 
     // =========================================================================

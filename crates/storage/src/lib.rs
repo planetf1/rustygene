@@ -20,6 +20,7 @@ embed_migrations!("migrations");
 pub const REQUIRED_SCHEMA_TABLES: &[&str] = &[
     "persons",
     "families",
+    "family_relationships",
     "events",
     "places",
     "sources",

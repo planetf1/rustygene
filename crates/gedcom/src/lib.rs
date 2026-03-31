@@ -416,6 +416,7 @@ pub fn map_family_nodes(nodes: &[GedcomNode]) -> FamilyMapping {
             partner_link,
             couple_relationship,
             child_links,
+            original_xref: fam.xref.clone(),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -548,6 +549,7 @@ fn map_obje_node(node: &GedcomNode) -> Media {
         dimensions_px: None,
         physical_dimensions_mm: None,
         caption: None,
+        original_xref: node.xref.clone(),
         _raw_gedcom: std::collections::BTreeMap::new(),
     };
 
@@ -596,6 +598,7 @@ fn map_note_node(node: &GedcomNode) -> Note {
         id: EntityId::new(),
         text: node.value.clone().unwrap_or_default(),
         note_type: NoteType::General,
+        original_xref: node.xref.clone(),
         _raw_gedcom: std::collections::BTreeMap::new(),
     };
 
@@ -720,6 +723,7 @@ fn map_repository_node(node: &GedcomNode) -> Repository {
         repository_type: RepositoryType::Archive,
         address: None,
         urls: Vec::new(),
+        original_xref: node.xref.clone(),
         _raw_gedcom: std::collections::BTreeMap::new(),
     };
 
@@ -765,6 +769,7 @@ fn map_source_node(node: &GedcomNode, repo_xref_to_id: &HashMap<String, EntityId
         publication_info: None,
         abbreviation: None,
         repository_refs: Vec::new(),
+        original_xref: node.xref.clone(),
         _raw_gedcom: std::collections::BTreeMap::new(),
     };
 
@@ -886,6 +891,7 @@ fn resolve_source_id(
                 publication_info: None,
                 abbreviation: None,
                 repository_refs: Vec::new(),
+                original_xref: None,
                 _raw_gedcom: std::collections::BTreeMap::new(),
             };
             let id = source.id;
@@ -901,6 +907,7 @@ fn resolve_source_id(
         publication_info: None,
         abbreviation: None,
         repository_refs: Vec::new(),
+        original_xref: None,
         _raw_gedcom: std::collections::BTreeMap::new(),
     };
     let id = source.id;
@@ -1081,6 +1088,7 @@ fn map_indi_node_to_person(node: &GedcomNode) -> Person {
         gender: Gender::Unknown,
         living: false,
         private: false,
+        original_xref: node.xref.clone(),
         _raw_gedcom: std::collections::BTreeMap::new(),
     };
 
@@ -2105,7 +2113,7 @@ pub fn import_gedcom_to_sqlite(
     )?;
     insert_entities(
         "relationship",
-        "families",
+        "family_relationships",
         family_mapping
             .relationships
             .iter()
@@ -3882,6 +3890,9 @@ mod tests {
         let family_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM families", [], |row| row.get(0))
             .expect("count families");
+        let relationship_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM family_relationships", [], |row| row.get(0))
+            .expect("count relationships");
         let event_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
             .expect("count events");
@@ -3900,17 +3911,22 @@ mod tests {
                 .unwrap_or(0),
             person_count as usize
         );
-        let family_plus_relationship = report
-            .entities_created_by_type
-            .get("family")
-            .copied()
-            .unwrap_or(0)
-            + report
+        assert_eq!(
+            report
+                .entities_created_by_type
+                .get("family")
+                .copied()
+                .unwrap_or(0),
+            family_count as usize
+        );
+        assert_eq!(
+            report
                 .entities_created_by_type
                 .get("relationship")
                 .copied()
-                .unwrap_or(0);
-        assert_eq!(family_plus_relationship, family_count as usize);
+                .unwrap_or(0),
+            relationship_count as usize
+        );
         assert_eq!(
             report
                 .entities_created_by_type
@@ -3983,6 +3999,7 @@ mod tests {
             gender: Gender::Male,
             living: false,
             private: false,
+            original_xref: Some("@I1@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -4049,6 +4066,7 @@ mod tests {
                 child_id,
                 lineage_type: LineageType::Biological,
             }],
+            original_xref: Some("@F1@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -4080,6 +4098,7 @@ mod tests {
                 child_id,
                 lineage_type: LineageType::Adopted,
             }],
+            original_xref: Some("@F2@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -4110,6 +4129,7 @@ mod tests {
                 call_number: Some("RG11".to_string()),
                 media_type: Some("microfilm".to_string()),
             }],
+            original_xref: Some("@S1@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -4139,6 +4159,7 @@ mod tests {
             repository_type: RepositoryType::Archive,
             address: Some("Kew, Richmond, Surrey, TW9 4DU".to_string()),
             urls: vec!["https://www.nationalarchives.gov.uk".to_string()],
+            original_xref: Some("@R1@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -4168,6 +4189,7 @@ mod tests {
             id: EntityId::new(),
             text: "This is a research note about John Smith.".to_string(),
             note_type: NoteType::Research,
+            original_xref: Some("@N1@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -4195,6 +4217,7 @@ mod tests {
             dimensions_px: None,
             physical_dimensions_mm: None,
             caption: None,
+            original_xref: Some("@O1@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -4242,6 +4265,7 @@ mod tests {
             gender: Gender::Unknown,
             living: false,
             private: false,
+            original_xref: Some("@I2@".to_string()),
             _raw_gedcom: raw,
         };
 
@@ -4295,6 +4319,7 @@ mod tests {
             publication_info: None,
             abbreviation: None,
             repository_refs: Vec::new(),
+            original_xref: Some("@S2@".to_string()),
             _raw_gedcom: raw,
         };
 
@@ -4347,6 +4372,7 @@ mod tests {
             gender: Gender::Male,
             living: false,
             private: false,
+            original_xref: Some("@I3@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -4381,6 +4407,7 @@ mod tests {
             gender: Gender::Female,
             living: true,
             private: false,
+            original_xref: Some("@I4@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::from([(
                 "CUSTOM__UID_0".to_string(),
                 "1 _UID should-not-leak\n".to_string(),
@@ -4426,6 +4453,7 @@ mod tests {
             gender: Gender::Unknown,
             living: false,
             private: true,
+            original_xref: Some("@I5@".to_string()),
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 

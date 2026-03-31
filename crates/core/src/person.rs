@@ -85,6 +85,9 @@ pub struct Person {
     pub gender: Gender,
     pub living: bool,
     pub private: bool,
+    /// Original GEDCOM xref ID (e.g., "@I23@") for round-trip preservation
+    #[serde(default)]
+    pub original_xref: Option<String>,
     /// Escape hatch for unstructured vendor-specific tags
     #[serde(default)]
     pub _raw_gedcom: BTreeMap<String, String>,
@@ -188,6 +191,7 @@ mod tests {
             gender: Gender::Female,
             living: false,
             private: false,
+            original_xref: Some("@I42@".to_string()),
             _raw_gedcom: BTreeMap::new(),
         };
 

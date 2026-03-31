@@ -52,6 +52,25 @@ types and receive deserialization errors. This risk is mitigated by the
 `list_families` / `list_relationships` implementations in `SqliteBackend`,
 which apply the filter automatically. See also `docs/GEDCOM_GAPS.md`.
 
+## [ADR-004-REMEDIATION] Separating Family and Relationship Tables
+
+**Date:** 2026-03-31
+**Context:** The original ADR-004 co-storage approach violated principle 2 of the
+INITIAL_SPEC ("Family / Relationship / Event Invariants"). The single-table
+design with JSON-field discrimination created implicit type contracts that were
+error-prone and conflated two semantically distinct structures.
+**Decision:** Split `Family` and `Relationship` into separate dedicated tables:
+- `families` table: Stores only `Family` rows (grouping containers with partner refs, child links)
+- `family_relationships` table: Stores `Relationship` rows (pairwise semantic edges)
+The separation formalizes the architectural distinction at the schema level.
+**Implementation:**
+- Added migration `V003__split_families_and_relationships.sql`
+- Updated storage CRUD methods (`create_relationship`, `list_relationships`, etc.) to use `family_relationships` table
+- Removed `list_filtered_sync()` helper (no longer needed for JSON discrimination)
+- Updated GEDCOM import to write Relationships to `family_relationships` table
+- Updated e2e gate test to verify both tables are populated independently
+**Consequence:** Enforcement at schema level prevents silent mixing. Simpler query logic (no WHERE clauses needed for type filtering). Aligns code implementation with domain model semantics (Principle 2). Breaking schema change requiring migration on existing databases.
+
 ## [ADR-005] DateValue::Textual as Struct Variant
 
 **Date:** 2026-03-30
