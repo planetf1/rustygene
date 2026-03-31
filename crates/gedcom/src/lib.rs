@@ -3834,6 +3834,221 @@ mod tests {
         );
     }
 
+    // ========================================================================
+    // GEDCOM IMPORT EDGE CASE TESTS (Step 4.10)
+    // ========================================================================
+
+    #[test]
+    fn import_empty_gedcom_head_trlr_only() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        let _report = import_gedcom_to_sqlite(&mut conn, "job-empty", input)
+            .expect("import empty GEDCOM should not fail");
+
+        // Should have no entities, no assertions
+        let person_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+            .expect("count persons");
+        let assertion_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
+            .expect("count assertions");
+
+        assert_eq!(person_count, 0, "Empty GEDCOM should have zero persons");
+        assert_eq!(assertion_count, 0, "Empty GEDCOM should have zero assertions");
+    }
+
+    #[test]
+    fn import_gedcom_source_only_no_persons() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @S1@ SOUR\n1 TITL A Source\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        let _report = import_gedcom_to_sqlite(&mut conn, "job-source-only", input)
+            .expect("import source-only GEDCOM should not fail");
+
+        let source_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
+            .expect("count sources");
+        let person_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+            .expect("count persons");
+
+        assert_eq!(source_count, 1, "Source-only GEDCOM should have one source");
+        assert_eq!(person_count, 0, "Source-only GEDCOM should have zero persons");
+    }
+
+    #[test]
+    fn import_gedcom_with_long_note_continuations() {
+        // NOTE with 15 continuation lines using CONT and CONC
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @N1@ NOTE Title\n1 CONC  long line\n1 CONC  that continues\n1 CONT with multiple\n1 CONT continuation\n1 CONC  markers\n1 CONT and should\n1 CONC  preserve all\n1 CONT the text\n1 CONC  without loss\n1 CONT of data\n1 CONC  even with\n1 CONT many lines\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        let _report = import_gedcom_to_sqlite(&mut conn, "job-long-note", input)
+            .expect("import GEDCOM with long note should not fail");
+
+        let note_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .expect("count notes");
+
+        assert_eq!(note_count, 1, "GEDCOM should have one note");
+
+        // Verify the note text was reconstructed properly
+        let mut stmt = conn.prepare("SELECT data FROM notes LIMIT 1").expect("prepare");
+        let note_json: String = stmt
+            .query_row([], |row| row.get(0))
+            .expect("get note");
+        let note: Note = serde_json::from_str(&note_json).expect("parse note");
+
+        assert!(
+            note.text.len() > 50,
+            "Note text should be long (got: {})",
+            note.text.len()
+        );
+        assert!(
+            note.text.contains("long line") && note.text.contains("many lines"),
+            "Note should contain original segments"
+        );
+    }
+
+    #[test]
+    fn import_gedcom_with_lds_ordinances() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John /Test/\n1 BAPL\n2 STAT COMPLETED\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        let _report = import_gedcom_to_sqlite(&mut conn, "job-lds", input)
+            .expect("import GEDCOM with LDS should not fail");
+
+        let lds_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM lds_ordinances", [], |row| row.get(0))
+            .expect("count LDS ordinances");
+
+        assert!(lds_count > 0, "GEDCOM with baptism should have LDS ordinances");
+
+        // Verify LDS ordinance was parsed
+        let mut stmt = conn
+            .prepare("SELECT data FROM lds_ordinances LIMIT 1")
+            .expect("prepare");
+        let lds_json: String = stmt
+            .query_row([], |row| row.get(0))
+            .expect("get LDS");
+        let lds: LdsOrdinance = serde_json::from_str(&lds_json).expect("parse LDS");
+
+        assert_eq!(
+            lds.ordinance_type,
+            LdsOrdinanceType::Baptism,
+            "BAPL should map to baptism"
+        );
+    }
+
+    #[test]
+    fn import_gedcom_with_deep_nesting() {
+        // Event with deeply nested NAME > GIVN > SURN structure
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John Paul James Michael /Smith Jr./\n2 GIVN John Paul James Michael\n2 SURN Smith Jr.\n2 NPFX Dr.\n2 NSFX Jr.\n1 NOTE Research note\n2 CONC with details\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        let _report = import_gedcom_to_sqlite(&mut conn, "job-deep-nest", input)
+            .expect("import GEDCOM with deep nesting should not fail");
+
+        let person_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+            .expect("count persons");
+
+        assert_eq!(person_count, 1, "GEDCOM should have one person");
+
+        // Verify person name was parsed correctly
+        let mut stmt = conn.prepare("SELECT data FROM persons LIMIT 1").expect("prepare");
+        let person_json: String = stmt
+            .query_row([], |row| row.get(0))
+            .expect("get person");
+        let person: Person = serde_json::from_str(&person_json).expect("parse person");
+
+        assert!(
+            !person.names.is_empty(),
+            "Person should have at least one name"
+        );
+        let name = &person.names[0];
+        assert!(!name.given_names.is_empty(), "Name should have given names");
+        assert!(!name.surnames.is_empty(), "Name should have surnames");
+    }
+
+    #[test]
+    fn import_gedcom_with_non_ascii_characters() {
+        // GEDCOM with UTF-8 multi-byte characters
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME François /Müller/\n1 NOTE Åse Søren Øyvind et français naïve résumé ñ\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        let _report = import_gedcom_to_sqlite(&mut conn, "job-utf8", input)
+            .expect("import GEDCOM with UTF-8 should not fail");
+
+        let person_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+            .expect("count persons");
+
+        assert_eq!(person_count, 1, "GEDCOM should have one person");
+
+        // Verify the non-ASCII characters survived import
+        let mut stmt = conn.prepare("SELECT data FROM persons LIMIT 1").expect("prepare");
+        let person_json: String = stmt
+            .query_row([], |row| row.get(0))
+            .expect("get person");
+        let person: Person = serde_json::from_str(&person_json).expect("parse person");
+
+        assert!(person.names[0].given_names.contains("François"));
+        assert!(person.names[0].surnames[0].value.contains("Müller"));
+    }
+
+    #[test]
+    fn import_gedcom_with_multiple_surnames_and_prefixes() {
+        // Name with multiple surnames using NAME line split
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John /Smith Jones/\n2 GIVN John\n2 SURN Smith Jones\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        let _report = import_gedcom_to_sqlite(&mut conn, "job-multi-surn", input)
+            .expect("import GEDCOM with multiple surnames should not fail");
+
+        let person_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+            .expect("count persons");
+
+        assert_eq!(person_count, 1);
+
+        let mut stmt = conn.prepare("SELECT data FROM persons LIMIT 1").expect("prepare");
+        let person_json: String = stmt
+            .query_row([], |row| row.get(0))
+            .expect("get person");
+        let person: Person = serde_json::from_str(&person_json).expect("parse person");
+
+        // Should have parsed the surname(s)
+        assert!(!person.names[0].surnames.is_empty());
+    }
+
+    #[test]
+    fn import_gedcom_preserves_custom_tags() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John /Test/\n1 _UID abc-123-def\n1 _CUSTOM Some value\n2 _NESTED Nested custom\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        let _report = import_gedcom_to_sqlite(&mut conn, "job-custom", input)
+            .expect("import GEDCOM with custom tags should not fail");
+
+        let person_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+            .expect("count persons");
+
+        assert_eq!(person_count, 1);
+
+        // Verify custom tags were preserved in _raw_gedcom
+        let mut stmt = conn.prepare("SELECT data FROM persons LIMIT 1").expect("prepare");
+        let person_json: String = stmt
+            .query_row([], |row| row.get(0))
+            .expect("get person");
+        let person: Person = serde_json::from_str(&person_json).expect("parse person");
+
+        assert!(
+            !person._raw_gedcom.is_empty(),
+            "Custom tags should be preserved"
+        );
+    }
+
     // TODO: Add Kennedy and torture551 round-trip tests once DateValue serialization
     // and UTF-8 encoding issues are resolved in the import pipeline
 
