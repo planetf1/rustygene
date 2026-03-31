@@ -146,7 +146,7 @@ pub fn build_gedcom_tree(lines: &[GedcomLine]) -> Result<Vec<GedcomNode>, Gedcom
             });
         }
 
-        while !path.is_empty() && usize::from(node.level) <= path.len() - 1 {
+        while !path.is_empty() && usize::from(node.level) < path.len() {
             path.pop();
         }
 
@@ -505,7 +505,7 @@ fn map_family_events(
             match nested.tag.as_str() {
                 "DATE" => {
                     if let Some(value) = &nested.value {
-                        event.date = Some(DateValue::Textual(value.clone()));
+                        event.date = Some(DateValue::Textual { value: value.clone() });
                     }
                 }
                 "PLAC" => {
@@ -647,7 +647,7 @@ fn map_lds_ordinance_node(node: &GedcomNode, ordinance_type: LdsOrdinanceType) -
             "TEMP" => ordinance.temple_code = child.value.clone(),
             "DATE" => {
                 if let Some(value) = &child.value {
-                    ordinance.date = Some(DateValue::Textual(value.clone()));
+                    ordinance.date = Some(DateValue::Textual { value: value.clone() });
                 }
             }
             tag if tag.starts_with('_') => {
@@ -923,7 +923,7 @@ fn map_indi_node_to_person(node: &GedcomNode) -> Person {
             .xref
             .as_deref()
             .map(|xref| entity_id_from_xref("INDI", xref))
-            .unwrap_or_else(EntityId::new),
+            .unwrap_or_default(),
         names: Vec::new(),
         gender: Gender::Unknown,
         living: false,
@@ -1027,7 +1027,7 @@ fn split_gedcom_name(raw: &str) -> (String, Option<String>) {
     (raw.trim().to_string(), None)
 }
 
-fn collect_custom_tag_subtrees<'a>(root: &'a GedcomNode) -> Vec<&'a GedcomNode> {
+fn collect_custom_tag_subtrees(root: &GedcomNode) -> Vec<&GedcomNode> {
     let mut found = Vec::new();
     collect_custom_tag_subtrees_inner(root, &mut found);
     found
@@ -1234,7 +1234,7 @@ fn date_value_to_json(date: &DateValue) -> Value {
             "year": year,
             "quarter": quarter,
         }),
-        DateValue::Textual(value) => json!({
+        DateValue::Textual { value } => json!({
             "type": "textual",
             "value": value,
         }),
@@ -2167,11 +2167,10 @@ fn insert_subtree(children: &mut Vec<GedcomNode>, parent_level: u8, subtree: Ged
     let target_parent_level = subtree.level.saturating_sub(1);
     if let Some(path) = find_last_node_path_at_level(children, target_parent_level, true)
         .or_else(|| find_last_node_path_at_level(children, target_parent_level, false))
+        && let Some(parent) = get_node_mut(children.as_mut_slice(), &path)
     {
-        if let Some(parent) = get_node_mut(children.as_mut_slice(), &path) {
-            parent.children.push(subtree);
-            return;
-        }
+        parent.children.push(subtree);
+        return;
     }
 
     children.push(subtree);
@@ -2478,16 +2477,16 @@ pub fn source_to_sour_node(source: &Source, xref: &str) -> GedcomNode {
                 children: Vec::new(),
             });
         }
-        if let Some(media_type) = &repo_ref.media_type {
-            if !media_type.is_empty() {
-                repo_children.push(GedcomNode {
-                    level: 2,
-                    xref: None,
-                    tag: "MEDI".to_string(),
-                    value: Some(media_type.clone()),
-                    children: Vec::new(),
-                });
-            }
+        if let Some(media_type) = &repo_ref.media_type
+            && !media_type.is_empty()
+        {
+            repo_children.push(GedcomNode {
+                level: 2,
+                xref: None,
+                tag: "MEDI".to_string(),
+                value: Some(media_type.clone()),
+                children: Vec::new(),
+            });
         }
         children.push(GedcomNode {
             level: 1,

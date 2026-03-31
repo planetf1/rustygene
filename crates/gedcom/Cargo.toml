@@ -10,3 +10,6 @@ uuid = { version = "1.23.0", features = ["v5", "serde"] }
 rusqlite = { version = "0.33.0", features = ["bundled"] }
 rustygene-core = { version = "0.1.0", path = "../core" }
 rustygene-storage = { version = "0.1.0", path = "../storage" }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }

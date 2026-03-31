@@ -18,6 +18,7 @@ Dependencies must flow strictly *downward*. Circular dependencies are an archite
 1. **`crates/core`**: The pure domain model (Assertions, Persons, Families, Events). **Rule:** Zero dependencies besides `serde`, `uuid`, and `chrono`. No IO, no DB code, no framework logic.
 2. **`crates/storage`**: Local-first SQLite data layer. **Rule:** Depends only on `core` + database drivers (`rusqlite`/`sqlx`).
 3. **`crates/gedcom`**: The GEDCOM 5.5.1 parser and emitter. **Rule:** Transforms text to `core` primitives. No direct database access.
+3. **`crates/gedcom`**: The GEDCOM 5.5.1 parser and emitter. Transforms GEDCOM text to `core` primitives. The top-level `import_gedcom_to_sqlite` function depends on `storage` and `rusqlite` for transactional import. Parsing/mapping functions themselves are pure. See ADR-003 in `docs/DECISIONS.md`.
 4. **`crates/api` / `crates/cli` / `app`**: Presentation and networking layers. Depend on `core` and `storage`.
 
 ## Coding Style & Rules

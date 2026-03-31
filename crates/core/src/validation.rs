@@ -102,7 +102,7 @@ fn bounds(date: &DateValue) -> Option<DateBounds> {
                 upper: Some(end),
             }
         }
-        DateValue::Textual(_) => DateBounds {
+        DateValue::Textual { .. } => DateBounds {
             lower: None,
             upper: None,
         },
@@ -164,7 +164,7 @@ pub fn validate_date_possible(date: &DateValue) -> Result<(), ValidationError> {
                 });
             }
         }
-        DateValue::Textual(_) => {}
+        DateValue::Textual { .. } => {}
     }
 
     Ok(())

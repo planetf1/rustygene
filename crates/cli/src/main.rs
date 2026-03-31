@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rusqlite::Connection;
@@ -10,11 +10,12 @@ use rustygene_core::person::Person;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use rustygene_gedcom::{
-    ExportPrivacyPolicy, family_to_fam_node, media_to_obje_node, note_to_note_node,
+    ExportPrivacyPolicy, family_to_fam_node, import_gedcom_to_sqlite,
+    media_to_obje_node, note_to_note_node,
     person_to_indi_node_with_policy, render_gedcom_file, repository_to_repo_node, source_to_sour_node,
 };
 use rustygene_storage::{
-    JsonExportMode, Pagination, ResearchLogFilter, Storage, run_migrations,
+    JsonExportMode, JsonImportMode, Pagination, ResearchLogFilter, Storage, run_migrations,
     sqlite_impl::SqliteBackend,
 };
 
@@ -60,7 +61,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    Import,
+    Import {
+        #[arg(long = "format", value_enum)]
+        import_format: ImportFormat,
+        /// Path to the file (or directory for JSON) to import
+        file: PathBuf,
+        /// Job identifier recorded in assertion provenance [default: auto-generated]
+        #[arg(long)]
+        job_id: Option<String>,
+    },
     Export {
         #[arg(long = "format", value_enum)]
         export_format: ExportFormat,
@@ -82,6 +91,12 @@ enum Commands {
         command: ResearchLogCommands,
     },
     RebuildSnapshots,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ImportFormat {
+    Gedcom,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -222,9 +237,122 @@ fn main() {
         } => {
             run_export_command(&backend, &db_path, export_format, output, redact_living);
         }
-        Commands::Import => {
-            eprintln!("command not implemented yet");
-            std::process::exit(2);
+        Commands::Import {
+            import_format,
+            file,
+            job_id,
+        } => {
+            run_import_command(&db_path, import_format, &file, job_id.as_deref(), cli.format, &backend);
+        }
+    }
+}
+
+/// Read a GEDCOM file, handling UTF-8 with BOM, and Latin-1 (ISO-8859-1) fallback.
+/// GEDCOM 5.5.1 files are often encoded as ANSI/Latin-1; Rust's std::fs::read_to_string
+/// is UTF-8 only, so we fall back to byte-by-byte Latin-1 → Unicode mapping.
+fn read_gedcom_file(path: &Path) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => return Ok(s),
+        Err(e) if e.kind() != std::io::ErrorKind::InvalidData => {
+            return Err(e.to_string());
+        }
+        Err(_) => {}
+    }
+    // UTF-8 failed — try Latin-1 (ISO-8859-1): every byte value maps to the same Unicode scalar.
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    Ok(bytes.iter().map(|&b| b as char).collect())
+}
+
+fn run_import_command(
+    db_path: &PathBuf,
+    format: ImportFormat,
+    file: &Path,
+    job_id: Option<&str>,
+    output_format: OutputFormat,
+    backend: &SqliteBackend,
+) {
+    match format {
+        ImportFormat::Gedcom => {
+            let content = match read_gedcom_file(file) {
+                Ok(s) => s,
+                Err(err) => {
+                    eprintln!("failed to read '{}': {}", file.display(), err);
+                    std::process::exit(1);
+                }
+            };
+            let effective_job_id = job_id
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("import-{}", uuid::Uuid::new_v4().simple()));
+            let mut conn = match Connection::open(db_path) {
+                Ok(c) => c,
+                Err(err) => {
+                    eprintln!("failed to open database: {}", err);
+                    std::process::exit(1);
+                }
+            };
+            match import_gedcom_to_sqlite(&mut conn, &effective_job_id, &content) {
+                Ok(report) => {
+                    if let Err(err) = backend.rebuild_all_snapshots() {
+                        eprintln!("warning: snapshot rebuild failed after import: {}", err.message);
+                    }
+                    match output_format {
+                        OutputFormat::Text => {
+                            println!("gedcom import complete (job: {})", effective_job_id);
+                            for (entity_type, count) in &report.entities_created_by_type {
+                                println!("  {}: {} entities created", entity_type, count);
+                            }
+                            println!("  assertions created: {}", report.assertions_created);
+                            println!("  unknown tags preserved: {}", report.unknown_tags_preserved);
+                        }
+                        OutputFormat::Json => {
+                            let json = serde_json::json!({
+                                "job_id": effective_job_id,
+                                "entities_created": report.entities_created_by_type,
+                                "assertions_created": report.assertions_created,
+                                "unknown_tags_preserved": report.unknown_tags_preserved,
+                            });
+                            println!("{}", json);
+                        }
+                    }
+                }
+                Err(err) => {
+                    eprintln!("gedcom import failed: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ImportFormat::Json => {
+            let mode = if file.is_dir() {
+                JsonImportMode::Directory {
+                    input_dir: file.to_path_buf(),
+                }
+            } else {
+                JsonImportMode::SingleFile {
+                    input_file: file.to_path_buf(),
+                }
+            };
+            match backend.import_json_dump(mode) {
+                Ok(report) => match output_format {
+                    OutputFormat::Text => {
+                        println!("json import complete");
+                        for (entity_type, count) in &report.entities_imported_by_type {
+                            println!("  {}: {} entities imported", entity_type, count);
+                        }
+                        println!("  assertions imported: {}", report.assertions_imported);
+                    }
+                    OutputFormat::Json => {
+                        let json = serde_json::json!({
+                            "entities_imported": report.entities_imported_by_type,
+                            "assertions_imported": report.assertions_imported,
+                        });
+                        println!("{}", json);
+                    }
+                },
+                Err(err) => {
+                    eprintln!("json import failed: {}", err.message);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
@@ -286,7 +414,7 @@ fn run_export_command(
                     std::process::exit(1);
                 }
             };
-            let families: Vec<Family> = match load_snapshot_entities(&conn, "families") {
+            let families: Vec<Family> = match load_family_entities(&conn) {
                 Ok(v) => v,
                 Err(err) => {
                     eprintln!("failed to load families for GEDCOM export: {}", err);
@@ -394,6 +522,29 @@ fn load_snapshot_entities<T: serde::de::DeserializeOwned>(
 
     rows.into_iter()
         .map(|raw| serde_json::from_str::<T>(&raw).map_err(|e| format!("parse {} row failed: {}", table, e)))
+        .collect()
+}
+
+/// Load only `Family` rows from the shared `families` table.
+/// `Relationship` rows are co-stored there and are excluded by filtering out
+/// rows that carry a `relationship_type` JSON field.
+fn load_family_entities(conn: &Connection) -> Result<Vec<Family>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT data FROM families \
+             WHERE json_extract(data, '$.relationship_type') IS NULL \
+             ORDER BY created_at",
+        )
+        .map_err(|e| format!("prepare families query failed: {}", e))?;
+
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query families failed: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("collect families failed: {}", e))?;
+
+    rows.into_iter()
+        .map(|raw| serde_json::from_str::<Family>(&raw).map_err(|e| format!("parse families row failed: {}", e)))
         .collect()
 }
 
@@ -955,19 +1106,19 @@ fn parse_entity_id_arg(raw: &str) -> Result<EntityId, String> {
         .map_err(|e| format!("{} ({})", raw, e))
 }
 
-fn resolve_db_path(path: &PathBuf) -> PathBuf {
+fn resolve_db_path(path: &Path) -> PathBuf {
     let path_str = path.to_string_lossy();
     if path_str == "~" {
         return std::env::var_os("HOME")
             .map(PathBuf::from)
-            .unwrap_or_else(|| path.clone());
+            .unwrap_or_else(|| path.to_path_buf());
     }
-    if let Some(stripped) = path_str.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(stripped);
-        }
+    if let Some(stripped) = path_str.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(stripped);
     }
-    path.clone()
+    path.to_path_buf()
 }
 
 #[cfg(test)]

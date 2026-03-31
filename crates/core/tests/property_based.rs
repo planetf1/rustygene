@@ -69,7 +69,7 @@ fn arb_date_value_serializable() -> impl Strategy<Value = DateValue> {
 }
 
 fn arb_date_value() -> impl Strategy<Value = DateValue> {
-    prop_oneof![arb_date_value_serializable(), ".{0,64}".prop_map(DateValue::Textual)]
+    prop_oneof![arb_date_value_serializable(), ".{0,64}".prop_map(|s| DateValue::Textual { value: s })]
 }
 
 fn arb_assertion_status() -> impl Strategy<Value = AssertionStatus> {

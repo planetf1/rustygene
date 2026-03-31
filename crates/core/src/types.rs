@@ -102,7 +102,7 @@ fn date_center(dv: &DateValue) -> Option<NaiveDate> {
             let m = u32::from(*quarter.clamp(&1, &4) - 1) * 3 + 2; // Middle month of quarter
             Some(NaiveDate::from_ymd_opt(*year, m, 15).unwrap())
         }
-        DateValue::Textual(_) => None,
+        DateValue::Textual { .. } => None,
     }
 }
 
@@ -140,7 +140,7 @@ pub enum DateValue {
         year: i32,
         quarter: u8,
     },
-    Textual(String),
+    Textual { value: String },
 }
 
 impl PartialOrd for DateValue {
@@ -248,7 +248,7 @@ mod tests {
         // 1850-01-01 < 1850-05-01
         assert!(d_fuzzy < d1);
 
-        let d3 = DateValue::Textual("some weird string".to_string());
+        let d3 = DateValue::Textual { value: "some weird string".to_string() };
         assert_eq!(d1.partial_cmp(&d3), None);
     }
 

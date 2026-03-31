@@ -530,6 +530,59 @@ impl SqliteBackend {
         Ok(result)
     }
 
+        /// Like `list_sync` but adds a SQL `WHERE` clause for tables that store
+        /// multiple entity types (e.g., `families` holds both `Family` and
+        /// `Relationship` rows).
+        fn list_filtered_sync<T: serde::de::DeserializeOwned>(
+            &self,
+            table: &str,
+            where_clause: &str,
+            pagination: Pagination,
+        ) -> Result<Vec<T>, StorageError> {
+            let conn = self
+                .connection
+                .lock()
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Mutex lock failed: {}", e),
+                })?;
+
+            let sql = format!(
+                "SELECT data FROM {} WHERE {} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                table, where_clause
+            );
+            let mut stmt = conn.prepare(&sql).map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare failed: {}", e),
+            })?;
+
+            let rows: Vec<String> = stmt
+                .query_map(
+                    rusqlite::params![pagination.limit as i32, pagination.offset as i32],
+                    |row| row.get(0),
+                )
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Query failed: {}", e),
+                })?
+                .collect::<SqliteResult<Vec<_>>>()
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Collect failed: {}", e),
+                })?;
+
+            let mut result = Vec::new();
+            for s in rows {
+                let v: Value = serde_json::from_str(&s).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("JSON parse failed: {}", e),
+                })?;
+                result.push(Self::deserialize(&v)?);
+            }
+
+            Ok(result)
+        }
+
     fn entity_type_to_db(entity_type: EntityType) -> &'static str {
         match entity_type {
             EntityType::Person => "person",
@@ -815,8 +868,8 @@ impl SqliteBackend {
 
         let mut stmt = tx
             .prepare(
-                "SELECT field, value
-                 FROM assertions
+                "SELECT field, CAST(value AS TEXT) \
+                 FROM assertions \
                  WHERE entity_id = ? AND status = 'confirmed' AND preferred = 1",
             )
             .map_err(|e| StorageError {
@@ -1230,7 +1283,13 @@ impl Storage for SqliteBackend {
     }
 
     async fn list_families(&self, pagination: Pagination) -> Result<Vec<Family>, StorageError> {
-        self.list_sync::<Family>("families", pagination)
+        // The `families` table co-stores both `Family` and `Relationship` rows.
+        // Family rows have no `relationship_type` JSON field; Relationship rows always do.
+        self.list_filtered_sync::<Family>(
+            "families",
+            "json_extract(data, '$.relationship_type') IS NULL",
+            pagination,
+        )
     }
 
     // Relationship
@@ -1256,7 +1315,12 @@ impl Storage for SqliteBackend {
         &self,
         pagination: Pagination,
     ) -> Result<Vec<Relationship>, StorageError> {
-        self.list_sync::<Relationship>("families", pagination)
+        // Relationship rows always carry `relationship_type`; Family rows never do.
+        self.list_filtered_sync::<Relationship>(
+            "families",
+            "json_extract(data, '$.relationship_type') IS NOT NULL",
+            pagination,
+        )
     }
 
     // Event
