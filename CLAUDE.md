@@ -28,6 +28,11 @@ Dependencies must flow strictly *downward*. Circular dependencies are an archite
 - **Strong Typing**: Use `enum` for variants. Avoid "stringly-typed" designs. **NO `std::any::Any` casting.**
 - **Data Philosophy**: Remember the primary design principle—every genealogical fact is an `Assertion` with a confidence score and provenance, not a static boolean fact.
 
+## Acceptance Criteria Enforcement
+
+- **Strict Semantic Fidelity rule (Phase 1A)**: Re-importing a GEDCOM MUST result in a 100% equivalent *Assertion graph*. Do NOT water down tests (e.g., strictly to "name comparison") to fake a passing integration.
+- **Fail Over Fake**: If an implementation cannot meet the explicit sub-step criteria, you MUST open a tracking issue in `bd` mapping to the missing capability. Watering down the end-to-end or acceptance gates is strictly forbidden. Any uncovered scope must be recorded in `docs/GEDCOM_GAPS.md`.
+
 ## CI Expectations
 
 Every pull request must pass the quality gates cleanly:
