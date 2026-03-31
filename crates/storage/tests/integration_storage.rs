@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use chrono::Utc;
 use rusqlite::Connection;
 use rustygene_core::assertion::{Assertion, AssertionStatus, EvidenceType};
-use rustygene_core::evidence::{Citation, CitationRef, Repository, RepositoryType, Source};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
+use rustygene_core::evidence::{Citation, CitationRef, Repository, RepositoryType, Source};
 use rustygene_core::family::{ChildLink, Family, LineageType, PartnerLink};
 use rustygene_core::person::Person;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
@@ -23,7 +23,11 @@ fn temp_db_path() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time")
         .as_nanos();
-    std::env::temp_dir().join(format!("rustygene-storage-it-{}-{}.sqlite", std::process::id(), nanos))
+    std::env::temp_dir().join(format!(
+        "rustygene-storage-it-{}-{}.sqlite",
+        std::process::id(),
+        nanos
+    ))
 }
 
 fn setup_backend() -> (SqliteBackend, PathBuf) {
@@ -55,11 +59,26 @@ async fn sqlite_end_to_end_storage_flow() {
     let child2_id = EntityId::new();
     let child3_id = EntityId::new();
 
-    backend.create_person(&person(father_id)).await.expect("create father");
-    backend.create_person(&person(mother_id)).await.expect("create mother");
-    backend.create_person(&person(child1_id)).await.expect("create child1");
-    backend.create_person(&person(child2_id)).await.expect("create child2");
-    backend.create_person(&person(child3_id)).await.expect("create child3");
+    backend
+        .create_person(&person(father_id))
+        .await
+        .expect("create father");
+    backend
+        .create_person(&person(mother_id))
+        .await
+        .expect("create mother");
+    backend
+        .create_person(&person(child1_id))
+        .await
+        .expect("create child1");
+    backend
+        .create_person(&person(child2_id))
+        .await
+        .expect("create child2");
+    backend
+        .create_person(&person(child3_id))
+        .await
+        .expect("create child3");
 
     let family = Family {
         id: EntityId::new(),
@@ -207,7 +226,12 @@ async fn sqlite_end_to_end_storage_flow() {
         reviewed_by: None,
     };
     backend
-        .create_assertion(father_id, EntityType::Person, "name", &second_name_assertion)
+        .create_assertion(
+            father_id,
+            EntityType::Person,
+            "name",
+            &second_name_assertion,
+        )
         .await
         .expect("create second name assertion");
 
@@ -220,7 +244,11 @@ async fn sqlite_end_to_end_storage_flow() {
         .list_assertions_for_field(father_id, "name")
         .await
         .expect("list name assertions");
-    assert_eq!(name_assertions.len(), 2, "duplicate assertion must not create a 3rd row");
+    assert_eq!(
+        name_assertions.len(),
+        2,
+        "duplicate assertion must not create a 3rd row"
+    );
 
     // Relationship graph edges and traversal
     backend
@@ -260,7 +288,10 @@ async fn sqlite_end_to_end_storage_flow() {
         .expect("query descendants");
     assert_eq!(descendants.len(), 3);
 
-    let ancestors = backend.ancestors(child1_id, 2).await.expect("query ancestors");
+    let ancestors = backend
+        .ancestors(child1_id, 2)
+        .await
+        .expect("query ancestors");
     assert_eq!(ancestors, vec![father_id]);
 
     // Research log CRUD and filtering
@@ -292,7 +323,10 @@ async fn sqlite_end_to_end_storage_flow() {
                 date_from_iso: None,
                 date_to_iso: None,
             },
-            Pagination { limit: 10, offset: 0 },
+            Pagination {
+                limit: 10,
+                offset: 0,
+            },
         )
         .await
         .expect("filter research entries");
@@ -322,7 +356,8 @@ async fn sqlite_end_to_end_storage_flow() {
             |row| row.get(0),
         )
         .expect("read person data");
-    let person_json: serde_json::Value = serde_json::from_str(&person_data).expect("parse person data");
+    let person_json: serde_json::Value =
+        serde_json::from_str(&person_data).expect("parse person data");
     assert_eq!(person_json["name"], json!("John Preferred"));
 
     let audit_count: i64 = db_conn

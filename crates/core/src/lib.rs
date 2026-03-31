@@ -1,10 +1,10 @@
 pub mod assertion;
-pub mod evidence;
 pub mod event;
+pub mod evidence;
 pub mod family;
 pub mod lds;
-pub mod place;
 pub mod person;
+pub mod place;
 pub mod research;
 pub mod types;
 pub mod validation;

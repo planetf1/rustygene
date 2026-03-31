@@ -29,30 +29,20 @@ fn arb_fuzzy_date() -> impl Strategy<Value = FuzzyDate> {
 }
 
 fn arb_date_value_serializable() -> impl Strategy<Value = DateValue> {
-    let exact = (arb_fuzzy_date(), arb_calendar()).prop_map(|(date, calendar)| DateValue::Exact {
-        date,
-        calendar,
-    });
+    let exact = (arb_fuzzy_date(), arb_calendar())
+        .prop_map(|(date, calendar)| DateValue::Exact { date, calendar });
 
-    let range = (arb_fuzzy_date(), arb_fuzzy_date(), arb_calendar()).prop_map(
-        |(from, to, calendar)| DateValue::Range { from, to, calendar },
-    );
+    let range = (arb_fuzzy_date(), arb_fuzzy_date(), arb_calendar())
+        .prop_map(|(from, to, calendar)| DateValue::Range { from, to, calendar });
 
-    let before =
-        (arb_fuzzy_date(), arb_calendar()).prop_map(|(date, calendar)| DateValue::Before {
-            date,
-            calendar,
-        });
+    let before = (arb_fuzzy_date(), arb_calendar())
+        .prop_map(|(date, calendar)| DateValue::Before { date, calendar });
 
-    let after = (arb_fuzzy_date(), arb_calendar()).prop_map(|(date, calendar)| DateValue::After {
-        date,
-        calendar,
-    });
+    let after = (arb_fuzzy_date(), arb_calendar())
+        .prop_map(|(date, calendar)| DateValue::After { date, calendar });
 
-    let about = (arb_fuzzy_date(), arb_calendar()).prop_map(|(date, calendar)| DateValue::About {
-        date,
-        calendar,
-    });
+    let about = (arb_fuzzy_date(), arb_calendar())
+        .prop_map(|(date, calendar)| DateValue::About { date, calendar });
 
     let tolerance = (arb_fuzzy_date(), 0_u32..=3650, arb_calendar()).prop_map(
         |(date, plus_minus_days, calendar)| DateValue::Tolerance {
@@ -69,7 +59,10 @@ fn arb_date_value_serializable() -> impl Strategy<Value = DateValue> {
 }
 
 fn arb_date_value() -> impl Strategy<Value = DateValue> {
-    prop_oneof![arb_date_value_serializable(), ".{0,64}".prop_map(|s| DateValue::Textual { value: s })]
+    prop_oneof![
+        arb_date_value_serializable(),
+        ".{0,64}".prop_map(|s| DateValue::Textual { value: s })
+    ]
 }
 
 fn arb_assertion_status() -> impl Strategy<Value = AssertionStatus> {
@@ -152,10 +145,16 @@ fn can_transition(from: AssertionStatus, to: AssertionStatus) -> bool {
                 | AssertionStatus::Rejected
         ),
         AssertionStatus::Confirmed => {
-            matches!(to, AssertionStatus::Confirmed | AssertionStatus::Disputed | AssertionStatus::Rejected)
+            matches!(
+                to,
+                AssertionStatus::Confirmed | AssertionStatus::Disputed | AssertionStatus::Rejected
+            )
         }
         AssertionStatus::Disputed => {
-            matches!(to, AssertionStatus::Disputed | AssertionStatus::Confirmed | AssertionStatus::Rejected)
+            matches!(
+                to,
+                AssertionStatus::Disputed | AssertionStatus::Confirmed | AssertionStatus::Rejected
+            )
         }
         AssertionStatus::Rejected => matches!(to, AssertionStatus::Rejected),
     }

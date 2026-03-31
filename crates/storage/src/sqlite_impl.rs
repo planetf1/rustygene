@@ -1,18 +1,18 @@
 use crate::{
-    AuditLogEntry, EntityType, JsonAssertion, JsonExportManifest, JsonExportMode,
-    JsonExportResult, JsonImportMode, JsonImportReport, Pagination, RelationshipEdge, ResearchLogFilter, Storage, StorageError,
-    StorageErrorCode,
+    AuditLogEntry, EntityType, JsonAssertion, JsonExportManifest, JsonExportMode, JsonExportResult,
+    JsonImportMode, JsonImportReport, Pagination, RelationshipEdge, ResearchLogFilter, Storage,
+    StorageError, StorageErrorCode,
 };
-use rustygene_core::assertion::{compute_assertion_idempotency_key, AssertionStatus, EvidenceType};
-use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
+use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
+use rustygene_core::assertion::{AssertionStatus, EvidenceType, compute_assertion_idempotency_key};
 use rustygene_core::event::Event;
+use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
 use rustygene_core::family::{Family, Relationship};
 use rustygene_core::lds::LdsOrdinance;
-use rustygene_core::place::Place;
 use rustygene_core::person::Person;
+use rustygene_core::place::Place;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
-use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -63,13 +63,10 @@ impl SqliteBackend {
     }
 
     pub fn rebuild_all_snapshots(&self) -> Result<usize, StorageError> {
-        let mut conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let tx = conn.transaction().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -116,13 +113,10 @@ impl SqliteBackend {
     }
 
     pub fn export_json_dump(&self, mode: JsonExportMode) -> Result<JsonExportResult, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let mut payload = serde_json::Map::new();
         let mut entity_counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -155,9 +149,11 @@ impl SqliteBackend {
         }
 
         let schema_version: i64 = conn
-            .query_row("SELECT COALESCE(MAX(version), 0) FROM refinery_schema_history", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM refinery_schema_history",
+                [],
+                |row| row.get(0),
+            )
             .unwrap_or(0);
 
         let manifest = JsonExportManifest {
@@ -224,9 +220,15 @@ impl SqliteBackend {
         }
     }
 
-    fn query_entity_snapshot_rows(conn: &Connection, table: &str) -> Result<Vec<Value>, StorageError> {
+    fn query_entity_snapshot_rows(
+        conn: &Connection,
+        table: &str,
+    ) -> Result<Vec<Value>, StorageError> {
         let mut stmt = conn
-            .prepare(&format!("SELECT data FROM {} ORDER BY created_at DESC", table))
+            .prepare(&format!(
+                "SELECT data FROM {} ORDER BY created_at DESC",
+                table
+            ))
             .map_err(|e| StorageError {
                 code: StorageErrorCode::Backend,
                 message: format!("Prepare {} query failed: {}", table, e),
@@ -331,13 +333,10 @@ impl SqliteBackend {
     }
 
     fn insert_sync(&self, table: &str, id: EntityId, data: &Value) -> Result<(), StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
@@ -365,13 +364,10 @@ impl SqliteBackend {
         table: &str,
         id: EntityId,
     ) -> Result<T, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let mut stmt = conn
             .prepare(&format!("SELECT data FROM {} WHERE id = ?", table))
@@ -401,13 +397,10 @@ impl SqliteBackend {
     }
 
     fn update_sync(&self, table: &str, id: EntityId, data: &Value) -> Result<(), StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         // Get version first
         let version: u32 = {
@@ -460,13 +453,10 @@ impl SqliteBackend {
     }
 
     fn delete_sync(&self, table: &str, id: EntityId) -> Result<(), StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         conn.execute(
             &format!("DELETE FROM {} WHERE id = ?", table),
@@ -485,13 +475,10 @@ impl SqliteBackend {
         table: &str,
         pagination: Pagination,
     ) -> Result<Vec<T>, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let mut stmt = conn
             .prepare(&format!(
@@ -530,58 +517,55 @@ impl SqliteBackend {
         Ok(result)
     }
 
-        /// Like `list_sync` but adds a SQL `WHERE` clause for tables that store
-        /// multiple entity types (e.g., `families` holds both `Family` and
-        /// `Relationship` rows).
-        fn list_filtered_sync<T: serde::de::DeserializeOwned>(
-            &self,
-            table: &str,
-            where_clause: &str,
-            pagination: Pagination,
-        ) -> Result<Vec<T>, StorageError> {
-            let conn = self
-                .connection
-                .lock()
-                .map_err(|e| StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: format!("Mutex lock failed: {}", e),
-                })?;
+    /// Like `list_sync` but adds a SQL `WHERE` clause for tables that store
+    /// multiple entity types (e.g., `families` holds both `Family` and
+    /// `Relationship` rows).
+    fn list_filtered_sync<T: serde::de::DeserializeOwned>(
+        &self,
+        table: &str,
+        where_clause: &str,
+        pagination: Pagination,
+    ) -> Result<Vec<T>, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
-            let sql = format!(
-                "SELECT data FROM {} WHERE {} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                table, where_clause
-            );
-            let mut stmt = conn.prepare(&sql).map_err(|e| StorageError {
+        let sql = format!(
+            "SELECT data FROM {} WHERE {} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            table, where_clause
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Prepare failed: {}", e),
+        })?;
+
+        let rows: Vec<String> = stmt
+            .query_map(
+                rusqlite::params![pagination.limit as i32, pagination.offset as i32],
+                |row| row.get(0),
+            )
+            .map_err(|e| StorageError {
                 code: StorageErrorCode::Backend,
-                message: format!("Prepare failed: {}", e),
+                message: format!("Query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Collect failed: {}", e),
             })?;
 
-            let rows: Vec<String> = stmt
-                .query_map(
-                    rusqlite::params![pagination.limit as i32, pagination.offset as i32],
-                    |row| row.get(0),
-                )
-                .map_err(|e| StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: format!("Query failed: {}", e),
-                })?
-                .collect::<SqliteResult<Vec<_>>>()
-                .map_err(|e| StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: format!("Collect failed: {}", e),
-                })?;
-
-            let mut result = Vec::new();
-            for s in rows {
-                let v: Value = serde_json::from_str(&s).map_err(|e| StorageError {
-                    code: StorageErrorCode::Serialization,
-                    message: format!("JSON parse failed: {}", e),
-                })?;
-                result.push(Self::deserialize(&v)?);
-            }
-
-            Ok(result)
+        let mut result = Vec::new();
+        for s in rows {
+            let v: Value = serde_json::from_str(&s).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("JSON parse failed: {}", e),
+            })?;
+            result.push(Self::deserialize(&v)?);
         }
+
+        Ok(result)
+    }
 
     fn entity_type_to_db(entity_type: EntityType) -> &'static str {
         match entity_type {
@@ -769,10 +753,11 @@ impl SqliteBackend {
             reviewed_by_text,
         } = data;
 
-        let id: EntityId = serde_json::from_str(&format!("\"{}\"", id_str)).map_err(|e| StorageError {
-            code: StorageErrorCode::Serialization,
-            message: format!("Invalid assertion id '{}': {}", id_str, e),
-        })?;
+        let id: EntityId =
+            serde_json::from_str(&format!("\"{}\"", id_str)).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Invalid assertion id '{}': {}", id_str, e),
+            })?;
         let value: Value = serde_json::from_str(&value_text).map_err(|e| StorageError {
             code: StorageErrorCode::Serialization,
             message: format!("Invalid assertion value JSON: {}", e),
@@ -786,12 +771,13 @@ impl SqliteBackend {
             })?,
             None => Vec::new(),
         };
-        let proposed_by = rustygene_core::types::ActorRef::from_str(&proposed_by_text).map_err(|e| {
-            StorageError {
-                code: StorageErrorCode::Serialization,
-                message: format!("Invalid proposed_by '{}': {}", proposed_by_text, e),
-            }
-        })?;
+        let proposed_by =
+            rustygene_core::types::ActorRef::from_str(&proposed_by_text).map_err(|e| {
+                StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Invalid proposed_by '{}': {}", proposed_by_text, e),
+                }
+            })?;
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_text)
             .map_err(|e| StorageError {
                 code: StorageErrorCode::Serialization,
@@ -810,12 +796,12 @@ impl SqliteBackend {
             None => None,
         };
         let reviewed_by = match reviewed_by_text {
-            Some(actor) => Some(
-                rustygene_core::types::ActorRef::from_str(&actor).map_err(|e| StorageError {
+            Some(actor) => Some(rustygene_core::types::ActorRef::from_str(&actor).map_err(
+                |e| StorageError {
                     code: StorageErrorCode::Serialization,
                     message: format!("Invalid reviewed_by '{}': {}", actor, e),
-                })?,
-            ),
+                },
+            )?),
             None => None,
         };
 
@@ -856,10 +842,11 @@ impl SqliteBackend {
             message: format!("Entity {} not found in table {}", entity_id, table),
         })?;
 
-        let mut snapshot_json: Value = serde_json::from_str(&current_data_str).map_err(|e| StorageError {
-            code: StorageErrorCode::Serialization,
-            message: format!("Existing snapshot JSON parse failed: {}", e),
-        })?;
+        let mut snapshot_json: Value =
+            serde_json::from_str(&current_data_str).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Existing snapshot JSON parse failed: {}", e),
+            })?;
 
         let obj = snapshot_json.as_object_mut().ok_or(StorageError {
             code: StorageErrorCode::Serialization,
@@ -924,26 +911,25 @@ impl SqliteBackend {
     }
 
     pub fn import_json_dump(&self, mode: JsonImportMode) -> Result<JsonImportReport, StorageError> {
-        let mut conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let payload = match mode {
             JsonImportMode::Directory { input_dir } => {
                 let manifest_path = input_dir.join("manifest.json");
-                let manifest_text = fs::read_to_string(&manifest_path).map_err(|e| StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: format!("Failed to read manifest: {}", e),
-                })?;
+                let manifest_text =
+                    fs::read_to_string(&manifest_path).map_err(|e| StorageError {
+                        code: StorageErrorCode::Backend,
+                        message: format!("Failed to read manifest: {}", e),
+                    })?;
 
-                let manifest: JsonExportManifest = serde_json::from_str(&manifest_text).map_err(|e| StorageError {
-                    code: StorageErrorCode::Serialization,
-                    message: format!("Manifest deserialization failed: {}", e),
-                })?;
+                let manifest: JsonExportManifest =
+                    serde_json::from_str(&manifest_text).map_err(|e| StorageError {
+                        code: StorageErrorCode::Serialization,
+                        message: format!("Manifest deserialization failed: {}", e),
+                    })?;
 
                 let mut payload = serde_json::Map::new();
                 payload.insert(
@@ -963,22 +949,25 @@ impl SqliteBackend {
                         message: format!("Failed to read directory entry: {}", e),
                     })?;
                     let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("json") && path.file_name().and_then(|n| n.to_str()) != Some("manifest.json") {
+                    if path.extension().and_then(|e| e.to_str()) == Some("json")
+                        && path.file_name().and_then(|n| n.to_str()) != Some("manifest.json")
+                    {
                         let content = fs::read_to_string(&path).map_err(|e| StorageError {
                             code: StorageErrorCode::Backend,
                             message: format!("Failed to read JSON file: {}", e),
                         })?;
-                        let table_name = path
-                            .file_stem()
-                            .and_then(|n| n.to_str())
-                            .ok_or(StorageError {
-                                code: StorageErrorCode::Backend,
-                                message: "Invalid file name".to_string(),
+                        let table_name =
+                            path.file_stem()
+                                .and_then(|n| n.to_str())
+                                .ok_or(StorageError {
+                                    code: StorageErrorCode::Backend,
+                                    message: "Invalid file name".to_string(),
+                                })?;
+                        let value: Value =
+                            serde_json::from_str(&content).map_err(|e| StorageError {
+                                code: StorageErrorCode::Serialization,
+                                message: format!("JSON deserialization failed: {}", e),
                             })?;
-                        let value: Value = serde_json::from_str(&content).map_err(|e| StorageError {
-                            code: StorageErrorCode::Serialization,
-                            message: format!("JSON deserialization failed: {}", e),
-                        })?;
                         payload.insert(table_name.to_string(), value);
                     }
                 }
@@ -1008,10 +997,11 @@ impl SqliteBackend {
             message: "Import payload missing manifest".to_string(),
         })?;
 
-        let manifest: JsonExportManifest = serde_json::from_value(manifest_value.clone()).map_err(|e| StorageError {
-            code: StorageErrorCode::Serialization,
-            message: format!("Manifest deserialization failed: {}", e),
-        })?;
+        let manifest: JsonExportManifest =
+            serde_json::from_value(manifest_value.clone()).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Manifest deserialization failed: {}", e),
+            })?;
 
         let tx = conn.transaction().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -1024,8 +1014,16 @@ impl SqliteBackend {
         let mut research_log_entries_imported: usize = 0;
 
         let entity_tables = [
-            "persons", "families", "events", "places", "sources", "citations",
-            "repositories", "media", "notes", "lds_ordinances",
+            "persons",
+            "families",
+            "events",
+            "places",
+            "sources",
+            "citations",
+            "repositories",
+            "media",
+            "notes",
+            "lds_ordinances",
         ];
 
         for table in &entity_tables {
@@ -1038,10 +1036,13 @@ impl SqliteBackend {
 
                     // The exported format contains only the `data` field (the entity object)
                     // Extract id from the entity, then reconstruct the row
-                    let id = row_obj.get("id").and_then(|v| v.as_str()).ok_or(StorageError {
-                        code: StorageErrorCode::Backend,
-                        message: format!("Missing or invalid id in {} entity", table),
-                    })?;
+                    let id = row_obj
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .ok_or(StorageError {
+                            code: StorageErrorCode::Backend,
+                            message: format!("Missing or invalid id in {} entity", table),
+                        })?;
 
                     let version: i64 = 1;
                     let schema_version: i64 = manifest.schema_version;
@@ -1082,25 +1083,52 @@ impl SqliteBackend {
                     message: "Invalid assertion structure".to_string(),
                 })?;
 
-                let id = assertion_obj.get("id").and_then(|v| v.as_str()).ok_or(StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: "Missing assertion id".to_string(),
-                })?;
+                let id = assertion_obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or(StorageError {
+                        code: StorageErrorCode::Backend,
+                        message: "Missing assertion id".to_string(),
+                    })?;
 
-                let entity_id = assertion_obj.get("entity_id").and_then(|v| v.as_str()).ok_or(StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: "Missing assertion entity_id".to_string(),
-                })?;
+                let entity_id = assertion_obj
+                    .get("entity_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or(StorageError {
+                        code: StorageErrorCode::Backend,
+                        message: "Missing assertion entity_id".to_string(),
+                    })?;
 
-                let entity_type = assertion_obj.get("entity_type").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let field = assertion_obj.get("field").and_then(|v| v.as_str()).unwrap_or("");
+                let entity_type = assertion_obj
+                    .get("entity_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let field = assertion_obj
+                    .get("field")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let value = assertion_obj.get("value").cloned().unwrap_or(Value::Null);
-                let confidence: f64 = assertion_obj.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                let status = assertion_obj.get("status").and_then(|v| v.as_str()).unwrap_or("Confirmed");
-                let evidence_type = assertion_obj.get("evidence_type").and_then(|v| v.as_str()).unwrap_or("Direct");
+                let confidence: f64 = assertion_obj
+                    .get("confidence")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.5);
+                let status = assertion_obj
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Confirmed");
+                let evidence_type = assertion_obj
+                    .get("evidence_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Direct");
                 let source_citations = assertion_obj.get("source_citations").cloned();
-                let proposed_by = assertion_obj.get("proposed_by").and_then(|v| v.as_str()).unwrap_or("import");
-                let created_at = assertion_obj.get("created_at").and_then(|v| v.as_str()).unwrap_or("1970-01-01T00:00:00Z");
+                let proposed_by = assertion_obj
+                    .get("proposed_by")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("import");
+                let created_at = assertion_obj
+                    .get("created_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1970-01-01T00:00:00Z");
 
                 tx.execute(
                     "INSERT OR REPLACE INTO assertions (id, entity_id, entity_type, field, value, confidence, status, evidence_type, source_citations, proposed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1141,13 +1169,28 @@ impl SqliteBackend {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| Uuid::new_v4().to_string());
-                let actor = entry_obj.get("actor").and_then(|v| v.as_str()).unwrap_or("import");
-                let entity_id = entry_obj.get("entity_id").and_then(|v| v.as_str()).unwrap_or("");
-                let entity_type = entry_obj.get("entity_type").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let action = entry_obj.get("action").and_then(|v| v.as_str()).unwrap_or("import");
+                let actor = entry_obj
+                    .get("actor")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("import");
+                let entity_id = entry_obj
+                    .get("entity_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let entity_type = entry_obj
+                    .get("entity_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let action = entry_obj
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("import");
                 let old_value = entry_obj.get("old_value_json");
                 let new_value = entry_obj.get("new_value_json");
-                let timestamp = entry_obj.get("timestamp_iso").and_then(|v| v.as_str()).unwrap_or("1970-01-01T00:00:00Z");
+                let timestamp = entry_obj
+                    .get("timestamp_iso")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1970-01-01T00:00:00Z");
 
                 tx.execute(
                     "INSERT OR REPLACE INTO audit_log (id, actor, entity_id, entity_type, action, old_value_json, new_value_json, timestamp_iso) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1183,11 +1226,23 @@ impl SqliteBackend {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| Uuid::new_v4().to_string());
-                let date = entry_obj.get("date_iso").and_then(|v| v.as_str()).unwrap_or("1970-01-01");
-                let objective = entry_obj.get("objective").and_then(|v| v.as_str()).unwrap_or("");
-                let result = entry_obj.get("result").and_then(|v| v.as_str()).unwrap_or("inconclusive");
+                let date = entry_obj
+                    .get("date_iso")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1970-01-01");
+                let objective = entry_obj
+                    .get("objective")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let result = entry_obj
+                    .get("result")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("inconclusive");
                 let repository_id = entry_obj.get("repository_id").and_then(|v| v.as_str());
-                let search_terms = entry_obj.get("search_terms").and_then(|v| v.as_str()).unwrap_or("");
+                let search_terms = entry_obj
+                    .get("search_terms")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let source_id = entry_obj.get("source_id").and_then(|v| v.as_str());
 
                 tx.execute(
@@ -1226,7 +1281,10 @@ impl SqliteBackend {
     }
 }
 
-fn write_json_file(path: impl AsRef<Path>, value: &impl serde::Serialize) -> Result<(), StorageError> {
+fn write_json_file(
+    path: impl AsRef<Path>,
+    value: &impl serde::Serialize,
+) -> Result<(), StorageError> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| StorageError {
         code: StorageErrorCode::Serialization,
         message: format!("JSON serialization failed: {}", e),
@@ -1234,7 +1292,11 @@ fn write_json_file(path: impl AsRef<Path>, value: &impl serde::Serialize) -> Res
 
     fs::write(path.as_ref(), bytes).map_err(|e| StorageError {
         code: StorageErrorCode::Backend,
-        message: format!("Failed to write JSON file '{}': {}", path.as_ref().display(), e),
+        message: format!(
+            "Failed to write JSON file '{}': {}",
+            path.as_ref().display(),
+            e
+        ),
     })
 }
 
@@ -1531,13 +1593,10 @@ impl Storage for SqliteBackend {
             message: format!("Idempotency key computation failed: {}", e),
         })?;
 
-        let mut conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let tx = conn.transaction().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -1575,21 +1634,16 @@ impl Storage for SqliteBackend {
                     code: StorageErrorCode::Backend,
                     message: format!("Preferred lookup failed: {}", e),
                 })?;
-            if existing_preferred == 0 {
-                1
-            } else {
-                0
-            }
+            if existing_preferred == 0 { 1 } else { 0 }
         } else {
             0
         };
 
-        let source_citations_json = serde_json::to_string(&assertion.source_citations).map_err(|e| {
-            StorageError {
+        let source_citations_json =
+            serde_json::to_string(&assertion.source_citations).map_err(|e| StorageError {
                 code: StorageErrorCode::Serialization,
                 message: format!("Source citations serialization failed: {}", e),
-            }
-        })?;
+            })?;
 
         tx.execute(
             "INSERT INTO assertions (
@@ -1611,7 +1665,10 @@ impl Storage for SqliteBackend {
                 assertion.proposed_by.to_string(),
                 assertion.reviewed_by.as_ref().map(ToString::to_string),
                 assertion.created_at.to_rfc3339(),
-                assertion.reviewed_at.as_ref().map(chrono::DateTime::to_rfc3339),
+                assertion
+                    .reviewed_at
+                    .as_ref()
+                    .map(chrono::DateTime::to_rfc3339),
                 Self::evidence_type_to_db(&assertion.evidence_type),
                 idempotency_key,
             ],
@@ -1635,13 +1692,10 @@ impl Storage for SqliteBackend {
         &self,
         entity_id: EntityId,
     ) -> Result<Vec<JsonAssertion>, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let mut stmt = conn
             .prepare(
@@ -1676,10 +1730,12 @@ impl Storage for SqliteBackend {
                 message: format!("Query failed: {}", e),
             })?;
 
-        let rows = mapped.collect::<SqliteResult<Vec<_>>>().map_err(|e| StorageError {
-            code: StorageErrorCode::Backend,
-            message: format!("Row collection failed: {}", e),
-        })?;
+        let rows = mapped
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Row collection failed: {}", e),
+            })?;
 
         rows.into_iter()
             .map(
@@ -1721,13 +1777,10 @@ impl Storage for SqliteBackend {
         entity_id: EntityId,
         field: &str,
     ) -> Result<Vec<JsonAssertion>, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let mut stmt = conn
             .prepare(
@@ -1762,10 +1815,12 @@ impl Storage for SqliteBackend {
                 message: format!("Query failed: {}", e),
             })?;
 
-        let rows = mapped.collect::<SqliteResult<Vec<_>>>().map_err(|e| StorageError {
-            code: StorageErrorCode::Backend,
-            message: format!("Row collection failed: {}", e),
-        })?;
+        let rows = mapped
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Row collection failed: {}", e),
+            })?;
 
         rows.into_iter()
             .map(
@@ -1807,13 +1862,10 @@ impl Storage for SqliteBackend {
         assertion_id: EntityId,
         status: AssertionStatus,
     ) -> Result<(), StorageError> {
-        let mut conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let tx = conn.transaction().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -1879,12 +1931,11 @@ impl Storage for SqliteBackend {
             });
         }
 
-        let parsed_entity_id: EntityId = serde_json::from_str(&format!("\"{}\"", entity_id)).map_err(|e| {
-            StorageError {
+        let parsed_entity_id: EntityId = serde_json::from_str(&format!("\"{}\"", entity_id))
+            .map_err(|e| StorageError {
                 code: StorageErrorCode::Serialization,
                 message: format!("Invalid entity id '{}': {}", entity_id, e),
-            }
-        })?;
+            })?;
 
         Self::recompute_entity_snapshot_tx(&tx, parsed_entity_id, entity_type)?;
 
@@ -1900,24 +1951,21 @@ impl Storage for SqliteBackend {
         &self,
         entry: &ResearchLogEntry,
     ) -> Result<(), StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
-
-        let search_terms = serde_json::to_string(&entry.search_terms).map_err(|e| StorageError {
-            code: StorageErrorCode::Serialization,
-            message: format!("Failed to serialize search_terms: {}", e),
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
         })?;
-        let citations_created = serde_json::to_string(&entry.citations_created).map_err(|e| {
-            StorageError {
+
+        let search_terms =
+            serde_json::to_string(&entry.search_terms).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Failed to serialize search_terms: {}", e),
+            })?;
+        let citations_created =
+            serde_json::to_string(&entry.citations_created).map_err(|e| StorageError {
                 code: StorageErrorCode::Serialization,
                 message: format!("Failed to serialize citations_created: {}", e),
-            }
-        })?;
+            })?;
         let person_refs = serde_json::to_string(&entry.person_refs).map_err(|e| StorageError {
             code: StorageErrorCode::Serialization,
             message: format!("Failed to serialize person_refs: {}", e),
@@ -1957,13 +2005,10 @@ impl Storage for SqliteBackend {
     }
 
     async fn get_research_log_entry(&self, id: EntityId) -> Result<ResearchLogEntry, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let row = conn
             .query_row(
@@ -2033,13 +2078,10 @@ impl Storage for SqliteBackend {
     }
 
     async fn delete_research_log_entry(&self, id: EntityId) -> Result<(), StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         conn.execute(
             "DELETE FROM research_log WHERE id = ?",
@@ -2058,13 +2100,10 @@ impl Storage for SqliteBackend {
         filter: &ResearchLogFilter,
         pagination: Pagination,
     ) -> Result<Vec<ResearchLogEntry>, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         use rusqlite::types::Value as SqlValue;
         let mut query = String::from(
@@ -2081,7 +2120,9 @@ impl Storage for SqliteBackend {
 
         if let Some(result) = &filter.result {
             query.push_str(" AND result = ?");
-            args.push(SqlValue::Text(Self::search_result_to_db(result).to_string()));
+            args.push(SqlValue::Text(
+                Self::search_result_to_db(result).to_string(),
+            ));
         }
 
         if let Some(date_from) = &filter.date_from_iso {
@@ -2137,13 +2178,10 @@ impl Storage for SqliteBackend {
     }
 
     async fn append_audit_log_entry(&self, entry: &AuditLogEntry) -> Result<(), StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         conn.execute(
             "INSERT INTO audit_log (timestamp, actor, entity_id, entity_type, action, old_value, new_value)
@@ -2167,13 +2205,10 @@ impl Storage for SqliteBackend {
     }
 
     async fn upsert_relationship_edge(&self, _edge: &RelationshipEdge) -> Result<(), StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let edge = if _edge.directed || _edge.from_entity <= _edge.to_entity {
             _edge.clone()
@@ -2224,13 +2259,10 @@ impl Storage for SqliteBackend {
         &self,
         entity_id: EntityId,
     ) -> Result<Vec<RelationshipEdge>, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let mut stmt = conn
             .prepare(
@@ -2287,13 +2319,10 @@ impl Storage for SqliteBackend {
         person_id: EntityId,
         max_depth: u32,
     ) -> Result<Vec<EntityId>, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let mut stmt = conn
             .prepare(
@@ -2341,13 +2370,10 @@ impl Storage for SqliteBackend {
         person_id: EntityId,
         max_depth: u32,
     ) -> Result<Vec<EntityId>, StorageError> {
-        let conn = self
-            .connection
-            .lock()
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("Mutex lock failed: {}", e),
-            })?;
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
 
         let mut stmt = conn
             .prepare(
@@ -2399,7 +2425,6 @@ mod tests {
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-
     fn create_test_backend() -> SqliteBackend {
         let mut conn = Connection::open_in_memory().expect("open db");
         crate::run_migrations(&mut conn).expect("migrate");
@@ -2422,7 +2447,6 @@ mod tests {
         let retrieved = backend.get_person(person.id).await.expect("get");
         assert_eq!(person.id, retrieved.id);
     }
-
 
     #[tokio::test]
     async fn delete_removes_entity() {
@@ -2533,7 +2557,12 @@ mod tests {
             .await
             .expect("create name assertion");
         backend
-            .create_assertion(entity_id, EntityType::Person, "birth_date", &birth_assertion)
+            .create_assertion(
+                entity_id,
+                EntityType::Person,
+                "birth_date",
+                &birth_assertion,
+            )
             .await
             .expect("create birth assertion");
 
@@ -2748,7 +2777,15 @@ mod tests {
             .expect("append audit log entry");
 
         let conn = backend.connection.lock().expect("lock");
-        let row: (String, String, String, String, String, Option<String>, Option<String>) = conn
+        let row: (
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ) = conn
             .query_row(
                 "SELECT timestamp, actor, entity_id, entity_type, action, old_value, new_value
                  FROM audit_log ORDER BY id DESC LIMIT 1",
@@ -3084,14 +3121,24 @@ mod tests {
         assert!(out_dir.join("assertions.json").exists());
         assert!(out_dir.join("audit_log.json").exists());
         assert!(out_dir.join("research_log.json").exists());
-        assert!(result.manifest.entity_counts.get("persons").copied().unwrap_or(0) >= 1);
-        assert!(result
-            .manifest
-            .entity_counts
-            .get("assertions")
-            .copied()
-            .unwrap_or(0)
-            >= 1);
+        assert!(
+            result
+                .manifest
+                .entity_counts
+                .get("persons")
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        );
+        assert!(
+            result
+                .manifest
+                .entity_counts
+                .get("assertions")
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        );
 
         let _ = std::fs::remove_dir_all(&out_dir);
     }
@@ -3126,7 +3173,8 @@ mod tests {
 
         assert_eq!(result.output_path, out_file);
         let payload = std::fs::read_to_string(&out_file).expect("read exported file");
-        let parsed: serde_json::Value = serde_json::from_str(&payload).expect("parse exported json");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).expect("parse exported json");
 
         assert!(parsed.get("manifest").is_some());
         assert!(parsed.get("persons").is_some());
@@ -3172,7 +3220,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let export_file = std::env::temp_dir().join(format!("rustygene-export-roundtrip-{suffix}.json"));
+        let export_file =
+            std::env::temp_dir().join(format!("rustygene-export-roundtrip-{suffix}.json"));
 
         let export_result = export_backend
             .export_json_dump(JsonExportMode::SingleFile {
@@ -3367,5 +3416,3 @@ mod tests {
         let _ = std::fs::remove_file(&export_file_2);
     }
 }
-
-

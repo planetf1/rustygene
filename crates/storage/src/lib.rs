@@ -3,12 +3,12 @@ pub mod sqlite_impl;
 use refinery::embed_migrations;
 use rusqlite::Connection;
 use rustygene_core::assertion::{Assertion, AssertionStatus};
-use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
 use rustygene_core::event::Event;
+use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
 use rustygene_core::family::{Family, Relationship};
 use rustygene_core::lds::LdsOrdinance;
-use rustygene_core::place::Place;
 use rustygene_core::person::Person;
+use rustygene_core::place::Place;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use serde_json::Value;
@@ -185,8 +185,10 @@ pub trait Storage {
     async fn get_relationship(&self, id: EntityId) -> Result<Relationship, StorageError>;
     async fn update_relationship(&self, relationship: &Relationship) -> Result<(), StorageError>;
     async fn delete_relationship(&self, id: EntityId) -> Result<(), StorageError>;
-    async fn list_relationships(&self, pagination: Pagination)
-        -> Result<Vec<Relationship>, StorageError>;
+    async fn list_relationships(
+        &self,
+        pagination: Pagination,
+    ) -> Result<Vec<Relationship>, StorageError>;
 
     async fn create_event(&self, event: &Event) -> Result<(), StorageError>;
     async fn get_event(&self, id: EntityId) -> Result<Event, StorageError>;
@@ -264,7 +266,8 @@ pub trait Storage {
         status: AssertionStatus,
     ) -> Result<(), StorageError>;
 
-    async fn create_research_log_entry(&self, entry: &ResearchLogEntry) -> Result<(), StorageError>;
+    async fn create_research_log_entry(&self, entry: &ResearchLogEntry)
+    -> Result<(), StorageError>;
     async fn get_research_log_entry(&self, id: EntityId) -> Result<ResearchLogEntry, StorageError>;
     async fn delete_research_log_entry(&self, id: EntityId) -> Result<(), StorageError>;
     async fn list_research_log_entries(
@@ -322,7 +325,10 @@ mod tests {
         };
 
         for table in REQUIRED_SCHEMA_TABLES {
-            assert!(tables.contains(*table), "expected table '{table}' to exist after migration");
+            assert!(
+                tables.contains(*table),
+                "expected table '{table}' to exist after migration"
+            );
         }
 
         let indexes: HashSet<String> = {
@@ -337,7 +343,10 @@ mod tests {
         };
 
         for index in REQUIRED_SCHEMA_INDEXES {
-            assert!(indexes.contains(*index), "expected index '{index}' to exist after migration");
+            assert!(
+                indexes.contains(*index),
+                "expected index '{index}' to exist after migration"
+            );
         }
     }
 }

@@ -3,16 +3,16 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rusqlite::Connection;
-use rustygene_core::evidence::{Media, Note, Repository, Source};
 use rustygene_core::event::Event;
+use rustygene_core::evidence::{Media, Note, Repository, Source};
 use rustygene_core::family::Family;
 use rustygene_core::person::Person;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use rustygene_gedcom::{
-    ExportPrivacyPolicy, family_to_fam_node, import_gedcom_to_sqlite,
-    media_to_obje_node, note_to_note_node,
-    person_to_indi_node_with_policy, render_gedcom_file, repository_to_repo_node, source_to_sour_node,
+    ExportPrivacyPolicy, family_to_fam_node, import_gedcom_to_sqlite, media_to_obje_node,
+    note_to_note_node, person_to_indi_node_with_policy, render_gedcom_file,
+    repository_to_repo_node, source_to_sour_node,
 };
 use rustygene_storage::{
     JsonExportMode, JsonImportMode, Pagination, ResearchLogFilter, Storage, run_migrations,
@@ -205,22 +205,23 @@ fn main() {
     let backend = SqliteBackend::new(connection);
 
     match cli.command {
-        Commands::RebuildSnapshots => {
-            match backend.rebuild_all_snapshots() {
-                Ok(rebuilt_count) => match cli.format {
-                    OutputFormat::Text => {
-                        println!("rebuild-snapshots complete: {} entity snapshots rebuilt", rebuilt_count);
-                    }
-                    OutputFormat::Json => {
-                        println!("{{\"rebuilt\":{}}}", rebuilt_count);
-                    }
-                },
-                Err(err) => {
-                    eprintln!("failed to rebuild snapshots: {}", err.message);
-                    std::process::exit(1);
+        Commands::RebuildSnapshots => match backend.rebuild_all_snapshots() {
+            Ok(rebuilt_count) => match cli.format {
+                OutputFormat::Text => {
+                    println!(
+                        "rebuild-snapshots complete: {} entity snapshots rebuilt",
+                        rebuilt_count
+                    );
                 }
+                OutputFormat::Json => {
+                    println!("{{\"rebuilt\":{}}}", rebuilt_count);
+                }
+            },
+            Err(err) => {
+                eprintln!("failed to rebuild snapshots: {}", err.message);
+                std::process::exit(1);
             }
-        }
+        },
         Commands::ResearchLog { command } => {
             run_research_log_command(command, &backend, cli.format);
         }
@@ -242,7 +243,14 @@ fn main() {
             file,
             job_id,
         } => {
-            run_import_command(&db_path, import_format, &file, job_id.as_deref(), cli.format, &backend);
+            run_import_command(
+                &db_path,
+                import_format,
+                &file,
+                job_id.as_deref(),
+                cli.format,
+                &backend,
+            );
         }
     }
 }
@@ -293,7 +301,10 @@ fn run_import_command(
             match import_gedcom_to_sqlite(&mut conn, &effective_job_id, &content) {
                 Ok(report) => {
                     if let Err(err) = backend.rebuild_all_snapshots() {
-                        eprintln!("warning: snapshot rebuild failed after import: {}", err.message);
+                        eprintln!(
+                            "warning: snapshot rebuild failed after import: {}",
+                            err.message
+                        );
                     }
                     match output_format {
                         OutputFormat::Text => {
@@ -302,7 +313,10 @@ fn run_import_command(
                                 println!("  {}: {} entities created", entity_type, count);
                             }
                             println!("  assertions created: {}", report.assertions_created);
-                            println!("  unknown tags preserved: {}", report.unknown_tags_preserved);
+                            println!(
+                                "  unknown tags preserved: {}",
+                                report.unknown_tags_preserved
+                            );
                         }
                         OutputFormat::Json => {
                             let json = serde_json::json!({
@@ -428,7 +442,8 @@ fn run_export_command(
                     std::process::exit(1);
                 }
             };
-            let repositories: Vec<Repository> = match load_snapshot_entities(&conn, "repositories") {
+            let repositories: Vec<Repository> = match load_snapshot_entities(&conn, "repositories")
+            {
                 Ok(v) => v,
                 Err(err) => {
                     eprintln!("failed to load repositories for GEDCOM export: {}", err);
@@ -490,7 +505,11 @@ fn run_export_command(
                     && !parent.as_os_str().is_empty()
                     && let Err(err) = std::fs::create_dir_all(parent)
                 {
-                    eprintln!("failed to create export directory '{}': {}", parent.display(), err);
+                    eprintln!(
+                        "failed to create export directory '{}': {}",
+                        parent.display(),
+                        err
+                    );
                     std::process::exit(1);
                 }
 
@@ -521,7 +540,10 @@ fn load_snapshot_entities<T: serde::de::DeserializeOwned>(
         .map_err(|e| format!("collect {} failed: {}", table, e))?;
 
     rows.into_iter()
-        .map(|raw| serde_json::from_str::<T>(&raw).map_err(|e| format!("parse {} row failed: {}", table, e)))
+        .map(|raw| {
+            serde_json::from_str::<T>(&raw)
+                .map_err(|e| format!("parse {} row failed: {}", table, e))
+        })
         .collect()
 }
 
@@ -544,7 +566,10 @@ fn load_family_entities(conn: &Connection) -> Result<Vec<Family>, String> {
         .map_err(|e| format!("collect families failed: {}", e))?;
 
     rows.into_iter()
-        .map(|raw| serde_json::from_str::<Family>(&raw).map_err(|e| format!("parse families row failed: {}", e)))
+        .map(|raw| {
+            serde_json::from_str::<Family>(&raw)
+                .map_err(|e| format!("parse families row failed: {}", e))
+        })
         .collect()
 }
 
@@ -774,13 +799,16 @@ fn build_show_event_output(conn: &Connection, id: EntityId) -> Result<ShowEventO
             |row| row.get(0),
         )
         .map_err(|e| format!("event not found or unreadable: {}", e))?;
-    let event: Event =
-        serde_json::from_str(&event_json).map_err(|e| format!("failed to parse event JSON: {}", e))?;
+    let event: Event = serde_json::from_str(&event_json)
+        .map_err(|e| format!("failed to parse event JSON: {}", e))?;
 
     Ok(ShowEventOutput { event })
 }
 
-fn query_linked_event_ids_by_person_id_text(conn: &Connection, person_id: &str) -> Result<Vec<String>, String> {
+fn query_linked_event_ids_by_person_id_text(
+    conn: &Connection,
+    person_id: &str,
+) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT DISTINCT e.id
@@ -803,7 +831,10 @@ fn query_linked_events_for_person(conn: &Connection, id: EntityId) -> Result<Vec
     query_linked_event_ids_by_person_id_text(conn, &id.to_string())
 }
 
-fn query_linked_families_for_person(conn: &Connection, id: EntityId) -> Result<Vec<String>, String> {
+fn query_linked_families_for_person(
+    conn: &Connection,
+    id: EntityId,
+) -> Result<Vec<String>, String> {
     let id_text = id.to_string();
     let mut stmt = conn
         .prepare(
@@ -839,10 +870,12 @@ fn query_linked_sources_for_person(conn: &Connection, id: EntityId) -> Result<Ve
         )
         .map_err(|e| format!("failed to prepare linked sources query: {}", e))?;
 
-    stmt.query_map(rusqlite::params![id.to_string()], |row| row.get::<_, String>(0))
-        .map_err(|e| format!("failed to query linked sources: {}", e))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("failed to collect linked sources: {}", e))
+    stmt.query_map(rusqlite::params![id.to_string()], |row| {
+        row.get::<_, String>(0)
+    })
+    .map_err(|e| format!("failed to query linked sources: {}", e))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| format!("failed to collect linked sources: {}", e))
 }
 
 fn run_query_command(command: QueryCommands, db_path: &PathBuf, format: OutputFormat) {
@@ -919,7 +952,9 @@ fn run_query_command(command: QueryCommands, db_path: &PathBuf, format: OutputFo
                         Some(raw) => {
                             let value: Result<serde_json::Value, _> = serde_json::from_str(&raw);
                             match value {
-                                Ok(v) => Ok(v.as_str().map(ToString::to_string).or(Some(v.to_string()))),
+                                Ok(v) => {
+                                    Ok(v.as_str().map(ToString::to_string).or(Some(v.to_string())))
+                                }
                                 Err(_) => Ok(Some(raw)),
                             }
                         }
@@ -1080,7 +1115,13 @@ fn run_research_log_command(
                             println!("no research-log entries found");
                         } else {
                             for e in entries {
-                                println!("{} {} {:?} {}", e.id, e.date.to_rfc3339(), e.result, e.objective);
+                                println!(
+                                    "{} {} {:?} {}",
+                                    e.id,
+                                    e.date.to_rfc3339(),
+                                    e.result,
+                                    e.objective
+                                );
                             }
                         }
                     }
@@ -1184,13 +1225,7 @@ mod tests {
 
     #[test]
     fn clap_parses_research_log_list() {
-        let cli = Cli::parse_from([
-            "rustygene",
-            "research-log",
-            "list",
-            "--result",
-            "not-found",
-        ]);
+        let cli = Cli::parse_from(["rustygene", "research-log", "list", "--result", "not-found"]);
 
         match cli.command {
             Commands::ResearchLog {

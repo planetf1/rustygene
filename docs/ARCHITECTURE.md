@@ -213,18 +213,26 @@ filter using `json_extract(data, '$.relationship_type')` accordingly.
 |---|---|
 | `crates/core/tests/property_based.rs` | Proptest: `DateValue` ordering, `Assertion` status transitions, `PersonName` serde round-trip |
 | `crates/storage/tests/integration_storage.rs` | Full CRUD + audit log + research log + JSON export/import + snapshot rebuild |
-| `crates/gedcom/tests/e2e_gate_test.rs` | **Phase 1A gate test:** GEDCOM import → query → show → GEDCOM export → re-import → name comparison; JSON export → re-import → assertion count comparison |
+| `crates/gedcom/tests/e2e_gate_test.rs` | **Phase 1A gate test:** GEDCOM import → query → show → GEDCOM export → re-import → **name comparison only** (spec §8.3 requires full assertion graph comparison — tracked by bead `rustygene-yvk`); JSON export → re-import → assertion count comparison |
 
 Running all tests: `cargo test --workspace`
 
 ---
 
-## Phase 1B Roadmap
+## Remaining Phase 1A Work
 
-The following items are deferred to Phase 1B:
-- GEDCOM event export (BIRT, DEAT, MARR, etc.) to INDI/FAM nodes
+The following items are required by `INITIAL_SPEC.md` and must be completed
+before Phase 1A can be closed. See `docs/GEDCOM_GAPS.md` for full details.
+
+- Person event import from INDI records (bead `rustygene-46m`)
+- GEDCOM event export to INDI/FAM nodes (bead `rustygene-ed8`)
+- Citation round-trip from SOUR references (bead `rustygene-h88`)
+- Gate test assertion graph comparison (bead `rustygene-yvk`)
+
+## Phase 2+ Roadmap
+
+The following items are deferred beyond Phase 1A:
 - Full GEDCOM tag coverage: NOTE, REPO, OBJE, ASSO, CHAN
-- Citation round-trip from SOUR references within events
 - xref alias table for preserving original GEDCOM IDs
 - Gramps XML import
 - Full-text search (FTS5) with phonetic/fuzzy matching

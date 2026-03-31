@@ -188,9 +188,11 @@ mod tests {
         let json_source = serde_json::to_string(&source).expect("serialize source");
         let json_citation = serde_json::to_string(&citation).expect("serialize citation");
 
-        let round_repo: Repository = serde_json::from_str(&json_repo).expect("deserialize repository");
+        let round_repo: Repository =
+            serde_json::from_str(&json_repo).expect("deserialize repository");
         let round_source: Source = serde_json::from_str(&json_source).expect("deserialize source");
-        let round_citation: Citation = serde_json::from_str(&json_citation).expect("deserialize citation");
+        let round_citation: Citation =
+            serde_json::from_str(&json_citation).expect("deserialize citation");
 
         assert_eq!(round_repo, repository);
         assert_eq!(round_source, source);
@@ -246,12 +248,15 @@ mod tests {
         let json_media_ref = serde_json::to_string(&media_ref).expect("serialize media_ref");
         let json_note = serde_json::to_string(&note).expect("serialize note");
         let json_note_ref = serde_json::to_string(&note_ref).expect("serialize note_ref");
-        let json_citation_ref = serde_json::to_string(&citation_ref).expect("serialize citation_ref");
+        let json_citation_ref =
+            serde_json::to_string(&citation_ref).expect("serialize citation_ref");
 
         let round_media: Media = serde_json::from_str(&json_media).expect("deserialize media");
-        let round_media_ref: MediaRef = serde_json::from_str(&json_media_ref).expect("deserialize media_ref");
+        let round_media_ref: MediaRef =
+            serde_json::from_str(&json_media_ref).expect("deserialize media_ref");
         let round_note: Note = serde_json::from_str(&json_note).expect("deserialize note");
-        let round_note_ref: NoteRef = serde_json::from_str(&json_note_ref).expect("deserialize note_ref");
+        let round_note_ref: NoteRef =
+            serde_json::from_str(&json_note_ref).expect("deserialize note_ref");
         let round_citation_ref: CitationRef =
             serde_json::from_str(&json_citation_ref).expect("deserialize citation_ref");
 

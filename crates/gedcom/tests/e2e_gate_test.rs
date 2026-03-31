@@ -15,8 +15,7 @@ use rustygene_gedcom::{
     person_to_indi_node_with_policy, render_gedcom_file, source_to_sour_node,
 };
 use rustygene_storage::{
-    JsonExportMode, JsonImportMode, Pagination, Storage, run_migrations,
-    sqlite_impl::SqliteBackend,
+    JsonExportMode, JsonImportMode, Pagination, Storage, run_migrations, sqlite_impl::SqliteBackend,
 };
 
 fn temp_db_path(label: &str) -> PathBuf {
@@ -86,11 +85,9 @@ fn load_families_from_snapshot(conn: &Connection) -> Vec<Family> {
 /// Count total confirmed assertions in a database.
 /// Count total assertions (any status) in a database.
 fn count_all_assertions(conn: &Connection) -> usize {
-    conn.query_row(
-        "SELECT COUNT(*) FROM assertions",
-        [],
-        |row| row.get::<_, usize>(0),
-    )
+    conn.query_row("SELECT COUNT(*) FROM assertions", [], |row| {
+        row.get::<_, usize>(0)
+    })
     .expect("count all assertions")
 }
 
@@ -261,14 +258,12 @@ async fn e2e_phase1a_gate_test() {
     // GEDCOM round-trip preserves structural data: persons, names, families.
     // Events and some metadata are noted as known gaps in docs/GEDCOM_GAPS.md.
     assert_eq!(
-        person_count2,
-        person_count1,
+        person_count2, person_count1,
         "GEDCOM round-trip must preserve the same number of persons \
          (original={person_count1}, reimport={person_count2})"
     );
     assert_eq!(
-        family_count2,
-        family_count1,
+        family_count2, family_count1,
         "GEDCOM round-trip must preserve the same number of families \
          (original={family_count1}, reimport={family_count2})"
     );
@@ -324,8 +319,7 @@ async fn e2e_phase1a_gate_test() {
     // =========================================================================
     // Step 9: Compare assertion graphs after JSON round-trip (must be lossless)
     // =========================================================================
-    let conn3_for_reads =
-        Connection::open(&db3_path).expect("open DB3 for reads");
+    let conn3_for_reads = Connection::open(&db3_path).expect("open DB3 for reads");
     let assertion_count3 = count_all_assertions(&conn3_for_reads);
 
     assert_eq!(

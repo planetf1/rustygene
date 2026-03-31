@@ -1,19 +1,28 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::{collections::{BTreeMap, HashMap}, num::ParseIntError};
+use std::{
+    collections::{BTreeMap, HashMap},
+    num::ParseIntError,
+};
 
 use chrono::Utc;
 use rusqlite::Connection;
-use rustygene_core::assertion::{Assertion, AssertionStatus, EvidenceType, compute_assertion_idempotency_key};
-use rustygene_core::evidence::{Citation, CitationRef, Media, Note, NoteType, Repository, RepositoryRef, RepositoryType, Source};
+use rustygene_core::assertion::{
+    Assertion, AssertionStatus, EvidenceType, compute_assertion_idempotency_key,
+};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
-use rustygene_core::family::{ChildLink, Family, LineageType, PartnerLink, Relationship, RelationshipType};
+use rustygene_core::evidence::{
+    Citation, CitationRef, Media, Note, NoteType, Repository, RepositoryRef, RepositoryType, Source,
+};
+use rustygene_core::family::{
+    ChildLink, Family, LineageType, PartnerLink, Relationship, RelationshipType,
+};
 use rustygene_core::lds::{LdsOrdinance, LdsOrdinanceType, LdsStatus};
 use rustygene_core::person::{NameType, Person, PersonName, Surname, SurnameOrigin};
 use rustygene_core::types::DateValue;
 use rustygene_core::types::{ActorRef, EntityId, Gender};
 use rustygene_storage::{EntityType, JsonAssertion, run_migrations};
-use serde_json::{json, to_value, Value};
+use serde_json::{Value, json, to_value};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,8 +149,7 @@ pub fn build_gedcom_tree(lines: &[GedcomLine]) -> Result<Vec<GedcomNode>, Gedcom
                 line_index: idx,
                 message: format!(
                     "invalid level jump from {} to {}",
-                    current_depth,
-                    node.level
+                    current_depth, node.level
                 ),
             });
         }
@@ -177,7 +185,8 @@ pub fn build_gedcom_tree(lines: &[GedcomLine]) -> Result<Vec<GedcomNode>, Gedcom
 /// Map root-level `INDI` nodes into domain `Person` entities.
 #[must_use]
 pub fn map_indi_nodes_to_persons(nodes: &[GedcomNode]) -> Vec<Person> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| node.tag == "INDI")
         .map(map_indi_node_to_person)
         .collect()
@@ -233,10 +242,7 @@ pub fn map_source_chain(nodes: &[GedcomNode]) -> SourceChainMapping {
     let mut source_xref_to_id: HashMap<String, EntityId> = HashMap::new();
 
     // Only process SOUR nodes that are root-level records (have xref), not metadata in HEAD
-    for node in nodes
-        .iter()
-        .filter(|n| n.tag == "SOUR" && n.xref.is_some())
-    {
+    for node in nodes.iter().filter(|n| n.tag == "SOUR" && n.xref.is_some()) {
         let source = map_source_node(node, &repo_xref_to_id);
         if let Some(xref) = &node.xref {
             source_xref_to_id.insert(xref.clone(), source.id);
@@ -249,10 +255,7 @@ pub fn map_source_chain(nodes: &[GedcomNode]) -> SourceChainMapping {
     let mut node_citation_refs = Vec::new();
 
     // Skip HEAD and TRLR nodes when collecting citations
-    for owner in nodes
-        .iter()
-        .filter(|n| n.tag != "HEAD" && n.tag != "TRLR")
-    {
+    for owner in nodes.iter().filter(|n| n.tag != "HEAD" && n.tag != "TRLR") {
         collect_citations_from_owner(
             owner,
             owner,
@@ -291,7 +294,10 @@ const GEDCOM_ENTITY_NAMESPACE: Uuid = Uuid::from_u128(0x9c92f726_f6cf_47ea_8a64_
 
 fn entity_id_from_xref(record_tag: &str, xref: &str) -> EntityId {
     let namespaced = format!("{record_tag}:{xref}");
-    EntityId(Uuid::new_v5(&GEDCOM_ENTITY_NAMESPACE, namespaced.as_bytes()))
+    EntityId(Uuid::new_v5(
+        &GEDCOM_ENTITY_NAMESPACE,
+        namespaced.as_bytes(),
+    ))
 }
 
 /// Map media objects, notes, and LDS ordinance records from GEDCOM nodes.
@@ -505,7 +511,9 @@ fn map_family_events(
             match nested.tag.as_str() {
                 "DATE" => {
                     if let Some(value) = &nested.value {
-                        event.date = Some(DateValue::Textual { value: value.clone() });
+                        event.date = Some(DateValue::Textual {
+                            value: value.clone(),
+                        });
                     }
                 }
                 "PLAC" => {
@@ -554,7 +562,13 @@ fn map_obje_node(node: &GedcomNode) -> Media {
                 media.content_hash = format!("unhashed:{}", media.file_path);
             }
             "FORM" => {
-                media.mime_type = match child.value.as_deref().unwrap_or_default().to_ascii_lowercase().as_str() {
+                media.mime_type = match child
+                    .value
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
                     "jpg" | "jpeg" => "image/jpeg".to_string(),
                     "png" => "image/png".to_string(),
                     "tif" | "tiff" => "image/tiff".to_string(),
@@ -647,7 +661,9 @@ fn map_lds_ordinance_node(node: &GedcomNode, ordinance_type: LdsOrdinanceType) -
             "TEMP" => ordinance.temple_code = child.value.clone(),
             "DATE" => {
                 if let Some(value) = &child.value {
-                    ordinance.date = Some(DateValue::Textual { value: value.clone() });
+                    ordinance.date = Some(DateValue::Textual {
+                        value: value.clone(),
+                    });
                 }
             }
             tag if tag.starts_with('_') => {
@@ -663,7 +679,12 @@ fn map_lds_ordinance_node(node: &GedcomNode, ordinance_type: LdsOrdinanceType) -
 }
 
 fn map_lds_status(value: Option<&str>) -> LdsStatus {
-    match value.unwrap_or_default().trim().to_ascii_uppercase().as_str() {
+    match value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_uppercase()
+        .as_str()
+    {
         "BIC" => LdsStatus::Bic,
         "CANCELED" | "CANCELLED" => LdsStatus::Canceled,
         "CHILD" => LdsStatus::Child,
@@ -692,7 +713,10 @@ fn map_lds_status(value: Option<&str>) -> LdsStatus {
 fn map_repository_node(node: &GedcomNode) -> Repository {
     let mut repository = Repository {
         id: EntityId::new(),
-        name: node.value.clone().unwrap_or_else(|| "Unnamed repository".to_string()),
+        name: node
+            .value
+            .clone()
+            .unwrap_or_else(|| "Unnamed repository".to_string()),
         repository_type: RepositoryType::Archive,
         address: None,
         urls: Vec::new(),
@@ -707,7 +731,12 @@ fn map_repository_node(node: &GedcomNode) -> Repository {
 
     for child in &node.children {
         match child.tag.as_str() {
-            "NAME" => repository.name = child.value.clone().unwrap_or_else(|| repository.name.clone()),
+            "NAME" => {
+                repository.name = child
+                    .value
+                    .clone()
+                    .unwrap_or_else(|| repository.name.clone())
+            }
             "ADDR" => repository.address = child.value.clone(),
             "WWW" => {
                 if let Some(url) = &child.value {
@@ -740,7 +769,9 @@ fn map_source_node(node: &GedcomNode, repo_xref_to_id: &HashMap<String, EntityId
     };
 
     if let Some(xref) = &node.xref {
-        source._raw_gedcom.insert("XREF".to_string(), xref.to_string());
+        source
+            ._raw_gedcom
+            .insert("XREF".to_string(), xref.to_string());
     }
 
     for child in &node.children {
@@ -1078,7 +1109,10 @@ fn get_node_mut<'a>(roots: &'a mut [GedcomNode], path: &[usize]) -> Option<&'a m
     Some(current)
 }
 
-fn parse_physical_line(raw_line: &str, line_number: usize) -> Result<GedcomLine, GedcomTokenizerError> {
+fn parse_physical_line(
+    raw_line: &str,
+    line_number: usize,
+) -> Result<GedcomLine, GedcomTokenizerError> {
     let trimmed = raw_line.trim_start();
     if trimmed.is_empty() {
         return Err(GedcomTokenizerError {
@@ -1167,10 +1201,7 @@ fn citations_for_root(
     owner_xref: Option<&str>,
 ) -> Vec<CitationRef> {
     refs.iter()
-        .filter(|entry| {
-            entry.owner_tag == owner_tag
-                && entry.owner_xref.as_deref() == owner_xref
-        })
+        .filter(|entry| entry.owner_tag == owner_tag && entry.owner_xref.as_deref() == owner_xref)
         .map(|entry| entry.citation_ref.clone())
         .collect()
 }
@@ -1772,7 +1803,10 @@ pub fn import_gedcom_to_sqlite(
 
     let mut entities_created_by_type = BTreeMap::new();
 
-    let mut insert_entities = |label: &str, table: &str, entities: Vec<(EntityId, serde_json::Value)>| -> Result<(), GedcomImportError> {
+    let mut insert_entities = |label: &str,
+                               table: &str,
+                               entities: Vec<(EntityId, serde_json::Value)>|
+     -> Result<(), GedcomImportError> {
         for (id, data) in &entities {
             insert_entity_snapshot_row(&tx, table, *id, data)?;
         }
@@ -1968,7 +2002,8 @@ fn insert_assertion_row(
             preferred,
             source_citations_json,
             imported.assertion.proposed_by.to_string(),
-            imported.assertion
+            imported
+                .assertion
                 .reviewed_by
                 .as_ref()
                 .map(ToString::to_string),
@@ -2138,11 +2173,8 @@ fn find_last_node_path_at_level(
     prefer_standard_tags: bool,
 ) -> Option<Vec<usize>> {
     for idx in (0..nodes.len()).rev() {
-        if let Some(mut child_path) = find_last_node_path_at_level(
-            &nodes[idx].children,
-            target_level,
-            prefer_standard_tags,
-        )
+        if let Some(mut child_path) =
+            find_last_node_path_at_level(&nodes[idx].children, target_level, prefer_standard_tags)
         {
             let mut path = vec![idx];
             path.append(&mut child_path);
@@ -2193,7 +2225,9 @@ fn append_raw_gedcom_subtrees(
         .iter()
         .filter(|(key, _)| key.starts_with("CUSTOM_"))
         .collect();
-    entries.sort_by(|(left_key, _), (right_key, _)| raw_key_order(left_key).cmp(&raw_key_order(right_key)));
+    entries.sort_by(|(left_key, _), (right_key, _)| {
+        raw_key_order(left_key).cmp(&raw_key_order(right_key))
+    });
 
     for (_, value) in entries {
         for subtree in deserialize_serialized_subtrees(value) {
@@ -2207,7 +2241,7 @@ fn append_raw_gedcom_subtrees(
 // ============================================================================
 
 /// Converts a Person entity to a GEDCOM INDI node.
-/// 
+///
 /// Follows GEDCOM 5.5.1 standard for INDI records.
 /// Serializes names, gender, and any raw GEDCOM custom tags.
 #[must_use]
@@ -2291,7 +2325,8 @@ fn person_name_to_name_node(name: &PersonName) -> GedcomNode {
 
     // SURN: surname(s) concatenated
     if !name.surnames.is_empty() {
-        let surname_str = name.surnames
+        let surname_str = name
+            .surnames
             .iter()
             .map(|s| s.value.as_str())
             .collect::<Vec<_>>()
@@ -2328,7 +2363,8 @@ fn person_name_to_name_node(name: &PersonName) -> GedcomNode {
 
     // Build NAME value: "Given /Surname/" or similar standard format
     let name_value = if !name.surnames.is_empty() {
-        let surn = name.surnames
+        let surn = name
+            .surnames
             .iter()
             .map(|s| s.value.as_str())
             .collect::<Vec<_>>()
@@ -2749,7 +2785,10 @@ fn write_value_lines(out: &mut String, level: u8, prefix: &str, value: &str) {
         }
         out.push('\n');
 
-        for extra_chunk in split_utf8_by_bytes(segment, continuation_limit.max(1)).iter().skip(1) {
+        for extra_chunk in split_utf8_by_bytes(segment, continuation_limit.max(1))
+            .iter()
+            .skip(1)
+        {
             out.push_str(&continuation_prefix);
             if !extra_chunk.is_empty() {
                 out.push(' ');
@@ -2850,10 +2889,7 @@ mod tests {
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].tag, "NOTE");
-        assert_eq!(
-            lines[0].value.as_deref(),
-            Some("Hello world\nSecond line")
-        );
+        assert_eq!(lines[0].value.as_deref(), Some("Hello world\nSecond line"));
     }
 
     #[test]
@@ -3002,8 +3038,7 @@ mod tests {
 
     #[test]
     fn preserves_nested_custom_tags_in_raw_gedcom() {
-        let input =
-            "0 @I1@ INDI\n1 NAME John /Doe/\n2 _MARNM Jones\n1 SEX M\n";
+        let input = "0 @I1@ INDI\n1 NAME John /Doe/\n2 _MARNM Jones\n1 SEX M\n";
         let lines = tokenize_gedcom(input).expect("tokenize should succeed");
         let roots = build_gedcom_tree(&lines).expect("tree build should succeed");
 
@@ -3035,21 +3070,36 @@ mod tests {
         let source = &mapped.sources[0];
         assert_eq!(source.title, "1881 England Census");
         assert_eq!(source.author.as_deref(), Some("Registrar General"));
-        assert_eq!(source.publication_info.as_deref(), Some("Public Record Office"));
+        assert_eq!(
+            source.publication_info.as_deref(),
+            Some("Public Record Office")
+        );
         assert_eq!(source.abbreviation.as_deref(), Some("1881 Census"));
         assert_eq!(source.repository_refs.len(), 1);
-        assert_eq!(source.repository_refs[0].call_number.as_deref(), Some("RG11"));
-        assert_eq!(source.repository_refs[0].media_type.as_deref(), Some("Microfilm"));
+        assert_eq!(
+            source.repository_refs[0].call_number.as_deref(),
+            Some("RG11")
+        );
+        assert_eq!(
+            source.repository_refs[0].media_type.as_deref(),
+            Some("Microfilm")
+        );
 
         assert_eq!(mapped.citations.len(), 1);
         assert_eq!(mapped.citations[0].source_id, source.id);
         assert_eq!(mapped.citations[0].page.as_deref(), Some("42"));
         assert_eq!(mapped.citations[0].confidence_level, Some(3));
-        assert_eq!(mapped.citations[0].transcription.as_deref(), Some("Household entry"));
+        assert_eq!(
+            mapped.citations[0].transcription.as_deref(),
+            Some("Household entry")
+        );
 
         assert_eq!(mapped.entity_citation_refs.len(), 1);
         assert_eq!(mapped.entity_citation_refs[0].owner_tag, "INDI");
-        assert_eq!(mapped.entity_citation_refs[0].owner_xref.as_deref(), Some("@I1@"));
+        assert_eq!(
+            mapped.entity_citation_refs[0].owner_xref.as_deref(),
+            Some("@I1@")
+        );
         assert_eq!(
             mapped.entity_citation_refs[0].citation_ref.citation_id,
             mapped.citations[0].id
@@ -3114,7 +3164,10 @@ mod tests {
         let mapped = map_media_note_lds(&roots);
 
         assert_eq!(mapped.lds_ordinances.len(), 2);
-        assert_eq!(mapped.lds_ordinances[0].ordinance_type, LdsOrdinanceType::Baptism);
+        assert_eq!(
+            mapped.lds_ordinances[0].ordinance_type,
+            LdsOrdinanceType::Baptism
+        );
         assert_eq!(mapped.lds_ordinances[0].status, LdsStatus::Completed);
         assert_eq!(mapped.lds_ordinances[0].temple_code.as_deref(), Some("LON"));
 
@@ -3144,11 +3197,18 @@ mod tests {
         assert_eq!(family.child_links.len(), 1);
         assert_eq!(family.child_links[0].lineage_type, LineageType::Biological);
 
-        assert!(mapped.events.iter().any(|e| e.event_type == EventType::Marriage));
-        assert!(mapped
-            .events
-            .iter()
-            .any(|e| matches!(e.event_type, EventType::Custom(ref s) if s == "divorce")));
+        assert!(
+            mapped
+                .events
+                .iter()
+                .any(|e| e.event_type == EventType::Marriage)
+        );
+        assert!(
+            mapped
+                .events
+                .iter()
+                .any(|e| matches!(e.event_type, EventType::Custom(ref s) if s == "divorce"))
+        );
         assert!(mapped.events.iter().all(|e| e.participants.len() == 2));
     }
 
@@ -3174,12 +3234,18 @@ mod tests {
         let persons = map_indi_nodes_to_persons(&roots);
         let family_mapping = map_family_nodes(&roots);
 
-        let person_ids: std::collections::HashSet<_> = persons.iter().map(|person| person.id).collect();
-        assert!(family_mapping
-            .events
-            .iter()
-            .flat_map(|event| event.participants.iter().map(|participant| participant.person_id))
-            .all(|person_id| person_ids.contains(&person_id)));
+        let person_ids: std::collections::HashSet<_> =
+            persons.iter().map(|person| person.id).collect();
+        assert!(
+            family_mapping
+                .events
+                .iter()
+                .flat_map(|event| event
+                    .participants
+                    .iter()
+                    .map(|participant| participant.person_id))
+                .all(|person_id| person_ids.contains(&person_id))
+        );
     }
 
     #[test]
@@ -3216,9 +3282,15 @@ mod tests {
             .expect("event assertion");
 
         assert_eq!(event_assertion.assertion.status, AssertionStatus::Confirmed);
-        assert_eq!(event_assertion.assertion.evidence_type, EvidenceType::Direct);
+        assert_eq!(
+            event_assertion.assertion.evidence_type,
+            EvidenceType::Direct
+        );
         assert_eq!(event_assertion.assertion.confidence, 1.0);
-        assert_eq!(event_assertion.assertion.proposed_by, ActorRef::Import("job-42".to_string()));
+        assert_eq!(
+            event_assertion.assertion.proposed_by,
+            ActorRef::Import("job-42".to_string())
+        );
         assert_eq!(event_assertion.assertion.source_citations.len(), 1);
 
         let participant_assertions: Vec<_> = assertions
@@ -3267,16 +3339,41 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
             .expect("count assertions");
 
-        assert_eq!(report.entities_created_by_type.get("person").copied().unwrap_or(0), person_count as usize);
-        let family_plus_relationship = report.entities_created_by_type.get("family").copied().unwrap_or(0)
+        assert_eq!(
+            report
+                .entities_created_by_type
+                .get("person")
+                .copied()
+                .unwrap_or(0),
+            person_count as usize
+        );
+        let family_plus_relationship = report
+            .entities_created_by_type
+            .get("family")
+            .copied()
+            .unwrap_or(0)
             + report
                 .entities_created_by_type
                 .get("relationship")
                 .copied()
                 .unwrap_or(0);
         assert_eq!(family_plus_relationship, family_count as usize);
-        assert_eq!(report.entities_created_by_type.get("event").copied().unwrap_or(0), event_count as usize);
-        assert_eq!(report.entities_created_by_type.get("source").copied().unwrap_or(0), source_count as usize);
+        assert_eq!(
+            report
+                .entities_created_by_type
+                .get("event")
+                .copied()
+                .unwrap_or(0),
+            event_count as usize
+        );
+        assert_eq!(
+            report
+                .entities_created_by_type
+                .get("source")
+                .copied()
+                .unwrap_or(0),
+            source_count as usize
+        );
         assert_eq!(report.assertions_created, assertion_count as usize);
 
         let mut stmt = connection
@@ -3285,19 +3382,25 @@ mod tests {
             )
             .expect("prepare spot check assertions query");
         let assertion_fields = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .expect("query assertions")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect assertions");
 
-        assert!(assertion_fields.len() >= 5, "expected at least five spot-check assertions");
+        assert!(
+            assertion_fields.len() >= 5,
+            "expected at least five spot-check assertions"
+        );
         assert!(assertion_fields.iter().any(|(field, _)| field == "name"));
         assert!(assertion_fields.iter().any(|(field, _)| field == "gender"));
     }
 
     #[test]
     fn import_pipeline_reports_unknown_tags_preserved() {
-        let input = "0 @I1@ INDI\n1 NAME Jane /Doe/\n1 _MILT Naval Reserve\n2 TYPE service\n0 TRLR\n";
+        let input =
+            "0 @I1@ INDI\n1 NAME Jane /Doe/\n1 _MILT Naval Reserve\n2 TYPE service\n0 TRLR\n";
         let mut connection = Connection::open_in_memory().expect("open in-memory sqlite");
 
         let report = import_gedcom_to_sqlite(&mut connection, "job-raw-tags", input)
@@ -3420,12 +3523,10 @@ mod tests {
             partner2_id: None,
             partner_link: PartnerLink::Unknown,
             couple_relationship: None,
-            child_links: vec![
-                ChildLink {
-                    child_id,
-                    lineage_type: LineageType::Adopted,
-                },
-            ],
+            child_links: vec![ChildLink {
+                child_id,
+                lineage_type: LineageType::Adopted,
+            }],
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
@@ -3497,7 +3598,10 @@ mod tests {
         // Verify NAME exists
         let name_node = node.children.iter().find(|n| n.tag == "NAME");
         assert!(name_node.is_some());
-        assert_eq!(name_node.unwrap().value, Some("The National Archives".to_string()));
+        assert_eq!(
+            name_node.unwrap().value,
+            Some("The National Archives".to_string())
+        );
 
         // Verify ADDR exists
         assert!(node.children.iter().any(|n| n.tag == "ADDR"));
@@ -3519,7 +3623,10 @@ mod tests {
         assert_eq!(node.level, 0);
         assert_eq!(node.xref, Some("@N1@".to_string()));
         assert_eq!(node.tag, "NOTE");
-        assert_eq!(node.value, Some("This is a research note about John Smith.".to_string()));
+        assert_eq!(
+            node.value,
+            Some("This is a research note about John Smith.".to_string())
+        );
         assert!(node.children.is_empty());
     }
 
@@ -3547,7 +3654,10 @@ mod tests {
         // Verify FILE exists
         let file_node = node.children.iter().find(|n| n.tag == "FILE");
         assert!(file_node.is_some());
-        assert_eq!(file_node.unwrap().value, Some("/path/to/census.jpg".to_string()));
+        assert_eq!(
+            file_node.unwrap().value,
+            Some("/path/to/census.jpg".to_string())
+        );
 
         // Verify MEDI exists
         let medi_node = node.children.iter().find(|n| n.tag == "MEDI");
@@ -3586,20 +3696,35 @@ mod tests {
 
         let uid_node = node.children.iter().find(|child| child.tag == "_UID");
         assert!(uid_node.is_some());
-        assert_eq!(uid_node.expect("uid custom tag").value.as_deref(), Some("abc-123"));
+        assert_eq!(
+            uid_node.expect("uid custom tag").value.as_deref(),
+            Some("abc-123")
+        );
 
-        let name_node = node.children.iter().find(|child| child.tag == "NAME").expect("name node");
-        let married_name = name_node.children.iter().find(|child| child.tag == "_MARNM");
+        let name_node = node
+            .children
+            .iter()
+            .find(|child| child.tag == "NAME")
+            .expect("name node");
+        let married_name = name_node
+            .children
+            .iter()
+            .find(|child| child.tag == "_MARNM");
         assert!(married_name.is_some());
-        assert_eq!(married_name.expect("marnm custom tag").value.as_deref(), Some("Jones"));
-        assert!(name_node
-            .children
-            .iter()
-            .find(|child| child.tag == "_MARNM")
-            .expect("marnm custom tag")
-            .children
-            .iter()
-            .any(|child| child.tag == "TYPE" && child.value.as_deref() == Some("aka")));
+        assert_eq!(
+            married_name.expect("marnm custom tag").value.as_deref(),
+            Some("Jones")
+        );
+        assert!(
+            name_node
+                .children
+                .iter()
+                .find(|child| child.tag == "_MARNM")
+                .expect("marnm custom tag")
+                .children
+                .iter()
+                .any(|child| child.tag == "TYPE" && child.value.as_deref() == Some("aka"))
+        );
     }
 
     #[test]
@@ -3623,11 +3748,13 @@ mod tests {
         let node = source_to_sour_node(&source, "@S1@");
         let template = node.children.iter().find(|child| child.tag == "_TMPLT");
         assert!(template.is_some());
-        assert!(template
-            .expect("template custom tag")
-            .children
-            .iter()
-            .any(|child| child.tag == "TYPE" && child.value.as_deref() == Some("household")));
+        assert!(
+            template
+                .expect("template custom tag")
+                .children
+                .iter()
+                .any(|child| child.tag == "TYPE" && child.value.as_deref() == Some("household"))
+        );
     }
 
     #[test]
@@ -3707,13 +3834,22 @@ mod tests {
             )]),
         };
 
-        let node = person_to_indi_node_with_policy(&person, "@I1@", ExportPrivacyPolicy::RedactLiving)
-            .expect("living person should be redacted, not omitted");
+        let node =
+            person_to_indi_node_with_policy(&person, "@I1@", ExportPrivacyPolicy::RedactLiving)
+                .expect("living person should be redacted, not omitted");
 
-        let name_node = node.children.iter().find(|child| child.tag == "NAME").expect("name node");
+        let name_node = node
+            .children
+            .iter()
+            .find(|child| child.tag == "NAME")
+            .expect("name node");
         assert_eq!(name_node.value.as_deref(), Some("Living"));
         assert!(!node.children.iter().any(|child| child.tag == "_UID"));
-        assert!(node.children.iter().any(|child| child.tag == "SEX" && child.value.as_deref() == Some("F")));
+        assert!(
+            node.children
+                .iter()
+                .any(|child| child.tag == "SEX" && child.value.as_deref() == Some("F"))
+        );
     }
 
     #[test]
@@ -3736,7 +3872,10 @@ mod tests {
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
-        assert!(person_to_indi_node_with_policy(&person, "@I1@", ExportPrivacyPolicy::RedactLiving).is_none());
+        assert!(
+            person_to_indi_node_with_policy(&person, "@I1@", ExportPrivacyPolicy::RedactLiving)
+                .is_none()
+        );
     }
 
     #[test]
@@ -3749,12 +3888,15 @@ mod tests {
             .expect("import round trip 1");
 
         // Debug: query source data
-        let mut stmt = conn1.prepare("SELECT data FROM sources ORDER BY rowid") .expect("prepare sources");
-        let sources_data: Vec<String> = stmt.query_map([], |row| row.get(0))
+        let mut stmt = conn1
+            .prepare("SELECT data FROM sources ORDER BY rowid")
+            .expect("prepare sources");
+        let sources_data: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
             .expect("query sources")
             .collect::<Result<Vec<String>, _>>()
             .unwrap_or_default();
-        
+
         eprintln!("\n=== FIRST IMPORT SOURCES ===");
         for (idx, json_str) in sources_data.iter().enumerate() {
             eprintln!("Source {}: {}", idx, json_str);
@@ -3790,12 +3932,15 @@ mod tests {
             .expect("import round trip 2");
 
         // Debug: query source data after re-import
-        let mut stmt = conn2.prepare("SELECT data FROM sources ORDER BY rowid").expect("prepare sources");
-        let sources_data2: Vec<String> = stmt.query_map([], |row| row.get(0))
+        let mut stmt = conn2
+            .prepare("SELECT data FROM sources ORDER BY rowid")
+            .expect("prepare sources");
+        let sources_data2: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
             .expect("query sources")
             .collect::<Result<Vec<String>, _>>()
             .unwrap_or_default();
-        
+
         eprintln!("\n=== SECOND IMPORT SOURCES ===");
         for (idx, json_str) in sources_data2.iter().enumerate() {
             eprintln!("Source {}: {}", idx, json_str);
@@ -3854,7 +3999,10 @@ mod tests {
             .expect("count assertions");
 
         assert_eq!(person_count, 0, "Empty GEDCOM should have zero persons");
-        assert_eq!(assertion_count, 0, "Empty GEDCOM should have zero assertions");
+        assert_eq!(
+            assertion_count, 0,
+            "Empty GEDCOM should have zero assertions"
+        );
     }
 
     #[test]
@@ -3873,7 +4021,10 @@ mod tests {
             .expect("count persons");
 
         assert_eq!(source_count, 1, "Source-only GEDCOM should have one source");
-        assert_eq!(person_count, 0, "Source-only GEDCOM should have zero persons");
+        assert_eq!(
+            person_count, 0,
+            "Source-only GEDCOM should have zero persons"
+        );
     }
 
     #[test]
@@ -3892,10 +4043,10 @@ mod tests {
         assert_eq!(note_count, 1, "GEDCOM should have one note");
 
         // Verify the note text was reconstructed properly
-        let mut stmt = conn.prepare("SELECT data FROM notes LIMIT 1").expect("prepare");
-        let note_json: String = stmt
-            .query_row([], |row| row.get(0))
-            .expect("get note");
+        let mut stmt = conn
+            .prepare("SELECT data FROM notes LIMIT 1")
+            .expect("prepare");
+        let note_json: String = stmt.query_row([], |row| row.get(0)).expect("get note");
         let note: Note = serde_json::from_str(&note_json).expect("parse note");
 
         assert!(
@@ -3921,15 +4072,16 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM lds_ordinances", [], |row| row.get(0))
             .expect("count LDS ordinances");
 
-        assert!(lds_count > 0, "GEDCOM with baptism should have LDS ordinances");
+        assert!(
+            lds_count > 0,
+            "GEDCOM with baptism should have LDS ordinances"
+        );
 
         // Verify LDS ordinance was parsed
         let mut stmt = conn
             .prepare("SELECT data FROM lds_ordinances LIMIT 1")
             .expect("prepare");
-        let lds_json: String = stmt
-            .query_row([], |row| row.get(0))
-            .expect("get LDS");
+        let lds_json: String = stmt.query_row([], |row| row.get(0)).expect("get LDS");
         let lds: LdsOrdinance = serde_json::from_str(&lds_json).expect("parse LDS");
 
         assert_eq!(
@@ -3955,10 +4107,10 @@ mod tests {
         assert_eq!(person_count, 1, "GEDCOM should have one person");
 
         // Verify person name was parsed correctly
-        let mut stmt = conn.prepare("SELECT data FROM persons LIMIT 1").expect("prepare");
-        let person_json: String = stmt
-            .query_row([], |row| row.get(0))
-            .expect("get person");
+        let mut stmt = conn
+            .prepare("SELECT data FROM persons LIMIT 1")
+            .expect("prepare");
+        let person_json: String = stmt.query_row([], |row| row.get(0)).expect("get person");
         let person: Person = serde_json::from_str(&person_json).expect("parse person");
 
         assert!(
@@ -3986,10 +4138,10 @@ mod tests {
         assert_eq!(person_count, 1, "GEDCOM should have one person");
 
         // Verify the non-ASCII characters survived import
-        let mut stmt = conn.prepare("SELECT data FROM persons LIMIT 1").expect("prepare");
-        let person_json: String = stmt
-            .query_row([], |row| row.get(0))
-            .expect("get person");
+        let mut stmt = conn
+            .prepare("SELECT data FROM persons LIMIT 1")
+            .expect("prepare");
+        let person_json: String = stmt.query_row([], |row| row.get(0)).expect("get person");
         let person: Person = serde_json::from_str(&person_json).expect("parse person");
 
         assert!(person.names[0].given_names.contains("François"));
@@ -4011,10 +4163,10 @@ mod tests {
 
         assert_eq!(person_count, 1);
 
-        let mut stmt = conn.prepare("SELECT data FROM persons LIMIT 1").expect("prepare");
-        let person_json: String = stmt
-            .query_row([], |row| row.get(0))
-            .expect("get person");
+        let mut stmt = conn
+            .prepare("SELECT data FROM persons LIMIT 1")
+            .expect("prepare");
+        let person_json: String = stmt.query_row([], |row| row.get(0)).expect("get person");
         let person: Person = serde_json::from_str(&person_json).expect("parse person");
 
         // Should have parsed the surname(s)
@@ -4036,10 +4188,10 @@ mod tests {
         assert_eq!(person_count, 1);
 
         // Verify custom tags were preserved in _raw_gedcom
-        let mut stmt = conn.prepare("SELECT data FROM persons LIMIT 1").expect("prepare");
-        let person_json: String = stmt
-            .query_row([], |row| row.get(0))
-            .expect("get person");
+        let mut stmt = conn
+            .prepare("SELECT data FROM persons LIMIT 1")
+            .expect("prepare");
+        let person_json: String = stmt.query_row([], |row| row.get(0)).expect("get person");
         let person: Person = serde_json::from_str(&person_json).expect("parse person");
 
         assert!(
@@ -4098,8 +4250,13 @@ mod tests {
             Err(e) => {
                 // Kennedy import failed - this is EXPECTED due to DateValue serialization
                 // issues in the current implementation. Document this for Phase 1B.
-                println!("! Kennedy import blocked: {} (expected - DateValue serialization issue)", e);
-                println!("  This is a known Phase 1B fix: proper DateValue serialization for GEDCOM dates");
+                println!(
+                    "! Kennedy import blocked: {} (expected - DateValue serialization issue)",
+                    e
+                );
+                println!(
+                    "  This is a known Phase 1B fix: proper DateValue serialization for GEDCOM dates"
+                );
             }
         }
     }
@@ -4135,7 +4292,10 @@ mod tests {
             Err(e) => {
                 // Kennedy import failed - this is EXPECTED due to DateValue serialization
                 // issues (some records in Kennedy use DATE fields that can't serialize)
-                println!("! Kennedy round-trip blocked: {} (expected - DateValue serialization issue)", e);
+                println!(
+                    "! Kennedy round-trip blocked: {} (expected - DateValue serialization issue)",
+                    e
+                );
                 println!("  This is a known Phase 1B fix: proper DateValue serialization");
             }
         }
@@ -4145,12 +4305,29 @@ mod tests {
     // and ANSEL encoding issues are resolved in the import pipeline
 
     // Helper function: query entity counts by table
-    fn query_entity_counts(conn: &Connection) -> Result<std::collections::BTreeMap<String, i64>, rusqlite::Error> {
-        let tables = vec!["persons", "families", "events", "places", "sources", "citations", "repositories", "media", "notes", "lds_ordinances"];
+    fn query_entity_counts(
+        conn: &Connection,
+    ) -> Result<std::collections::BTreeMap<String, i64>, rusqlite::Error> {
+        let tables = vec![
+            "persons",
+            "families",
+            "events",
+            "places",
+            "sources",
+            "citations",
+            "repositories",
+            "media",
+            "notes",
+            "lds_ordinances",
+        ];
         let mut result = std::collections::BTreeMap::new();
         for table in tables {
             let count: i64 = conn
-                .query_row(&format!("SELECT COUNT(*) FROM {} LIMIT 1", table), [], |row| row.get(0))
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {} LIMIT 1", table),
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap_or(0);
             if count > 0 {
                 result.insert(table.to_string(), count);
@@ -4160,19 +4337,21 @@ mod tests {
     }
 
     // Helper function: export all entities from a connection
-    fn export_entities_from_connection(conn: &Connection) -> Result<Vec<GedcomNode>, Box<dyn std::error::Error>> {
+    fn export_entities_from_connection(
+        conn: &Connection,
+    ) -> Result<Vec<GedcomNode>, Box<dyn std::error::Error>> {
         let mut nodes = Vec::new();
         let mut x_counter = 1usize;
 
         // Export persons
-        let mut stmt = conn.prepare("SELECT data FROM persons ORDER BY rowid") ?;
+        let mut stmt = conn.prepare("SELECT data FROM persons ORDER BY rowid")?;
         let persons = stmt.query_map([], |row| {
-            let json_str: String = row.get(0) ?;
+            let json_str: String = row.get(0)?;
             Ok(serde_json::from_str::<Person>(&json_str))
-        }) ?;
+        })?;
 
         for person_result in persons {
-            let person: Person = person_result ??;
+            let person: Person = person_result??;
             let xref = format!("@I{}@", x_counter);
             x_counter += 1;
             let node = person_to_indi_node_with_policy(&person, &xref, ExportPrivacyPolicy::None)
@@ -4181,17 +4360,17 @@ mod tests {
         }
 
         // Export families - query all families table, then filter by entity type
-        let mut stmt = conn.prepare("SELECT data FROM families ORDER BY rowid") ?;
+        let mut stmt = conn.prepare("SELECT data FROM families ORDER BY rowid")?;
         let families_data = stmt.query_map([], |row| {
-            let json_str: String = row.get(0) ?;
+            let json_str: String = row.get(0)?;
             Ok(json_str)
-        }) ?;
+        })?;
 
         let mut family_count = 0;
         let mut relationship_count = 0;
 
         for family_json_result in families_data {
-            let json_str = family_json_result ?;
+            let json_str = family_json_result?;
             if let Ok(family) = serde_json::from_str::<Family>(&json_str) {
                 family_count += 1;
                 let xref = format!("@F{}@", x_counter);
@@ -4213,42 +4392,42 @@ mod tests {
         }
 
         // Export sources
-        let mut stmt = conn.prepare("SELECT data FROM sources ORDER BY rowid") ?;
+        let mut stmt = conn.prepare("SELECT data FROM sources ORDER BY rowid")?;
         let sources = stmt.query_map([], |row| {
-            let json_str: String = row.get(0) ?;
+            let json_str: String = row.get(0)?;
             Ok(serde_json::from_str::<Source>(&json_str))
-        }) ?;
+        })?;
 
         for source_result in sources {
-            let source: Source = source_result ??;
+            let source: Source = source_result??;
             let xref = format!("@S{}@", x_counter);
             x_counter += 1;
             nodes.push(source_to_sour_node(&source, &xref));
         }
 
         // Export repositories
-        let mut stmt = conn.prepare("SELECT data FROM repositories ORDER BY rowid") ?;
+        let mut stmt = conn.prepare("SELECT data FROM repositories ORDER BY rowid")?;
         let repositories = stmt.query_map([], |row| {
-            let json_str: String = row.get(0) ?;
+            let json_str: String = row.get(0)?;
             Ok(serde_json::from_str::<Repository>(&json_str))
-        }) ?;
+        })?;
 
         for repo_result in repositories {
-            let repository: Repository = repo_result ??;
+            let repository: Repository = repo_result??;
             let xref = format!("@R{}@", x_counter);
             x_counter += 1;
             nodes.push(repository_to_repo_node(&repository, &xref));
         }
 
         // Export notes
-        let mut stmt = conn.prepare("SELECT data FROM notes ORDER BY rowid") ?;
+        let mut stmt = conn.prepare("SELECT data FROM notes ORDER BY rowid")?;
         let notes = stmt.query_map([], |row| {
-            let json_str: String = row.get(0) ?;
+            let json_str: String = row.get(0)?;
             Ok(serde_json::from_str::<Note>(&json_str))
-        }) ?;
+        })?;
 
         for note_result in notes {
-            let note: Note = note_result ??;
+            let note: Note = note_result??;
             let xref = format!("@N{}@", x_counter);
             x_counter += 1;
             nodes.push(note_to_note_node(&note, &xref));
@@ -4258,17 +4437,21 @@ mod tests {
     }
 
     // Helper function: get assertion field distribution
-    fn query_assertion_field_distribution(conn: &Connection) -> Result<std::collections::BTreeMap<String, i64>, rusqlite::Error> {
-        let mut stmt = conn.prepare("SELECT field, COUNT(*) as count FROM assertions GROUP BY field ORDER BY field") ?;
+    fn query_assertion_field_distribution(
+        conn: &Connection,
+    ) -> Result<std::collections::BTreeMap<String, i64>, rusqlite::Error> {
+        let mut stmt = conn.prepare(
+            "SELECT field, COUNT(*) as count FROM assertions GROUP BY field ORDER BY field",
+        )?;
         let field_counts = stmt.query_map([], |row| {
-            let field: String = row.get(0) ?;
-            let count: i64 = row.get(1) ?;
+            let field: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
             Ok((field, count))
-        }) ?;
+        })?;
 
         let mut result = std::collections::BTreeMap::new();
         for row_result in field_counts {
-            let (field, count) = row_result ?;
+            let (field, count) = row_result?;
             result.insert(field, count);
         }
         Ok(result)

@@ -131,13 +131,14 @@ The exported HEAD record omits several standard fields present in valid GEDCOM
 - `1 GEDC / 2 FORM LINEAGE-LINKED` — explicitly declares the GEDCOM form
 - `1 LANG <language>` — language of data
 
-### 11. Name TYPE Annotation Not Exported
+### 11. Name TYPE Annotation Not Parsed or Exported
 
 **Impact: LOW**
 
 `2 TYPE Birth` (or `Married`, `Also Known As`, etc.) name-type annotations are
-parsed but not re-emitted in the exported NAME node. The name type is stored on
-`PersonName` but `person_name_to_name_node` does not emit a TYPE subnode.
+**not parsed** during import — `parse_name_node` hardcodes `name_type:
+NameType::Birth` and the `TYPE` tag falls through the `_ => {}` arm. The
+exporter also does not emit a `TYPE` subnode.
 
 ---
 
@@ -171,17 +172,32 @@ The following issues were discovered and fixed during Phase 8.2:
 
 ---
 
-## Phase 3+ Work Items
+## Remaining Phase 1A Work Items
+
+The following items are required by `INITIAL_SPEC.md` Steps 4.3, 5.1, and 5.5
+and must be completed before Phase 1A can be closed. Each has a tracking bead.
+
+1. **Person event import** (bead `rustygene-46m`): Parse BIRT, DEAT, BURI, CHR,
+   etc. from INDI records into Event entities. Currently silently dropped by
+   `map_indi_node_to_person`.
+2. **Event export** (bead `rustygene-ed8`): Pass loaded events to
+   `person_to_indi_node_with_policy` and `family_to_fam_node`; emit BIRT,
+   DEAT, MARR, etc. as proper GEDCOM subrecords with date and place sub-nodes.
+3. **Citation round-trip** (bead `rustygene-h88`): Resolve `SOUR` references
+   within event subrecords to Citation entities.
+4. **Gate test fidelity** (bead `rustygene-yvk`): Update e2e_gate_test.rs to
+   compare full assertion graphs, not just name counts.
+
+## Phase 2+ Work Items
 
 The following improvements are deferred to a later phase:
 
-1. **Event export**: Pass loaded events to `person_to_indi_node_with_policy` and
-   `family_to_fam_node`; emit BIRT, DEAT, MARR, etc. as proper GEDCOM
-   subrecords with date and place sub-nodes.
-2. **Citation round-trip**: Resolve `SOUR` references within event subrecords to
-   Citation entities.
-3. **NOTE/REPO/OBJE entity handling**: Model as first-class entity types.
-4. **ASSO record import**: Store witness/association links.
-5. **xref alias table**: Optionally preserve original xref IDs across import/export.
-6. **Name type export**: Emit `2 TYPE` annotation for non-birth names.
-7. **HEAD block completeness**: Emit DATE, SUBM, GEDC.FORM, LANG on export.
+1. **NOTE/REPO/OBJE entity handling** (bead `rustygene-ht5`): Model as
+   first-class entity types.
+2. **ASSO record import**: Store witness/association links.
+3. **xref alias table** (bead `rustygene-0zz`): Optionally preserve original
+   xref IDs across import/export.
+4. **Name type import/export**: Parse `2 TYPE` annotation into `NameType` field
+   (currently hardcoded to `Birth`); emit on export for non-birth names.
+5. **HEAD block completeness** (bead `rustygene-8mg`): Emit DATE, SUBM,
+   GEDC.FORM, LANG on export.

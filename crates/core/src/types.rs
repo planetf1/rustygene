@@ -140,7 +140,9 @@ pub enum DateValue {
         year: i32,
         quarter: u8,
     },
-    Textual { value: String },
+    Textual {
+        value: String,
+    },
 }
 
 impl PartialOrd for DateValue {
@@ -248,7 +250,9 @@ mod tests {
         // 1850-01-01 < 1850-05-01
         assert!(d_fuzzy < d1);
 
-        let d3 = DateValue::Textual { value: "some weird string".to_string() };
+        let d3 = DateValue::Textual {
+            value: "some weird string".to_string(),
+        };
         assert_eq!(d1.partial_cmp(&d3), None);
     }
 

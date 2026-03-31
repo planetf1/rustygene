@@ -311,9 +311,7 @@ mod tests {
     fn validates_parent_age_gap() {
         let parent = exact(1840, 1, 1);
         let child = exact(1860, 1, 1);
-        assert!(
-            validate_parent_age_gap(&parent, &child, DEFAULT_MIN_PARENT_AGE_GAP_YEARS).is_ok()
-        );
+        assert!(validate_parent_age_gap(&parent, &child, DEFAULT_MIN_PARENT_AGE_GAP_YEARS).is_ok());
     }
 
     #[test]
