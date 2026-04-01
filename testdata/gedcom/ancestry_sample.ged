@@ -1,0 +1,39 @@
+0 HEAD
+1 SOUR ANCESTRY
+2 VERS 2026.1
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+0 @S1@ SOUR
+1 TITL 1901 Census of England and Wales
+1 AUTH Registrar General
+1 DATA
+2 EVEN Census
+0 @I1@ INDI
+1 NAME John /Evans/
+2 TYPE Birth
+1 SEX M
+1 BIRT
+2 DATE 2 FEB 1868
+2 PLAC Llanpumsaint, Carmarthenshire, Wales
+2 SOUR @S1@
+3 PAGE RG13/1234 f12 p7
+3 QUAY 2
+1 NOTE Imported from Ancestry desktop export
+1 CHAN
+2 DATE 1 APR 2026
+3 TIME 10:11:12
+0 @I2@ INDI
+1 NAME Mary /Jones/
+1 SEX F
+1 BIRT
+2 DATE ABT 1870
+2 PLAC Carmarthen, Carmarthenshire, Wales
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 MARR
+2 DATE 5 MAY 1890
+2 PLAC Carmarthen, Carmarthenshire, Wales
+0 TRLR

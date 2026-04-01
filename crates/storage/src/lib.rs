@@ -2,7 +2,7 @@ pub mod sqlite_impl;
 
 use refinery::embed_migrations;
 use rusqlite::Connection;
-use rustygene_core::assertion::{Assertion, AssertionStatus};
+use rustygene_core::assertion::{Assertion, AssertionStatus, Sandbox, SandboxStatus};
 use rustygene_core::event::Event;
 use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
 use rustygene_core::family::{Family, Relationship};
@@ -36,6 +36,7 @@ pub const REQUIRED_SCHEMA_TABLES: &[&str] = &[
     "research_log",
     "sandboxes",
     "agents",
+    "staging_queue",
     "search_index",
 ];
 
@@ -50,6 +51,12 @@ pub const REQUIRED_SCHEMA_INDEXES: &[&str] = &[
     "idx_research_log_result",
     "idx_relationships_from_type",
     "idx_relationships_to_type",
+    "idx_persons_birth_year",
+    "idx_persons_death_year",
+    "idx_persons_primary_surname",
+    "idx_persons_primary_given_name",
+    "idx_staging_queue_status_created",
+    "idx_staging_queue_entity",
 ];
 
 pub fn run_migrations(connection: &mut Connection) -> Result<refinery::Report, refinery::Error> {
@@ -94,7 +101,7 @@ pub struct ResearchLogFilter {
     pub date_to_iso: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EntityType {
     Person,
     Family,
@@ -161,6 +168,37 @@ pub struct JsonImportReport {
     pub assertions_imported: usize,
     pub audit_log_entries_imported: usize,
     pub research_log_entries_imported: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StagingProposal {
+    pub id: EntityId,
+    pub assertion_id: EntityId,
+    pub entity_id: EntityId,
+    pub entity_type: EntityType,
+    pub field: String,
+    pub status: AssertionStatus,
+    pub submitted_at: String,
+    pub submitted_by: String,
+    pub reviewed_at: Option<String>,
+    pub reviewed_by: Option<String>,
+    pub review_note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagingProposalFilter {
+    pub entity_id: Option<EntityId>,
+    pub entity_type: Option<EntityType>,
+    pub status: Option<AssertionStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SandboxAssertionDiff {
+    pub field: String,
+    pub trunk_assertion_id: Option<EntityId>,
+    pub trunk_value: Option<Value>,
+    pub sandbox_assertion_id: Option<EntityId>,
+    pub sandbox_value: Option<Value>,
 }
 
 pub type JsonAssertion = Assertion<Value>;
@@ -265,6 +303,66 @@ pub trait Storage {
         &self,
         assertion_id: EntityId,
         status: AssertionStatus,
+    ) -> Result<(), StorageError>;
+    async fn create_assertion_in_sandbox(
+        &self,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        field: &str,
+        assertion: &JsonAssertion,
+        sandbox_id: EntityId,
+    ) -> Result<(), StorageError>;
+    async fn list_assertions_for_entity_in_sandbox(
+        &self,
+        entity_id: EntityId,
+        sandbox_id: EntityId,
+    ) -> Result<Vec<JsonAssertion>, StorageError>;
+
+    async fn create_sandbox(&self, sandbox: &Sandbox) -> Result<(), StorageError>;
+    async fn get_sandbox(&self, id: EntityId) -> Result<Sandbox, StorageError>;
+    async fn update_sandbox_status(
+        &self,
+        id: EntityId,
+        status: SandboxStatus,
+    ) -> Result<(), StorageError>;
+    async fn delete_sandbox(&self, id: EntityId) -> Result<(), StorageError>;
+    async fn list_sandboxes(&self, pagination: Pagination) -> Result<Vec<Sandbox>, StorageError>;
+    async fn compute_entity_snapshot_with_sandbox(
+        &self,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        sandbox_id: EntityId,
+    ) -> Result<Value, StorageError>;
+    async fn compare_sandbox_vs_trunk(
+        &self,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        sandbox_id: EntityId,
+    ) -> Result<Vec<SandboxAssertionDiff>, StorageError>;
+
+    async fn submit_staging_proposal(
+        &self,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        field: &str,
+        assertion: &JsonAssertion,
+        submitted_by: &str,
+    ) -> Result<EntityId, StorageError>;
+    async fn list_staging_proposals(
+        &self,
+        filter: &StagingProposalFilter,
+        pagination: Pagination,
+    ) -> Result<Vec<StagingProposal>, StorageError>;
+    async fn accept_staging_proposal(
+        &self,
+        proposal_id: EntityId,
+        reviewed_by: &str,
+    ) -> Result<(), StorageError>;
+    async fn reject_staging_proposal(
+        &self,
+        proposal_id: EntityId,
+        reviewed_by: &str,
+        reason: Option<&str>,
     ) -> Result<(), StorageError>;
 
     async fn create_research_log_entry(&self, entry: &ResearchLogEntry)

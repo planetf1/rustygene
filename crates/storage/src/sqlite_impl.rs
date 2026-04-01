@@ -1,10 +1,13 @@
 use crate::{
     AuditLogEntry, EntityType, JsonAssertion, JsonExportManifest, JsonExportMode, JsonExportResult,
-    JsonImportMode, JsonImportReport, Pagination, RelationshipEdge, ResearchLogFilter, Storage,
-    StorageError, StorageErrorCode,
+    JsonImportMode, JsonImportReport, Pagination, RelationshipEdge, ResearchLogFilter,
+    SandboxAssertionDiff, StagingProposal, StagingProposalFilter, Storage, StorageError,
+    StorageErrorCode,
 };
 use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
-use rustygene_core::assertion::{AssertionStatus, EvidenceType, compute_assertion_idempotency_key};
+use rustygene_core::assertion::{
+    AssertionStatus, EvidenceType, Sandbox, SandboxStatus, compute_assertion_idempotency_key,
+};
 use rustygene_core::event::Event;
 use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
 use rustygene_core::family::{Family, Relationship};
@@ -14,7 +17,7 @@ use rustygene_core::place::Place;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
@@ -103,6 +106,8 @@ impl SqliteBackend {
             Self::recompute_entity_snapshot_tx(&tx, entity_id, entity_type)?;
             rebuilt += 1;
         }
+
+        Self::rebuild_search_index_tx(&tx)?;
 
         tx.commit().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -539,7 +544,7 @@ impl SqliteBackend {
         match entity_type {
             EntityType::Person => "persons",
             EntityType::Family => "families",
-            EntityType::Relationship => "families",
+            EntityType::Relationship => "family_relationships",
             EntityType::Event => "events",
             EntityType::Place => "places",
             EntityType::Source => "sources",
@@ -589,6 +594,26 @@ impl SqliteBackend {
             other => Err(StorageError {
                 code: StorageErrorCode::Serialization,
                 message: format!("Unknown assertion status: {}", other),
+            }),
+        }
+    }
+
+    fn sandbox_status_to_db(status: SandboxStatus) -> &'static str {
+        match status {
+            SandboxStatus::Active => "active",
+            SandboxStatus::Promoted => "promoted",
+            SandboxStatus::Discarded => "discarded",
+        }
+    }
+
+    fn sandbox_status_from_db(status: &str) -> Result<SandboxStatus, StorageError> {
+        match status {
+            "active" => Ok(SandboxStatus::Active),
+            "promoted" => Ok(SandboxStatus::Promoted),
+            "discarded" => Ok(SandboxStatus::Discarded),
+            other => Err(StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Unknown sandbox status: {}", other),
             }),
         }
     }
@@ -809,7 +834,7 @@ impl SqliteBackend {
             .prepare(
                 "SELECT field, CAST(value AS TEXT) \
                  FROM assertions \
-                 WHERE entity_id = ? AND status = 'confirmed' AND preferred = 1",
+                 WHERE entity_id = ? AND status = 'confirmed' AND preferred = 1 AND sandbox_id IS NULL",
             )
             .map_err(|e| StorageError {
                 code: StorageErrorCode::Backend,
@@ -857,6 +882,325 @@ impl SqliteBackend {
                 code: StorageErrorCode::NotFound,
                 message: format!("Entity {} not found in table {}", entity_id, table),
             });
+        }
+
+        Ok(())
+    }
+
+    fn search_terms(text: &str) -> Vec<String> {
+        text.split(|c: char| !c.is_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .map(|token| token.to_ascii_lowercase())
+            .collect()
+    }
+
+    fn soundex(token: &str) -> Option<String> {
+        let mut chars = token.chars().filter(|c| c.is_ascii_alphabetic());
+        let first = chars.next()?.to_ascii_uppercase();
+
+        let mut result = String::with_capacity(4);
+        result.push(first);
+
+        let mut previous = match first {
+            'B' | 'F' | 'P' | 'V' => '1',
+            'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => '2',
+            'D' | 'T' => '3',
+            'L' => '4',
+            'M' | 'N' => '5',
+            'R' => '6',
+            _ => '0',
+        };
+
+        for c in chars {
+            let code = match c.to_ascii_uppercase() {
+                'B' | 'F' | 'P' | 'V' => '1',
+                'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => '2',
+                'D' | 'T' => '3',
+                'L' => '4',
+                'M' | 'N' => '5',
+                'R' => '6',
+                _ => '0',
+            };
+
+            if code == '0' {
+                previous = code;
+                continue;
+            }
+
+            if code != previous {
+                result.push(code);
+            }
+
+            previous = code;
+            if result.len() == 4 {
+                break;
+            }
+        }
+
+        while result.len() < 4 {
+            result.push('0');
+        }
+
+        Some(result)
+    }
+
+    fn simple_metaphone(token: &str) -> Option<String> {
+        let mut chars = token
+            .chars()
+            .filter(|c| c.is_ascii_alphabetic())
+            .map(|c| c.to_ascii_uppercase())
+            .peekable();
+
+        let mut out = String::new();
+        while let Some(ch) = chars.next() {
+            let code = match ch {
+                'A' | 'E' | 'I' | 'O' | 'U' => {
+                    if out.is_empty() {
+                        Some(ch)
+                    } else {
+                        None
+                    }
+                }
+                'B' => Some('B'),
+                'C' => {
+                    if matches!(chars.peek(), Some('H')) {
+                        chars.next();
+                        Some('X')
+                    } else {
+                        Some('K')
+                    }
+                }
+                'D' => Some('T'),
+                'F' => Some('F'),
+                'G' => {
+                    if matches!(chars.peek(), Some('H')) {
+                        chars.next();
+                        Some('F')
+                    } else {
+                        Some('K')
+                    }
+                }
+                'H' => None,
+                'J' => Some('J'),
+                'K' | 'Q' => Some('K'),
+                'L' => Some('L'),
+                'M' | 'N' => Some('N'),
+                'P' => {
+                    if matches!(chars.peek(), Some('H')) {
+                        chars.next();
+                        Some('F')
+                    } else {
+                        Some('P')
+                    }
+                }
+                'R' => Some('R'),
+                'S' | 'X' | 'Z' => Some('S'),
+                'T' => Some('T'),
+                'V' | 'W' => Some('F'),
+                'Y' => None,
+                _ => None,
+            };
+
+            if let Some(code) = code
+                && !out.ends_with(code)
+            {
+                out.push(code);
+            }
+        }
+
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    fn build_person_search_content(names: &[String]) -> String {
+        let mut chunks = Vec::new();
+        for name in names {
+            chunks.push(name.to_ascii_lowercase());
+            for token in Self::search_terms(name) {
+                if let Some(sx) = Self::soundex(&token) {
+                    chunks.push(format!("sx{}", sx.to_ascii_lowercase()));
+                }
+                if let Some(mp) = Self::simple_metaphone(&token) {
+                    chunks.push(format!("mp{}", mp.to_ascii_lowercase()));
+                }
+            }
+        }
+        chunks.join(" ")
+    }
+
+    fn insert_search_index_row_tx(
+        tx: &rusqlite::Transaction<'_>,
+        entity_id: &str,
+        entity_type: &str,
+        content: &str,
+    ) -> Result<(), StorageError> {
+        tx.execute(
+            "INSERT INTO search_index(entity_id, entity_type, content) VALUES (?, ?, ?)",
+            rusqlite::params![entity_id, entity_type, content],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("search_index insert failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    fn rebuild_search_index_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), StorageError> {
+        tx.execute("DELETE FROM search_index", [])
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("search_index clear failed: {}", e),
+            })?;
+
+        let mut person_stmt = tx
+            .prepare(
+                "SELECT entity_id, CAST(value AS TEXT)
+                 FROM assertions
+                 WHERE entity_type = 'person'
+                   AND field = 'name'
+                   AND status = 'confirmed'",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("person search_index query prepare failed: {}", e),
+            })?;
+
+        let person_rows = person_stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("person search_index query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("person search_index row collection failed: {}", e),
+            })?;
+        drop(person_stmt);
+
+        let mut names_by_person: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (entity_id, value_json) in person_rows {
+            let parsed_name = serde_json::from_str::<Value>(&value_json)
+                .ok()
+                .and_then(|v| v.as_str().map(std::borrow::ToOwned::to_owned))
+                .unwrap_or(value_json);
+
+            names_by_person.entry(entity_id).or_default().push(parsed_name);
+        }
+
+        for (entity_id, names) in names_by_person {
+            let content = Self::build_person_search_content(&names);
+            if !content.is_empty() {
+                Self::insert_search_index_row_tx(tx, &entity_id, "person", &content)?;
+            }
+        }
+
+        let mut place_stmt = tx
+            .prepare("SELECT id, data FROM places")
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("place search_index query prepare failed: {}", e),
+            })?;
+        let place_rows = place_stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("place search_index query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("place search_index row collection failed: {}", e),
+            })?;
+        drop(place_stmt);
+
+        for (entity_id, data_json) in place_rows {
+            let content = serde_json::from_str::<Place>(&data_json)
+                .map(|place| {
+                    place
+                        .names
+                        .into_iter()
+                        .map(|name| name.name)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .to_ascii_lowercase()
+                })
+                .unwrap_or_default();
+
+            if !content.is_empty() {
+                Self::insert_search_index_row_tx(tx, &entity_id, "place", &content)?;
+            }
+        }
+
+        let mut source_stmt = tx
+            .prepare("SELECT id, data FROM sources")
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("source search_index query prepare failed: {}", e),
+            })?;
+        let source_rows = source_stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("source search_index query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("source search_index row collection failed: {}", e),
+            })?;
+        drop(source_stmt);
+
+        for (entity_id, data_json) in source_rows {
+            let content = serde_json::from_str::<Source>(&data_json)
+                .map(|source| {
+                    [Some(source.title), source.author, source.publication_info]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .to_ascii_lowercase()
+                })
+                .unwrap_or_default();
+
+            if !content.is_empty() {
+                Self::insert_search_index_row_tx(tx, &entity_id, "source", &content)?;
+            }
+        }
+
+        let mut note_stmt = tx
+            .prepare("SELECT id, data FROM notes")
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("note search_index query prepare failed: {}", e),
+            })?;
+        let note_rows = note_stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("note search_index query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("note search_index row collection failed: {}", e),
+            })?;
+        drop(note_stmt);
+
+        for (entity_id, data_json) in note_rows {
+            let content = serde_json::from_str::<Note>(&data_json)
+                .map(|note| note.text.to_ascii_lowercase())
+                .unwrap_or_default();
+
+            if !content.is_empty() {
+                Self::insert_search_index_row_tx(tx, &entity_id, "note", &content)?;
+            }
         }
 
         Ok(())
@@ -1592,8 +1936,8 @@ impl Storage for SqliteBackend {
             "INSERT INTO assertions (
                 id, entity_id, entity_type, field, value, value_date, value_text,
                 confidence, status, preferred, source_citations, proposed_by,
-                reviewed_by, created_at, reviewed_at, evidence_type, idempotency_key
-             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                reviewed_by, created_at, reviewed_at, evidence_type, idempotency_key, sandbox_id
+             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
             rusqlite::params![
                 assertion.id.to_string(),
                 entity_id.to_string(),
@@ -1645,7 +1989,7 @@ impl Storage for SqliteBackend {
                 "SELECT id, value, confidence, status, evidence_type, source_citations,
                         proposed_by, created_at, reviewed_at, reviewed_by
                  FROM assertions
-                 WHERE entity_id = ?
+                 WHERE entity_id = ? AND sandbox_id IS NULL
                  ORDER BY created_at DESC",
             )
             .map_err(|e| StorageError {
@@ -1730,7 +2074,7 @@ impl Storage for SqliteBackend {
                 "SELECT id, value, confidence, status, evidence_type, source_citations,
                         proposed_by, created_at, reviewed_at, reviewed_by
                  FROM assertions
-                 WHERE entity_id = ? AND field = ?
+                 WHERE entity_id = ? AND field = ? AND sandbox_id IS NULL
                  ORDER BY preferred DESC, confidence DESC, created_at DESC",
             )
             .map_err(|e| StorageError {
@@ -1881,6 +2225,966 @@ impl Storage for SqliteBackend {
             })?;
 
         Self::recompute_entity_snapshot_tx(&tx, parsed_entity_id, entity_type)?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    async fn create_assertion_in_sandbox(
+        &self,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        field: &str,
+        assertion: &JsonAssertion,
+        sandbox_id: EntityId,
+    ) -> Result<(), StorageError> {
+        let base_key = compute_assertion_idempotency_key(
+            entity_id,
+            field,
+            &assertion.value,
+            &assertion.source_citations,
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Idempotency key computation failed: {}", e),
+        })?;
+        let idempotency_key = format!("sandbox:{}:{}", sandbox_id, base_key);
+
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        let sandbox_exists: Option<String> = tx
+            .query_row(
+                "SELECT id FROM sandboxes WHERE id = ? AND status = 'active'",
+                rusqlite::params![sandbox_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Sandbox lookup failed: {}", e),
+            })?;
+
+        if sandbox_exists.is_none() {
+            return Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Active sandbox not found: {}", sandbox_id),
+            });
+        }
+
+        let existing_id: Option<String> = tx
+            .query_row(
+                "SELECT id FROM assertions WHERE idempotency_key = ?",
+                rusqlite::params![&idempotency_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Idempotency lookup failed: {}", e),
+            })?;
+
+        if existing_id.is_some() {
+            tx.commit().map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Transaction commit failed: {}", e),
+            })?;
+            return Ok(());
+        }
+
+        let preferred = if assertion.status == AssertionStatus::Confirmed {
+            let existing_preferred: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM assertions WHERE entity_id = ? AND field = ? AND preferred = 1 AND status = 'confirmed' AND sandbox_id = ?",
+                    rusqlite::params![entity_id.to_string(), field, sandbox_id.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Preferred lookup failed: {}", e),
+                })?;
+            if existing_preferred == 0 { 1 } else { 0 }
+        } else {
+            0
+        };
+
+        let source_citations_json =
+            serde_json::to_string(&assertion.source_citations).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Source citations serialization failed: {}", e),
+            })?;
+
+        tx.execute(
+            "INSERT INTO assertions (
+                id, entity_id, entity_type, field, value, value_date, value_text,
+                confidence, status, preferred, source_citations, proposed_by,
+                reviewed_by, created_at, reviewed_at, evidence_type, idempotency_key, sandbox_id
+             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                assertion.id.to_string(),
+                entity_id.to_string(),
+                Self::entity_type_to_db(entity_type),
+                field,
+                assertion.value.to_string(),
+                assertion.value.as_str(),
+                assertion.confidence,
+                Self::assertion_status_to_db(&assertion.status),
+                preferred,
+                source_citations_json,
+                assertion.proposed_by.to_string(),
+                assertion.reviewed_by.as_ref().map(ToString::to_string),
+                assertion.created_at.to_rfc3339(),
+                assertion
+                    .reviewed_at
+                    .as_ref()
+                    .map(chrono::DateTime::to_rfc3339),
+                Self::evidence_type_to_db(&assertion.evidence_type),
+                idempotency_key,
+                sandbox_id.to_string(),
+            ],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Sandbox assertion insert failed: {}", e),
+        })?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    async fn list_assertions_for_entity_in_sandbox(
+        &self,
+        entity_id: EntityId,
+        sandbox_id: EntityId,
+    ) -> Result<Vec<JsonAssertion>, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, value, confidence, status, evidence_type, source_citations,
+                        proposed_by, created_at, reviewed_at, reviewed_by
+                 FROM assertions
+                 WHERE entity_id = ? AND sandbox_id = ?
+                 ORDER BY created_at DESC",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare failed: {}", e),
+            })?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![entity_id.to_string(), sandbox_id.to_string()],
+                |row| {
+                    Ok(AssertionRowData {
+                        id_str: row.get(0)?,
+                        value_text: row.get(1)?,
+                        confidence: row.get(2)?,
+                        status_text: row.get(3)?,
+                        evidence_type_text: row.get(4)?,
+                        source_citations_text: row.get(5)?,
+                        proposed_by_text: row.get(6)?,
+                        created_at_text: row.get(7)?,
+                        reviewed_at_text: row.get(8)?,
+                        reviewed_by_text: row.get(9)?,
+                    })
+                },
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Row collection failed: {}", e),
+            })?;
+
+        rows.into_iter()
+            .map(Self::row_to_assertion)
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    async fn create_sandbox(&self, sandbox: &Sandbox) -> Result<(), StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        conn.execute(
+            "INSERT INTO sandboxes (id, name, description, created_at, parent_sandbox, status)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                sandbox.id.to_string(),
+                &sandbox.name,
+                &sandbox.description,
+                sandbox.created_at.to_rfc3339(),
+                sandbox.parent_sandbox.map(|v| v.to_string()),
+                Self::sandbox_status_to_db(sandbox.status.clone()),
+            ],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Sandbox insert failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    async fn get_sandbox(&self, id: EntityId) -> Result<Sandbox, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let row: (String, String, Option<String>, String, Option<String>, String) = conn
+            .query_row(
+                "SELECT id, name, description, created_at, parent_sandbox, status
+                 FROM sandboxes WHERE id = ?",
+                rusqlite::params![id.to_string()],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Sandbox lookup failed: {}", e),
+            })?
+            .ok_or(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Sandbox not found: {}", id),
+            })?;
+
+        Ok(Sandbox {
+            id: Self::parse_entity_id_str(&row.0)?,
+            name: row.1,
+            description: row.2,
+            created_at: chrono::DateTime::parse_from_rfc3339(&row.3)
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Invalid sandbox created_at '{}': {}", row.3, e),
+                })?
+                .with_timezone(&chrono::Utc),
+            parent_sandbox: row.4.as_deref().map(Self::parse_entity_id_str).transpose()?,
+            status: Self::sandbox_status_from_db(&row.5)?,
+        })
+    }
+
+    async fn update_sandbox_status(
+        &self,
+        id: EntityId,
+        status: SandboxStatus,
+    ) -> Result<(), StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let rows = conn
+            .execute(
+                "UPDATE sandboxes SET status = ? WHERE id = ?",
+                rusqlite::params![Self::sandbox_status_to_db(status), id.to_string()],
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Sandbox status update failed: {}", e),
+            })?;
+
+        if rows == 0 {
+            return Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Sandbox not found: {}", id),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn delete_sandbox(&self, id: EntityId) -> Result<(), StorageError> {
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        tx.execute(
+            "DELETE FROM assertions WHERE sandbox_id = ?",
+            rusqlite::params![id.to_string()],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Sandbox assertion delete failed: {}", e),
+        })?;
+
+        let rows = tx
+            .execute(
+                "DELETE FROM sandboxes WHERE id = ?",
+                rusqlite::params![id.to_string()],
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Sandbox delete failed: {}", e),
+            })?;
+
+        if rows == 0 {
+            return Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Sandbox not found: {}", id),
+            });
+        }
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    async fn list_sandboxes(&self, pagination: Pagination) -> Result<Vec<Sandbox>, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, description, created_at, parent_sandbox, status
+                 FROM sandboxes
+                 ORDER BY created_at DESC
+                 LIMIT ? OFFSET ?",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare failed: {}", e),
+            })?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![pagination.limit as i32, pagination.offset as i32],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Row collection failed: {}", e),
+            })?;
+
+        rows.into_iter()
+            .map(
+                |(id_text, name, description, created_at, parent_sandbox, status_text)| {
+                    Ok(Sandbox {
+                        id: Self::parse_entity_id_str(&id_text)?,
+                        name,
+                        description,
+                        created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                            .map_err(|e| StorageError {
+                                code: StorageErrorCode::Serialization,
+                                message: format!("Invalid sandbox created_at '{}': {}", created_at, e),
+                            })?
+                            .with_timezone(&chrono::Utc),
+                        parent_sandbox: parent_sandbox
+                            .as_deref()
+                            .map(Self::parse_entity_id_str)
+                            .transpose()?,
+                        status: Self::sandbox_status_from_db(&status_text)?,
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    async fn compute_entity_snapshot_with_sandbox(
+        &self,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        sandbox_id: EntityId,
+    ) -> Result<Value, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let table = Self::entity_table_for_type(entity_type);
+        let base_data: String = conn
+            .query_row(
+                &format!("SELECT data FROM {} WHERE id = ?", table),
+                rusqlite::params![entity_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Snapshot read failed: {}", e),
+            })?
+            .ok_or(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Entity {} not found in table {}", entity_id, table),
+            })?;
+
+        let mut snapshot_json: Value = serde_json::from_str(&base_data).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Snapshot parse failed: {}", e),
+        })?;
+
+        let obj = snapshot_json.as_object_mut().ok_or(StorageError {
+            code: StorageErrorCode::Serialization,
+            message: "Entity snapshot is not a JSON object".to_string(),
+        })?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT field, CAST(value AS TEXT)
+                 FROM assertions
+                 WHERE entity_id = ?
+                   AND sandbox_id = ?
+                   AND status = 'confirmed'
+                   AND preferred = 1",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Overlay query prepare failed: {}", e),
+            })?;
+
+        let overlays = stmt
+            .query_map(
+                rusqlite::params![entity_id.to_string(), sandbox_id.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Overlay query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Overlay row collection failed: {}", e),
+            })?;
+
+        for (field, value_text) in overlays {
+            let value: Value = serde_json::from_str(&value_text).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Sandbox assertion value parse failed for field '{}': {}", field, e),
+            })?;
+            obj.insert(field, value);
+        }
+
+        Ok(snapshot_json)
+    }
+
+    async fn compare_sandbox_vs_trunk(
+        &self,
+        entity_id: EntityId,
+        _entity_type: EntityType,
+        sandbox_id: EntityId,
+    ) -> Result<Vec<SandboxAssertionDiff>, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let mut trunk_stmt = conn
+            .prepare(
+                "SELECT field, id, CAST(value AS TEXT)
+                 FROM assertions
+                 WHERE entity_id = ?
+                   AND sandbox_id IS NULL
+                   AND status = 'confirmed'
+                   AND preferred = 1",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Trunk diff query prepare failed: {}", e),
+            })?;
+
+        let trunk_rows = trunk_stmt
+            .query_map(rusqlite::params![entity_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Trunk diff query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Trunk diff row collection failed: {}", e),
+            })?;
+
+        let mut sandbox_stmt = conn
+            .prepare(
+                "SELECT field, id, CAST(value AS TEXT)
+                 FROM assertions
+                 WHERE entity_id = ?
+                   AND sandbox_id = ?
+                   AND status = 'confirmed'
+                   AND preferred = 1",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Sandbox diff query prepare failed: {}", e),
+            })?;
+
+        let sandbox_rows = sandbox_stmt
+            .query_map(
+                rusqlite::params![entity_id.to_string(), sandbox_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Sandbox diff query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Sandbox diff row collection failed: {}", e),
+            })?;
+
+        let mut trunk_by_field: BTreeMap<String, (EntityId, Value)> = BTreeMap::new();
+        for (field, id_text, value_text) in trunk_rows {
+            trunk_by_field.insert(
+                field,
+                (
+                    Self::parse_entity_id_str(&id_text)?,
+                    serde_json::from_str(&value_text).map_err(|e| StorageError {
+                        code: StorageErrorCode::Serialization,
+                        message: format!("Trunk diff value parse failed: {}", e),
+                    })?,
+                ),
+            );
+        }
+
+        let mut sandbox_by_field: BTreeMap<String, (EntityId, Value)> = BTreeMap::new();
+        for (field, id_text, value_text) in sandbox_rows {
+            sandbox_by_field.insert(
+                field,
+                (
+                    Self::parse_entity_id_str(&id_text)?,
+                    serde_json::from_str(&value_text).map_err(|e| StorageError {
+                        code: StorageErrorCode::Serialization,
+                        message: format!("Sandbox diff value parse failed: {}", e),
+                    })?,
+                ),
+            );
+        }
+
+        let mut fields = BTreeSet::new();
+        fields.extend(trunk_by_field.keys().cloned());
+        fields.extend(sandbox_by_field.keys().cloned());
+
+        let mut diffs = Vec::new();
+        for field in fields {
+            let trunk = trunk_by_field.get(&field);
+            let sandbox = sandbox_by_field.get(&field);
+            let trunk_value = trunk.map(|(_, v)| v.clone());
+            let sandbox_value = sandbox.map(|(_, v)| v.clone());
+
+            if trunk_value != sandbox_value {
+                diffs.push(SandboxAssertionDiff {
+                    field,
+                    trunk_assertion_id: trunk.map(|(id, _)| *id),
+                    trunk_value,
+                    sandbox_assertion_id: sandbox.map(|(id, _)| *id),
+                    sandbox_value,
+                });
+            }
+        }
+
+        Ok(diffs)
+    }
+
+    async fn submit_staging_proposal(
+        &self,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        field: &str,
+        assertion: &JsonAssertion,
+        submitted_by: &str,
+    ) -> Result<EntityId, StorageError> {
+        let mut staged_assertion = assertion.clone();
+        staged_assertion.status = AssertionStatus::Proposed;
+
+        self.create_assertion(entity_id, entity_type, field, &staged_assertion)
+            .await?;
+
+        let idempotency_key = compute_assertion_idempotency_key(
+            entity_id,
+            field,
+            &staged_assertion.value,
+            &staged_assertion.source_citations,
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Idempotency key computation failed: {}", e),
+        })?;
+
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let assertion_id: String = conn
+            .query_row(
+                "SELECT id FROM assertions WHERE idempotency_key = ?",
+                rusqlite::params![idempotency_key],
+                |row| row.get(0),
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Failed to resolve assertion id for staging: {}", e),
+            })?;
+
+        let proposal_id = EntityId::new();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO staging_queue (
+                id, assertion_id, entity_id, entity_type, field, status,
+                submitted_at, submitted_by
+             ) VALUES (?, ?, ?, ?, ?, 'proposed', ?, ?)",
+            rusqlite::params![
+                proposal_id.to_string(),
+                assertion_id,
+                entity_id.to_string(),
+                Self::entity_type_to_db(entity_type),
+                field,
+                now,
+                submitted_by,
+            ],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Staging proposal insert failed: {}", e),
+        })?;
+
+        Ok(proposal_id)
+    }
+
+    async fn list_staging_proposals(
+        &self,
+        filter: &StagingProposalFilter,
+        pagination: Pagination,
+    ) -> Result<Vec<StagingProposal>, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let mut query = String::from(
+            "SELECT id, assertion_id, entity_id, entity_type, field, status,
+                    submitted_at, submitted_by, reviewed_at, reviewed_by, review_note
+             FROM staging_queue
+             WHERE 1 = 1",
+        );
+        let mut args: Vec<rusqlite::types::Value> = Vec::new();
+
+        if let Some(entity_id) = filter.entity_id {
+            query.push_str(" AND entity_id = ?");
+            args.push(rusqlite::types::Value::Text(entity_id.to_string()));
+        }
+        if let Some(entity_type) = filter.entity_type {
+            query.push_str(" AND entity_type = ?");
+            args.push(rusqlite::types::Value::Text(
+                Self::entity_type_to_db(entity_type).to_string(),
+            ));
+        }
+        if let Some(status) = &filter.status {
+            query.push_str(" AND status = ?");
+            args.push(rusqlite::types::Value::Text(
+                Self::assertion_status_to_db(status).to_string(),
+            ));
+        }
+
+        query.push_str(" ORDER BY submitted_at DESC LIMIT ? OFFSET ?");
+        args.push(rusqlite::types::Value::Integer(i64::from(pagination.limit)));
+        args.push(rusqlite::types::Value::Integer(i64::from(pagination.offset)));
+
+        let mut stmt = conn.prepare(&query).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Staging list prepare failed: {}", e),
+        })?;
+
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(args.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                ))
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Staging list query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Staging list row collection failed: {}", e),
+            })?;
+
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    assertion_id,
+                    entity_id,
+                    entity_type,
+                    field,
+                    status,
+                    submitted_at,
+                    submitted_by,
+                    reviewed_at,
+                    reviewed_by,
+                    review_note,
+                )| {
+                    Ok(StagingProposal {
+                        id: Self::parse_entity_id_str(&id)?,
+                        assertion_id: Self::parse_entity_id_str(&assertion_id)?,
+                        entity_id: Self::parse_entity_id_str(&entity_id)?,
+                        entity_type: Self::entity_type_from_db(&entity_type)?,
+                        field,
+                        status: Self::assertion_status_from_db(&status)?,
+                        submitted_at,
+                        submitted_by,
+                        reviewed_at,
+                        reviewed_by,
+                        review_note,
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    async fn accept_staging_proposal(
+        &self,
+        proposal_id: EntityId,
+        reviewed_by: &str,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        let found: Option<(String, String, String, String, String)> = tx
+            .query_row(
+                "SELECT assertion_id, entity_id, entity_type, field, status
+                 FROM staging_queue WHERE id = ?",
+                rusqlite::params![proposal_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Staging proposal lookup failed: {}", e),
+            })?;
+
+        let (assertion_id, entity_id, entity_type_text, field, queue_status) = found.ok_or(
+            StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Staging proposal not found: {}", proposal_id),
+            },
+        )?;
+
+        if queue_status != "proposed" {
+            return Err(StorageError {
+                code: StorageErrorCode::Conflict,
+                message: format!(
+                    "Staging proposal {} is not pending (status={})",
+                    proposal_id, queue_status
+                ),
+            });
+        }
+
+        tx.execute(
+            "UPDATE assertions
+             SET preferred = 0
+             WHERE entity_id = ? AND field = ? AND id != ? AND sandbox_id IS NULL",
+            rusqlite::params![entity_id, field, assertion_id],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Clearing preferred assertions failed: {}", e),
+        })?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+        tx.execute(
+            "UPDATE assertions
+             SET status = 'confirmed', preferred = 1, reviewed_at = ?, reviewed_by = ?
+             WHERE id = ?",
+            rusqlite::params![now, reviewed_by, assertion_id],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Assertion promotion failed: {}", e),
+        })?;
+
+        tx.execute(
+            "UPDATE staging_queue
+             SET status = 'confirmed', reviewed_at = ?, reviewed_by = ?
+             WHERE id = ?",
+            rusqlite::params![now, reviewed_by, proposal_id.to_string()],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Staging status update failed: {}", e),
+        })?;
+
+        let entity_type = Self::entity_type_from_db(&entity_type_text)?;
+        Self::recompute_entity_snapshot_tx(&tx, Self::parse_entity_id_str(&entity_id)?, entity_type)?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    async fn reject_staging_proposal(
+        &self,
+        proposal_id: EntityId,
+        reviewed_by: &str,
+        reason: Option<&str>,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        let found: Option<(String, String, String, String)> = tx
+            .query_row(
+                "SELECT assertion_id, entity_id, entity_type, status
+                 FROM staging_queue WHERE id = ?",
+                rusqlite::params![proposal_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Staging proposal lookup failed: {}", e),
+            })?;
+
+        let (assertion_id, entity_id, entity_type_text, queue_status) =
+            found.ok_or(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Staging proposal not found: {}", proposal_id),
+            })?;
+
+        if queue_status != "proposed" {
+            return Err(StorageError {
+                code: StorageErrorCode::Conflict,
+                message: format!(
+                    "Staging proposal {} is not pending (status={})",
+                    proposal_id, queue_status
+                ),
+            });
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+        tx.execute(
+            "UPDATE assertions
+             SET status = 'rejected', preferred = 0, reviewed_at = ?, reviewed_by = ?
+             WHERE id = ?",
+            rusqlite::params![now, reviewed_by, assertion_id],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Assertion rejection failed: {}", e),
+        })?;
+
+        tx.execute(
+            "UPDATE staging_queue
+             SET status = 'rejected', reviewed_at = ?, reviewed_by = ?, review_note = ?
+             WHERE id = ?",
+            rusqlite::params![now, reviewed_by, reason, proposal_id.to_string()],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Staging status update failed: {}", e),
+        })?;
+
+        let entity_type = Self::entity_type_from_db(&entity_type_text)?;
+        Self::recompute_entity_snapshot_tx(&tx, Self::parse_entity_id_str(&entity_id)?, entity_type)?;
 
         tx.commit().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -2363,7 +3667,7 @@ impl Storage for SqliteBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustygene_core::assertion::EvidenceType;
+    use rustygene_core::assertion::{EvidenceType, Sandbox, SandboxStatus};
     use rustygene_core::types::ActorRef;
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2708,6 +4012,272 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sandbox_overlay_diff_and_isolation_work() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+
+        backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                original_xref: None,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        backend
+            .create_assertion(
+                person_id,
+                EntityType::Person,
+                "name",
+                &sample_assertion(json!("Trunk Name"), AssertionStatus::Confirmed),
+            )
+            .await
+            .expect("create trunk assertion");
+
+        let s1 = Sandbox {
+            id: EntityId::new(),
+            name: "hypothesis-a".to_string(),
+            description: None,
+            created_at: chrono::Utc::now(),
+            parent_sandbox: None,
+            status: SandboxStatus::Active,
+        };
+        let s2 = Sandbox {
+            id: EntityId::new(),
+            name: "hypothesis-b".to_string(),
+            description: None,
+            created_at: chrono::Utc::now(),
+            parent_sandbox: None,
+            status: SandboxStatus::Active,
+        };
+
+        backend.create_sandbox(&s1).await.expect("create sandbox 1");
+        backend.create_sandbox(&s2).await.expect("create sandbox 2");
+
+        backend
+            .create_assertion_in_sandbox(
+                person_id,
+                EntityType::Person,
+                "name",
+                &sample_assertion(json!("Sandbox A Name"), AssertionStatus::Confirmed),
+                s1.id,
+            )
+            .await
+            .expect("create sandbox assertion a");
+
+        backend
+            .create_assertion_in_sandbox(
+                person_id,
+                EntityType::Person,
+                "name",
+                &sample_assertion(json!("Sandbox B Name"), AssertionStatus::Confirmed),
+                s2.id,
+            )
+            .await
+            .expect("create sandbox assertion b");
+
+        let trunk = backend.get_person(person_id).await.expect("get trunk person");
+        assert!(trunk.names.is_empty());
+
+        let overlay_a = backend
+            .compute_entity_snapshot_with_sandbox(person_id, EntityType::Person, s1.id)
+            .await
+            .expect("compute overlay a");
+        let overlay_b = backend
+            .compute_entity_snapshot_with_sandbox(person_id, EntityType::Person, s2.id)
+            .await
+            .expect("compute overlay b");
+
+        assert_eq!(overlay_a["name"], json!("Sandbox A Name"));
+        assert_eq!(overlay_b["name"], json!("Sandbox B Name"));
+
+        let diffs_a = backend
+            .compare_sandbox_vs_trunk(person_id, EntityType::Person, s1.id)
+            .await
+            .expect("compare sandbox a");
+        assert!(diffs_a.iter().any(|d| d.field == "name"));
+    }
+
+    #[tokio::test]
+    async fn sandbox_crud_round_trip_and_delete_cleans_overlay_assertions() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+
+        backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                original_xref: None,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        let sandbox = Sandbox {
+            id: EntityId::new(),
+            name: "crud-sandbox".to_string(),
+            description: Some("sandbox for crud test".to_string()),
+            created_at: chrono::Utc::now(),
+            parent_sandbox: None,
+            status: SandboxStatus::Active,
+        };
+
+        backend
+            .create_sandbox(&sandbox)
+            .await
+            .expect("create sandbox");
+        let fetched = backend.get_sandbox(sandbox.id).await.expect("get sandbox");
+        assert_eq!(fetched.name, "crud-sandbox");
+
+        backend
+            .create_assertion_in_sandbox(
+                person_id,
+                EntityType::Person,
+                "name",
+                &sample_assertion(json!("Sandbox CRUD Name"), AssertionStatus::Confirmed),
+                sandbox.id,
+            )
+            .await
+            .expect("create sandbox assertion");
+
+        let in_sandbox = backend
+            .list_assertions_for_entity_in_sandbox(person_id, sandbox.id)
+            .await
+            .expect("list sandbox assertions");
+        assert_eq!(in_sandbox.len(), 1);
+
+        backend
+            .update_sandbox_status(sandbox.id, SandboxStatus::Promoted)
+            .await
+            .expect("update sandbox status");
+        let promoted = backend
+            .get_sandbox(sandbox.id)
+            .await
+            .expect("get promoted sandbox");
+        assert_eq!(promoted.status, SandboxStatus::Promoted);
+
+        backend
+            .delete_sandbox(sandbox.id)
+            .await
+            .expect("delete sandbox");
+
+        let deleted_lookup = backend.get_sandbox(sandbox.id).await;
+        assert!(matches!(
+            deleted_lookup,
+            Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn staging_queue_submit_list_accept_and_reject_work() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+
+        backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                original_xref: None,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        let p1 = backend
+            .submit_staging_proposal(
+                person_id,
+                EntityType::Person,
+                "name",
+                &sample_assertion(json!("Queued Name A"), AssertionStatus::Confirmed),
+                "agent:test",
+            )
+            .await
+            .expect("submit proposal 1");
+
+        let p2 = backend
+            .submit_staging_proposal(
+                person_id,
+                EntityType::Person,
+                "birth_date",
+                &sample_assertion(json!("1900-01-01"), AssertionStatus::Confirmed),
+                "agent:test",
+            )
+            .await
+            .expect("submit proposal 2");
+
+        let pending = backend
+            .list_staging_proposals(
+                &StagingProposalFilter {
+                    entity_id: Some(person_id),
+                    entity_type: Some(EntityType::Person),
+                    status: Some(AssertionStatus::Proposed),
+                },
+                Pagination {
+                    limit: 10,
+                    offset: 0,
+                },
+            )
+            .await
+            .expect("list pending proposals");
+        assert_eq!(pending.len(), 2);
+
+        backend
+            .accept_staging_proposal(p1, "reviewer:human")
+            .await
+            .expect("accept proposal");
+        backend
+            .reject_staging_proposal(p2, "reviewer:human", Some("insufficient evidence"))
+            .await
+            .expect("reject proposal");
+
+        let accepted = backend
+            .list_staging_proposals(
+                &StagingProposalFilter {
+                    entity_id: Some(person_id),
+                    entity_type: Some(EntityType::Person),
+                    status: Some(AssertionStatus::Confirmed),
+                },
+                Pagination {
+                    limit: 10,
+                    offset: 0,
+                },
+            )
+            .await
+            .expect("list accepted proposals");
+        assert_eq!(accepted.len(), 1);
+
+        let rejected = backend
+            .list_staging_proposals(
+                &StagingProposalFilter {
+                    entity_id: Some(person_id),
+                    entity_type: Some(EntityType::Person),
+                    status: Some(AssertionStatus::Rejected),
+                },
+                Pagination {
+                    limit: 10,
+                    offset: 0,
+                },
+            )
+            .await
+            .expect("list rejected proposals");
+        assert_eq!(rejected.len(), 1);
+    }
+
+    #[tokio::test]
     async fn append_audit_log_entry_persists_row() {
         let backend = create_test_backend();
         let entity_id = EntityId::new();
@@ -3007,6 +4577,65 @@ mod tests {
             .expect("read person snapshot");
         let value: serde_json::Value = serde_json::from_str(&data).expect("parse person json");
         assert_eq!(value["name"], json!("Rebuilt Name"));
+    }
+
+    #[tokio::test]
+    async fn rebuild_all_snapshots_handles_relationship_rows_in_family_relationships_table() {
+        let backend = create_test_backend();
+        let relationship = Relationship {
+            id: EntityId::new(),
+            person1_id: EntityId::new(),
+            person2_id: EntityId::new(),
+            relationship_type: rustygene_core::family::RelationshipType::Couple,
+            supporting_event: None,
+            _raw_gedcom: Default::default(),
+        };
+
+        backend
+            .create_relationship(&relationship)
+            .await
+            .expect("create relationship");
+
+        let asserted_type = sample_assertion(
+            json!(rustygene_core::family::RelationshipType::ParentChild),
+            AssertionStatus::Confirmed,
+        );
+        backend
+            .create_assertion(
+                relationship.id,
+                EntityType::Relationship,
+                "relationship_type",
+                &asserted_type,
+            )
+            .await
+            .expect("create relationship assertion");
+
+        {
+            let conn = backend.connection.lock().expect("lock");
+            conn.execute(
+                "UPDATE family_relationships SET data = json_set(data, '$.relationship_type', 'stale') WHERE id = ?",
+                rusqlite::params![relationship.id.to_string()],
+            )
+            .expect("set stale relationship snapshot value");
+        }
+
+        let rebuilt = backend.rebuild_all_snapshots().expect("rebuild snapshots");
+        assert!(rebuilt >= 1);
+
+        let conn = backend.connection.lock().expect("lock");
+        let data: String = conn
+            .query_row(
+                "SELECT data FROM family_relationships WHERE id = ?",
+                rusqlite::params![relationship.id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("read relationship snapshot");
+        let value: serde_json::Value =
+            serde_json::from_str(&data).expect("parse relationship json");
+        assert_eq!(
+            value["relationship_type"],
+            json!(rustygene_core::family::RelationshipType::ParentChild)
+        );
     }
 
     #[tokio::test]
@@ -3372,5 +5001,156 @@ mod tests {
 
         let _ = std::fs::remove_file(&export_file_1);
         let _ = std::fs::remove_file(&export_file_2);
+    }
+
+    #[tokio::test]
+    async fn rebuild_all_snapshots_populates_search_index_with_phonetics() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+        backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                original_xref: None,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        let assertion = sample_assertion(json!("John Smyth"), AssertionStatus::Confirmed);
+        backend
+            .create_assertion(person_id, EntityType::Person, "name", &assertion)
+            .await
+            .expect("create assertion");
+
+        backend.rebuild_all_snapshots().expect("rebuild snapshots");
+
+        let conn = backend.connection.lock().expect("lock");
+        let indexed: String = conn
+            .query_row(
+                "SELECT content FROM search_index WHERE entity_type = 'person' AND entity_id = ?",
+                rusqlite::params![person_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("read search index row");
+
+        assert!(indexed.contains("john smyth"));
+        assert!(indexed.contains("sxj500"));
+        assert!(indexed.contains("sxs530"));
+    }
+
+    #[tokio::test]
+    async fn generated_person_query_columns_update_from_snapshot_assertions() {
+        let backend = create_test_backend();
+        let person_id = EntityId::new();
+        backend
+            .create_person(&Person {
+                id: person_id,
+                names: vec![],
+                gender: rustygene_core::types::Gender::Unknown,
+                living: true,
+                private: false,
+                original_xref: None,
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create person");
+
+        backend
+            .create_assertion(
+                person_id,
+                EntityType::Person,
+                "name",
+                &sample_assertion(
+                    json!({
+                        "given_names": "Alice",
+                        "surnames": [{"value": "Smith"}]
+                    }),
+                    AssertionStatus::Confirmed,
+                ),
+            )
+            .await
+            .expect("create name assertion");
+
+        backend
+            .create_assertion(
+                person_id,
+                EntityType::Person,
+                "birth_date",
+                &sample_assertion(
+                    json!({
+                        "type": "Exact",
+                        "date": {"year": 1888, "month": 2, "day": 1},
+                        "calendar": "gregorian"
+                    }),
+                    AssertionStatus::Confirmed,
+                ),
+            )
+            .await
+            .expect("create birth_date assertion");
+
+        let conn = backend.connection.lock().expect("lock");
+        let (birth_year, surname, given_name): (Option<i64>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT birth_year, primary_surname, primary_given_name FROM persons WHERE id = ?",
+                rusqlite::params![person_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("query generated person columns");
+
+        assert_eq!(birth_year, Some(1888));
+        assert_eq!(surname.as_deref(), Some("Smith"));
+        assert_eq!(given_name.as_deref(), Some("Alice"));
+    }
+
+    #[tokio::test]
+    async fn generated_person_query_columns_are_indexed_for_birth_year_and_surname() {
+        let backend = create_test_backend();
+        let conn = backend.connection.lock().expect("lock");
+
+        let birth_plan_rows: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "EXPLAIN QUERY PLAN \
+                     SELECT id FROM persons WHERE birth_year BETWEEN 1800 AND 1900",
+                )
+                .expect("prepare birth_year explain");
+            stmt.query_map([], |row| row.get::<_, String>(3))
+                .expect("run birth_year explain")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect birth_year explain")
+        };
+
+        assert!(
+            birth_plan_rows
+                .iter()
+                .any(|detail| detail.contains("idx_persons_birth_year")),
+            "expected birth-year filter to use idx_persons_birth_year, got {:?}",
+            birth_plan_rows
+        );
+
+        let surname_plan_rows: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "EXPLAIN QUERY PLAN \
+                     SELECT id FROM persons ORDER BY primary_surname, primary_given_name",
+                )
+                .expect("prepare surname explain");
+            stmt.query_map([], |row| row.get::<_, String>(3))
+                .expect("run surname explain")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect surname explain")
+        };
+
+        assert!(
+            surname_plan_rows
+                .iter()
+                .any(|detail| detail.contains("idx_persons_primary_surname")),
+            "expected surname sort to use idx_persons_primary_surname, got {:?}",
+            surname_plan_rows
+        );
     }
 }

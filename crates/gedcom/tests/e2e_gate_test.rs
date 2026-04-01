@@ -11,9 +11,11 @@ use rusqlite::Connection;
 use rustygene_core::event::Event;
 use rustygene_core::family::Family;
 use rustygene_core::person::Person;
+use rustygene_core::place::Place;
 use rustygene_gedcom::{
     ExportPrivacyPolicy, family_to_fam_node, import_gedcom_to_sqlite,
-    person_to_indi_node_with_policy, render_gedcom_file, source_to_sour_node,
+    person_to_indi_node_with_policy, render_gedcom_file, repository_to_repo_node,
+    source_to_sour_node,
 };
 use rustygene_storage::{
     JsonExportMode, JsonImportMode, Pagination, Storage, run_migrations, sqlite_impl::SqliteBackend,
@@ -84,6 +86,19 @@ fn load_families_from_snapshot(conn: &Connection) -> Vec<Family> {
 }
 
 /// Count total confirmed assertions in a database.
+fn load_places_from_snapshot(conn: &Connection) -> Vec<Place> {
+    let mut stmt = conn
+        .prepare("SELECT data FROM places ORDER BY created_at")
+        .expect("prepare places");
+    stmt.query_map([], |row| row.get::<_, String>(0))
+        .expect("query places")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect places")
+        .into_iter()
+        .map(|raw| serde_json::from_str::<Place>(&raw).expect("parse place json"))
+        .collect()
+}
+
 fn load_events_from_snapshot(conn: &Connection) -> Vec<Event> {
     let mut stmt = conn
         .prepare("SELECT data FROM events ORDER BY created_at")
@@ -103,6 +118,78 @@ fn count_all_assertions(conn: &Connection) -> usize {
         row.get::<_, usize>(0)
     })
     .expect("count all assertions")
+}
+
+fn assertion_field_distribution_for_gedcom(
+    conn: &Connection,
+) -> std::collections::BTreeMap<(String, String), usize> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT entity_type, field, COUNT(*) as cnt \
+             FROM assertions \
+             GROUP BY entity_type, field \
+             ORDER BY entity_type, field",
+        )
+        .expect("prepare assertion distribution query (gedcom)");
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, usize>(2)?,
+            ))
+        })
+        .expect("query assertion distribution (gedcom)");
+    rows.into_iter()
+        .map(|row| row.expect("distribution row"))
+        .collect()
+}
+
+fn assertion_field_distribution_for_json(
+    conn: &Connection,
+) -> std::collections::BTreeMap<(String, String), usize> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT entity_type, field, COUNT(*) as cnt \
+             FROM assertions \
+             GROUP BY entity_type, field \
+             ORDER BY entity_type, field",
+        )
+        .expect("prepare assertion distribution query (json)");
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, usize>(2)?,
+            ))
+        })
+        .expect("query assertion distribution (json)");
+    rows.into_iter()
+        .map(|row| row.expect("distribution row"))
+        .collect()
+}
+
+fn event_type_distribution(events: &[Event]) -> std::collections::BTreeMap<String, usize> {
+    let mut out = std::collections::BTreeMap::new();
+    for event in events {
+        let key = serde_json::to_string(&event.event_type).expect("serialize event_type");
+        *out.entry(key).or_insert(0) += 1;
+    }
+    out
+}
+
+fn family_structure_distribution(
+    families: &[Family],
+) -> std::collections::BTreeMap<(bool, bool, usize), usize> {
+    let mut out = std::collections::BTreeMap::new();
+    for family in families {
+        let key = (
+            family.partner1_id.is_some(),
+            family.partner2_id.is_some(),
+            family.child_links.len(),
+        );
+        *out.entry(key).or_insert(0) += 1;
+    }
+    out
 }
 
 #[tokio::test]
@@ -132,9 +219,11 @@ async fn e2e_phase1a_gate_test() {
 
     let person_count1 = *report1.entities_created_by_type.get("person").unwrap_or(&0);
     let family_count1 = *report1.entities_created_by_type.get("family").unwrap_or(&0);
+    let place_count1 = *report1.entities_created_by_type.get("place").unwrap_or(&0);
     let source_count1 = *report1.entities_created_by_type.get("source").unwrap_or(&0);
 
     assert!(person_count1 > 0, "DB1 must contain persons after import");
+    assert!(place_count1 > 0, "DB1 must contain places after import");
     assert!(
         report1.assertions_created > 0,
         "DB1 must contain assertions after import"
@@ -200,6 +289,7 @@ async fn e2e_phase1a_gate_test() {
     // =========================================================================
     let persons_for_export = load_persons_from_snapshot(&conn1_for_reads);
     let families_for_export = load_families_from_snapshot(&conn1_for_reads);
+    let places_for_export = load_places_from_snapshot(&conn1_for_reads);
     let events_for_export = load_events_from_snapshot(&conn1_for_reads);
 
     let mut export_nodes = Vec::new();
@@ -220,6 +310,7 @@ async fn e2e_phase1a_gate_test() {
         if let Some(node) = person_to_indi_node_with_policy(
             person,
             &events_for_export,
+            &places_for_export,
             &xref,
             ExportPrivacyPolicy::None,
         ) {
@@ -231,7 +322,12 @@ async fn e2e_phase1a_gate_test() {
             .original_xref
             .clone()
             .unwrap_or_else(|| format!("@F{}@", idx + 1));
-        export_nodes.push(family_to_fam_node(family, &events_for_export, &xref));
+        export_nodes.push(family_to_fam_node(
+            family,
+            &events_for_export,
+            &places_for_export,
+            &xref,
+        ));
     }
     // Also export sources (they survive round-trip via raw GEDCOM or structured fields)
     let sources_for_export: Vec<rustygene_core::evidence::Source> = {
@@ -259,6 +355,27 @@ async fn e2e_phase1a_gate_test() {
             .clone()
             .unwrap_or_else(|| format!("@S{}@", idx + 1));
         export_nodes.push(source_to_sour_node(source, &xref));
+    }
+
+    let repositories_for_export: Vec<rustygene_core::evidence::Repository> = {
+        let mut stmt = conn1_for_reads
+            .prepare("SELECT data FROM repositories ORDER BY created_at")
+            .expect("prepare repositories");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("query repositories")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect repositories")
+            .into_iter()
+            .map(|raw| {
+                serde_json::from_str::<rustygene_core::evidence::Repository>(&raw)
+                    .expect("parse repository json")
+            })
+            .collect()
+    };
+
+    for repository in &repositories_for_export {
+        let xref = format!("@R{}@", repository.id.0.simple());
+        export_nodes.push(repository_to_repo_node(repository, &xref));
     }
 
     let exported_gedcom = render_gedcom_file(&export_nodes);
@@ -292,8 +409,10 @@ async fn e2e_phase1a_gate_test() {
 
     let person_count2 = *report2.entities_created_by_type.get("person").unwrap_or(&0);
     let family_count2 = *report2.entities_created_by_type.get("family").unwrap_or(&0);
+    let place_count2 = *report2.entities_created_by_type.get("place").unwrap_or(&0);
     let event_count1 = *report1.entities_created_by_type.get("event").unwrap_or(&0);
     let event_count2 = *report2.entities_created_by_type.get("event").unwrap_or(&0);
+    let conn2_for_reads = Connection::open(&db2_path).expect("open DB2 for reads");
 
     // =========================================================================
     // Step 6: Compare assertion graphs after GEDCOM round-trip
@@ -311,25 +430,68 @@ async fn e2e_phase1a_gate_test() {
          (original={family_count1}, reimport={family_count2})"
     );
     assert_eq!(
+        place_count2, place_count1,
+        "GEDCOM round-trip must preserve the same number of places \
+         (original={place_count1}, reimport={place_count2})"
+    );
+    assert_eq!(
         event_count2, event_count1,
         "GEDCOM round-trip must preserve the same number of events \
          (original={event_count1}, reimport={event_count2})"
     );
 
-    // Assert that named persons in DB2 match DB1 by comparing sorted name sets.
+    let dist1 = assertion_field_distribution_for_gedcom(&conn1_for_reads);
+    let dist2 = assertion_field_distribution_for_gedcom(&conn2_for_reads);
+
+    let required_fields = [
+        ("person", "name"),
+        ("person", "gender"),
+        ("event", "event_type"),
+        ("event", "date"),
+        ("event", "place_ref"),
+        ("event", "participant"),
+        ("person", "event_participation"),
+        ("family", "partner1_id"),
+        ("family", "partner2_id"),
+        ("family", "child_link"),
+        ("place", "name"),
+        ("family", "partner_link"),
+        ("source", "title"),
+        ("source", "author"),
+    ];
+
+    for required_field in required_fields {
+        let key = (required_field.0.to_string(), required_field.1.to_string());
+        let count1 = dist1.get(&key).copied().unwrap_or(0);
+        let count2 = dist2.get(&key).copied().unwrap_or(0);
+        assert_eq!(
+            count1, count2,
+            "GEDCOM round-trip assertion mismatch for required bucket ({}, {}): DB1={}, DB2={}",
+            required_field.0, required_field.1, count1, count2
+        );
+    }
+
+    // Compare full PersonName structs, not just given names.
     let names1: std::collections::BTreeSet<String> = persons_for_export
         .iter()
-        .flat_map(|p| p.names.iter().map(|n| n.given_names.clone()))
+        .flat_map(|p| {
+            p.names
+                .iter()
+                .map(|n| serde_json::to_string(n).expect("serialize person name"))
+        })
         .collect();
-    let conn2_for_reads = Connection::open(&db2_path).expect("open DB2 for reads");
     let persons2 = load_persons_from_snapshot(&conn2_for_reads);
     let names2: std::collections::BTreeSet<String> = persons2
         .iter()
-        .flat_map(|p| p.names.iter().map(|n| n.given_names.clone()))
+        .flat_map(|p| {
+            p.names
+                .iter()
+                .map(|n| serde_json::to_string(n).expect("serialize person name"))
+        })
         .collect();
     assert_eq!(
         names1, names2,
-        "GEDCOM round-trip must preserve all person given names identically"
+        "GEDCOM round-trip must preserve full PersonName structs"
     );
 
     let person_xrefs2: std::collections::BTreeSet<String> = persons2
@@ -342,6 +504,13 @@ async fn e2e_phase1a_gate_test() {
     );
 
     let families2 = load_families_from_snapshot(&conn2_for_reads);
+    let family_structures1 = family_structure_distribution(&families_for_export);
+    let family_structures2 = family_structure_distribution(&families2);
+    assert_eq!(
+        family_structures1, family_structures2,
+        "GEDCOM round-trip must preserve family partner presence and child-link counts"
+    );
+
     let family_xrefs2: std::collections::BTreeSet<String> = families2
         .iter()
         .filter_map(|family| family.original_xref.clone())
@@ -373,6 +542,57 @@ async fn e2e_phase1a_gate_test() {
     assert_eq!(
         source_xrefs2, original_source_xrefs,
         "GEDCOM round-trip must preserve original source xref IDs"
+    );
+
+    let events2 = load_events_from_snapshot(&conn2_for_reads);
+    let places2 = load_places_from_snapshot(&conn2_for_reads);
+    let place_names1: std::collections::BTreeSet<String> = places_for_export
+        .iter()
+        .flat_map(|place| place.names.iter().map(|name| name.name.clone()))
+        .collect();
+    let place_names2: std::collections::BTreeSet<String> = places2
+        .iter()
+        .flat_map(|place| place.names.iter().map(|name| name.name.clone()))
+        .collect();
+    assert_eq!(
+        place_names1, place_names2,
+        "GEDCOM round-trip must preserve place names"
+    );
+    let event_types1 = event_type_distribution(&events_for_export);
+    let event_types2 = event_type_distribution(&events2);
+    assert_eq!(
+        event_types1, event_types2,
+        "GEDCOM round-trip must preserve event type distribution"
+    );
+
+    let citation_count1: usize = conn1_for_reads
+        .query_row("SELECT COUNT(*) FROM citations", [], |row| {
+            row.get::<_, usize>(0)
+        })
+        .expect("count DB1 citations");
+    let citation_count2: usize = conn2_for_reads
+        .query_row("SELECT COUNT(*) FROM citations", [], |row| {
+            row.get::<_, usize>(0)
+        })
+        .expect("count DB2 citations");
+    assert_eq!(
+        citation_count1, citation_count2,
+        "GEDCOM round-trip must preserve citation count"
+    );
+
+    let repository_count1: usize = conn1_for_reads
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| {
+            row.get::<_, usize>(0)
+        })
+        .expect("count DB1 repositories");
+    let repository_count2: usize = conn2_for_reads
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| {
+            row.get::<_, usize>(0)
+        })
+        .expect("count DB2 repositories");
+    assert_eq!(
+        repository_count1, repository_count2,
+        "GEDCOM round-trip must preserve repository count"
     );
 
     // =========================================================================
@@ -412,11 +632,17 @@ async fn e2e_phase1a_gate_test() {
     // =========================================================================
     let conn3_for_reads = Connection::open(&db3_path).expect("open DB3 for reads");
     let assertion_count3 = count_all_assertions(&conn3_for_reads);
+    let dist3 = assertion_field_distribution_for_json(&conn3_for_reads);
 
     assert_eq!(
         assertion_count3, assertion_count1,
         "JSON round-trip must preserve the exact assertion count \
          (original={assertion_count1}, json-reimport={assertion_count3})"
+    );
+
+    assert_eq!(
+        dist1, dist3,
+        "JSON round-trip must produce identical assertion field distributions"
     );
 
     let persons3 = backend3
@@ -445,6 +671,26 @@ async fn e2e_phase1a_gate_test() {
         sources3.len(),
         source_count1,
         "JSON round-trip must preserve the same number of sources"
+    );
+
+    let citations3: usize = conn3_for_reads
+        .query_row("SELECT COUNT(*) FROM citations", [], |row| {
+            row.get::<_, usize>(0)
+        })
+        .expect("count DB3 citations");
+    assert_eq!(
+        citations3, citation_count1,
+        "JSON round-trip must preserve citation count"
+    );
+
+    let repositories3: usize = conn3_for_reads
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| {
+            row.get::<_, usize>(0)
+        })
+        .expect("count DB3 repositories");
+    assert_eq!(
+        repositories3, repository_count1,
+        "JSON round-trip must preserve repository count"
     );
 
     // =========================================================================

@@ -1,7 +1,9 @@
 # GEDCOM 5.5.1 Import/Export Gaps
 
-Known limitations in GEDCOM handling, discovered during Phase 1A testing with
-`testdata/gedcom/kennedy.ged`, `simpsons.ged`, and `torture551.ged`.
+Known limitations in GEDCOM handling, discovered during Phase 1A/1B testing with
+`testdata/gedcom/kennedy.ged`, `simpsons.ged`, `torture551.ged`, and the
+Phase 1B corpus fixtures (`ancestry_sample.ged`, `rootsmagic_sample.ged`,
+`gramps_sample.ged`, `legacy_sample.ged`, `paf_sample.ged`).
 
 Last reviewed: 2026-04-01.
 
@@ -22,32 +24,32 @@ and other family event tags.
 REPO records are imported and exported. Gate test verifies repository count
 round-trip.
 
+### ~~3. Inline Citation Round-Trip~~ — FIXED
+Inline `SOUR` citations (`2 SOUR @Sx@` within INDI/FAM event subrecords) now
+round-trip correctly. Import maps citations into `Citation` entities with
+`CitationRef` linkages, and export re-emits inline `SOUR` subtrees on event
+records. Synthetic end-to-end coverage verifies `PAGE`, `QUAY`, and `DATA/TEXT`
+mapping plus citation count preservation across import → export → re-import.
+
+### ~~6. Phase 1B GEDCOM Corpus Hardening~~ — IN PROGRESS (baseline in place)
+`crates/gedcom/tests/corpus_roundtrip_test.rs` now runs import/export/re-import
+against five vendor fixtures (Ancestry, RootsMagic, Gramps, Legacy, PAF),
+checks round-trip row and assertion-distribution stability, and validates that
+standard deferred-tag counters are present for `ASSO`, `CHAN`, `DATA`, `NOTE`,
+and `OBJE`.
+
+### ~~7. torture551 Standard-Tag Accounting Incomplete~~ — FIXED
+
+Follow-up bead `rustygene-de3` is now addressed. Recognized GEDCOM 5.5.1
+standard tags are explicitly counted as deferred (instead of unhandled) when
+they appear in edge-case paths, and `crates/gedcom/tests/torture551_tag_accounting_test.rs`
+now enforces zero unhandled standard tags for `torture551.ged`.
+
 ---
 
 ## Open Gaps
 
-### 3. Inline Citation Round-Trip (Phase 1B)
-
-**Impact: MEDIUM** · Bead: rustygene-dy8
-
-The import code for inline SOUR citations (`2 SOUR @Sx@` within INDI/FAM event
-subrecords → Citation + CitationRef) exists and unit tests pass. However:
-
-- **kennedy.ged has zero inline SOUR citations.** Its `0 @Sx@ SOUR` records are
-  top-level Sources, not inline citations. The `2 SOUR 11` on line 22 is a HEAD
-  stats counter. No test corpus file currently exercises the inline citation
-  import path end-to-end.
-- **GEDCOM exporter does not emit inline SOUR references** back into INDI/FAM
-  subrecords, so citation round-trip would fail even if import worked.
-- **torture551.ged** has inline citations but uses CR-only line endings + ANSEL
-  encoding, which prevents direct `include_str!` usage.
-
-**Resolution path:** Create a small synthetic GEDCOM test fixture with inline
-`2 SOUR @S1@` + PAGE/QUAY sub-nodes. Verify citation import AND export
-round-trip with that fixture. This is Phase 1B work (spec §16.1 sub-step 4.5
-says "inline source citations" but the primary gate test corpus lacks them).
-
-### 4. NOTE Records Not Stored
+### 8. NOTE Records Not Stored
 
 **Impact: LOW** · Phase 1B
 
@@ -55,13 +57,15 @@ Stand-alone `NOTE @N1@` records and inline `1 NOTE` subrecords are absorbed by
 the raw GEDCOM fallback. They survive round-trip via `_raw_gedcom` but are not
 typed entities.
 
-### 6. Multimedia (OBJE) Records Not Handled
+### 9. Multimedia (OBJE) Coverage is Root-Level Only
 
 **Impact: LOW** · Phase 1B
 
-`OBJE` root-level records are not imported as typed Media entities.
+Root-level `OBJE` records are imported/exported as typed `Media` entities.
+Inline `OBJE` links on other records are currently deferred/counted but not yet
+mapped into explicit `MediaRef` link structures.
 
-### 7. ASSO (Association) Records Ignored
+### 10. ASSO (Association) Records Ignored
 
 **Impact: LOW** · Phase 1B+
 
@@ -71,7 +75,7 @@ typed entities.
 
 ## Round-Trip Fidelity Gaps
 
-### 8. xref IDs Not Preserved
+### 11. xref IDs Not Preserved
 
 **Impact: MEDIUM**
 
@@ -80,7 +84,7 @@ import/export. The exporter assigns sequential UUIDs as xrefs (`@I<uuid>@`),
 which breaks any external cross-references that relied on the original IDs.
 This is by design (UUID-based primary keys), but it is a fidelity loss.
 
-### 9. CHAN (Change Timestamp) Not Exported
+### 12. CHAN (Change Timestamp) Not Exported
 
 **Impact: LOW**
 
@@ -88,7 +92,7 @@ This is by design (UUID-based primary keys), but it is a fidelity loss.
 during import but no audit timestamp field is stored on entity types. They are
 not re-emitted on export.
 
-### 10. HEAD Block Incomplete on Export
+### 13. HEAD Block Incomplete on Export
 
 **Impact: LOW**
 
@@ -100,14 +104,12 @@ The exported HEAD record omits several standard fields present in valid GEDCOM
 - `1 GEDC / 2 FORM LINEAGE-LINKED` — explicitly declares the GEDCOM form
 - `1 LANG <language>` — language of data
 
-### 11. Name TYPE Annotation Not Parsed or Exported
+### 14. Name TYPE Annotation Export Incomplete
 
 **Impact: LOW**
 
-`2 TYPE Birth` (or `Married`, `Also Known As`, etc.) name-type annotations are
-**not parsed** during import — `parse_name_node` hardcodes `name_type:
-NameType::Birth` and the `TYPE` tag falls through the `_ => {}` arm. The
-exporter also does not emit a `TYPE` subnode.
+`2 TYPE` on `NAME` is parsed during import into `PersonName.name_type`, but
+export currently does not emit `2 TYPE` back under `NAME` nodes.
 
 ---
 
@@ -133,6 +135,7 @@ The following issues were discovered and fixed during Phase 8.2:
 - FAMS/FAMC back-links rebuilt correctly on export from family data
 - Source TITL, AUTH, PUBL fields
 - Custom tag pass-through via `_raw_gedcom` (unknown tags survive round-trip for persons)
+- Phase 1B corpus hardening baseline: import/export/re-import test across 5 vendor fixtures
 - UUID-based entity primary keys
 - All three test files import and export without errors or panics:
   - `kennedy.ged` (70 persons, 23 families, 23 events, 474 assertions)
@@ -143,21 +146,9 @@ The following issues were discovered and fixed during Phase 8.2:
 
 ## Remaining Phase 1A Work Items
 
-The following items are required by `INITIAL_SPEC.md` Steps 4.3, 5.1, and 5.5
-and must be completed before Phase 1A can be closed. Each has a tracking bead.
-
-1. **Replace forbidden `_ => {}` catch-all patterns** (bead `rustygene-skt`, P0):
-   4 locations in `crates/gedcom/src/lib.rs` silently drop standard GEDCOM tags.
-   Must be replaced with explicit handling, deferred-tag counters, or unknown-tag
-   counters.
-2. **Citation round-trip** (bead `rustygene-dy8`, P1): Resolve `SOUR` references
-   within event subrecords to Citation entities. kennedy.ged imports 0 citations
-   despite having `SOUR` references.
-3. **Map PLAC tags to Place entities** (bead `rustygene-um3`, P1): Place strings
-   are stored inline on events but not mapped to `Place` domain entities.
-4. **Gate test fidelity** (bead `rustygene-dri`, P0, blocked by skt + dy8):
-   Update e2e_gate_test.rs to compare full assertion graphs per-entity-type and
-   per-field, not just given names or total counts.
+No remaining open Phase 1A blockers. The previously tracked items (`skt`,
+`um3`, `dri`, and inline citation round-trip in `dy8`) are now implemented and
+covered by tests.
 
 ## Resolved Phase 1A Work Items
 
@@ -172,15 +163,13 @@ Previously tracked as gaps, now implemented:
 
 The following improvements are deferred to a later phase:
 
-1. **NOTE/REPO/OBJE entity handling**: Model as first-class entity types.
-2. **ASSO record import**: Store witness/association links.
-3. **xref alias table**: Optionally preserve original xref IDs across
+1. **ASSO record import**: Store witness/association links.
+2. **xref alias table**: Optionally preserve original xref IDs across
    import/export.
-4. **Name type import/export**: Parse `2 TYPE` annotation into `NameType` field.
-5. **Storage integration tests** (bead `rustygene-41z`): Cover Place, Note,
+3. **Name type export**: Emit `2 TYPE` annotation from `PersonName.name_type`.
+4. **Storage integration tests** (bead `rustygene-41z`): Cover Place, Note,
    Media, and LDS entity CRUD paths.
-6. **CLI show/query expansion** (bead `rustygene-c7h`): Add commands for
+5. **CLI show/query expansion** (bead `rustygene-c7h`): Add commands for
    Source, Citation, Repository, Note, and Media entities.
-   (currently hardcoded to `Birth`); emit on export for non-birth names.
-5. **HEAD block completeness** (bead `rustygene-8mg`): Emit DATE, SUBM,
+6. **HEAD block completeness** (bead `rustygene-8mg`): Emit DATE, SUBM,
    GEDC.FORM, LANG on export.

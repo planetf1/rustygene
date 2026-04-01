@@ -1,0 +1,23 @@
+0 HEAD
+1 SOUR GRAMPS
+2 VERS 5.2
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+0 @M1@ OBJE
+1 FILE media/census_1881.jpg
+1 FORM jpg
+1 TITL 1881 Census Page
+0 @N1@ NOTE Multi-line note start
+1 CONT continued line one
+1 CONT continued line two
+0 @I1@ INDI
+1 NAME Elinor /Davies/
+1 SEX F
+1 BIRT
+2 DATE 3 MAR 1855
+2 PLAC Llandeilo, Carmarthenshire, Wales
+1 OBJE @M1@
+1 NOTE @N1@
+0 TRLR

@@ -6,9 +6,11 @@ use chrono::Utc;
 use rusqlite::Connection;
 use rustygene_core::assertion::{Assertion, AssertionStatus, EvidenceType};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
-use rustygene_core::evidence::{Citation, CitationRef, Repository, RepositoryType, Source};
+use rustygene_core::evidence::{Citation, CitationRef, Media, Note, NoteType, Repository, RepositoryType, Source};
 use rustygene_core::family::{ChildLink, Family, LineageType, PartnerLink};
+use rustygene_core::lds::{LdsOrdinance, LdsOrdinanceType, LdsStatus};
 use rustygene_core::person::Person;
+use rustygene_core::place::{Place, PlaceName, PlaceType};
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::{ActorRef, EntityId, Gender};
 use rustygene_storage::sqlite_impl::SqliteBackend;
@@ -138,6 +140,111 @@ async fn sqlite_end_to_end_storage_flow() {
         .await
         .expect("get marriage event");
     assert_eq!(fetched_event.participants.len(), 2);
+
+    // Place CRUD coverage
+    let place = Place {
+        id: EntityId::new(),
+        place_type: PlaceType::City,
+        names: vec![PlaceName {
+            name: "Cardiff".to_string(),
+            language: Some("en".to_string()),
+            date_range: None,
+        }],
+        coordinates: Some((51.4816, -3.1791)),
+        enclosed_by: vec![],
+        external_ids: vec![],
+    };
+    backend.create_place(&place).await.expect("create place");
+    let fetched_place = backend.get_place(place.id).await.expect("get place");
+    assert_eq!(fetched_place.place_type, PlaceType::City);
+    assert_eq!(fetched_place.names[0].name, "Cardiff");
+    let listed_places = backend
+        .list_places(Pagination {
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list places");
+    assert!(listed_places.iter().any(|p| p.id == place.id));
+
+    // Note CRUD coverage
+    let note = Note {
+        id: EntityId::new(),
+        text: "Integration test note".to_string(),
+        note_type: NoteType::Research,
+        original_xref: Some("@N1@".to_string()),
+        _raw_gedcom: BTreeMap::new(),
+    };
+    backend.create_note(&note).await.expect("create note");
+    let fetched_note = backend.get_note(note.id).await.expect("get note");
+    assert_eq!(fetched_note.text, "Integration test note");
+    assert_eq!(fetched_note.note_type, NoteType::Research);
+    let listed_notes = backend
+        .list_notes(Pagination {
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list notes");
+    assert!(listed_notes.iter().any(|n| n.id == note.id));
+
+    // Media CRUD coverage
+    let media = Media {
+        id: EntityId::new(),
+        file_path: "media/marriage-register.jpg".to_string(),
+        content_hash: "sha256:integration-test".to_string(),
+        mime_type: "image/jpeg".to_string(),
+        thumbnail_path: Some("media/thumbs/marriage-register.jpg".to_string()),
+        ocr_text: Some("Marriage register OCR sample".to_string()),
+        dimensions_px: None,
+        physical_dimensions_mm: None,
+        caption: Some("Marriage Register Scan".to_string()),
+        original_xref: Some("@O1@".to_string()),
+        _raw_gedcom: BTreeMap::new(),
+    };
+    backend.create_media(&media).await.expect("create media");
+    let fetched_media = backend.get_media(media.id).await.expect("get media");
+    assert_eq!(fetched_media.mime_type, "image/jpeg");
+    assert_eq!(fetched_media.caption.as_deref(), Some("Marriage Register Scan"));
+    let listed_media = backend
+        .list_media(Pagination {
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list media");
+    assert!(listed_media.iter().any(|m| m.id == media.id));
+
+    // LDS Ordinance CRUD coverage
+    let lds_ordinance = LdsOrdinance {
+        id: EntityId::new(),
+        ordinance_type: LdsOrdinanceType::Baptism,
+        status: LdsStatus::Completed,
+        temple_code: Some("LON".to_string()),
+        date: None,
+        place_ref: Some(place.id),
+        family_ref: Some(family.id),
+        _raw_gedcom: BTreeMap::new(),
+    };
+    backend
+        .create_lds_ordinance(&lds_ordinance)
+        .await
+        .expect("create lds ordinance");
+    let fetched_lds = backend
+        .get_lds_ordinance(lds_ordinance.id)
+        .await
+        .expect("get lds ordinance");
+    assert_eq!(fetched_lds.ordinance_type, LdsOrdinanceType::Baptism);
+    assert_eq!(fetched_lds.status, LdsStatus::Completed);
+    assert_eq!(fetched_lds.temple_code.as_deref(), Some("LON"));
+    let listed_lds = backend
+        .list_lds_ordinances(Pagination {
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list lds ordinances");
+    assert!(listed_lds.iter().any(|o| o.id == lds_ordinance.id));
 
     // Source chain: repository -> source -> citation
     let repository = Repository {

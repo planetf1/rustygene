@@ -1,0 +1,36 @@
+0 HEAD
+1 SOUR ROOTSMAGIC
+2 VERS 9.0
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+0 @S1@ SOUR
+1 TITL Parish Register of St Peter
+0 @I1@ INDI
+1 NAME Thomas /Richards/
+2 TYPE Birth
+1 SEX M
+1 BIRT
+2 DATE 14 JUN 1840
+2 PLAC St Peter's Parish, Carmarthenshire
+2 SOUR @S1@
+3 PAGE Baptism Entry 42
+3 QUAY 3
+3 DATA
+4 TEXT Baptized by Rev. Morgan
+1 ASSO @I2@
+2 RELA Witness
+0 @I2@ INDI
+1 NAME David /Jones/
+1 SEX M
+1 BIRT
+2 DATE 1838
+2 PLAC Carmarthenshire
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I2@
+1 CHAN
+2 DATE 1 APR 2026
+3 TIME 10:11:12
+0 TRLR

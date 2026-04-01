@@ -88,7 +88,8 @@ SQLite-backed persistence implementing the `Storage` async trait.
 | Table            | Stores |
 |---|---|
 | `persons`        | `Person` JSON snapshots |
-| `families`       | `Family` **and** `Relationship` JSON snapshots (co-stored, discriminated by `relationship_type` field presence) |
+| `families`       | `Family` JSON snapshots |
+| `family_relationships` | `Relationship` JSON snapshots |
 | `events`         | `Event` JSON snapshots |
 | `places`         | `Place` JSON snapshots |
 | `sources`        | `Source` JSON snapshots |
@@ -103,7 +104,8 @@ SQLite-backed persistence implementing the `Storage` async trait.
 | `relationships`  | Graph edges between entities |
 
 **Migration files:** `migrations/V001__initial_schema.sql`,
-`migrations/V002__add_lds_ordinances_table.sql`
+`migrations/V002__add_lds_ordinances_table.sql`,
+`migrations/V003__split_families_and_relationships.sql`
 
 **Dependencies:** `core`, `rusqlite` (bundled), `refinery`, `serde_json`,
 `tokio`, `chrono`, `uuid`
@@ -117,8 +119,8 @@ text files and the core domain model via the storage layer.
 | Function | Description |
 |---|---|
 | `import_gedcom_to_sqlite(conn, job_id, input)` | Parse GEDCOM, map to entities/assertions, persist |
-| `person_to_indi_node_with_policy(person, xref, policy)` | Export a Person to a GEDCOM INDI node |
-| `family_to_fam_node(family, xref)` | Export a Family to a GEDCOM FAM node |
+| `person_to_indi_node_with_policy(person, events, places, xref, policy)` | Export a Person to a GEDCOM INDI node |
+| `family_to_fam_node(family, events, places, xref)` | Export a Family to a GEDCOM FAM node |
 | `source_to_sour_node(source, xref)` | Export a Source to a GEDCOM SOUR node |
 | `repository_to_repo_node(repo, xref)` | Export a Repository to a GEDCOM REPO node |
 | `note_to_note_node(note, xref)` | Export a Note to a GEDCOM NOTE node |
@@ -142,9 +144,7 @@ text files and the core domain model via the storage layer.
 2. Per-entity `_to_xxx_node` functions build `GedcomNode` trees
 3. `render_gedcom_file` serializes the tree to GEDCOM 5.5.1 text
 
-**Known export gaps:** Events (BIRT, DEAT, MARR, etc.) are imported into the
-`events` table but are not yet re-emitted in GEDCOM export. See
-`docs/GEDCOM_GAPS.md` for the full list.
+**Known export gaps:** See `docs/GEDCOM_GAPS.md` for the current list.
 
 **Encoding handling:** GEDCOM files are first attempted as UTF-8. If that
 fails with an I/O `InvalidData` error, each byte is mapped directly to a
@@ -197,13 +197,13 @@ Entity snapshot tables (`persons`, `families`, etc.) store the materialised
 view of confirmed+preferred assertions for each entity, rebuilt on demand via
 `rebuild_all_snapshots()`.
 
-### Co-Stored Tables
+### Family and Relationship Storage
 
-The `families` table stores both `Family` and `Relationship` rows. These are
-distinguished by the presence of a `relationship_type` JSON field in the
-`data` column: `Relationship` rows always have it, `Family` rows never do.
-The storage layer's `list_families` and `list_relationships` implementations
-filter using `json_extract(data, '$.relationship_type')` accordingly.
+`Family` and `Relationship` are stored in separate tables:
+- `families` stores only `Family` rows
+- `family_relationships` stores only `Relationship` rows
+
+This matches the architectural separation documented in `docs/DECISIONS.md`.
 
 ---
 
@@ -213,7 +213,10 @@ filter using `json_extract(data, '$.relationship_type')` accordingly.
 |---|---|
 | `crates/core/tests/property_based.rs` | Proptest: `DateValue` ordering, `Assertion` status transitions, `PersonName` serde round-trip |
 | `crates/storage/tests/integration_storage.rs` | Full CRUD + audit log + research log + JSON export/import + snapshot rebuild |
-| `crates/gedcom/tests/e2e_gate_test.rs` | **Phase 1A gate test:** GEDCOM import → query → show → GEDCOM export → re-import → **name comparison only** (spec §8.3 requires full assertion graph comparison — tracked by bead `rustygene-yvk`); JSON export → re-import → assertion count comparison |
+| `crates/gedcom/tests/e2e_gate_test.rs` | Phase 1A gate test with per-entity/per-field assertion distribution checks for GEDCOM and JSON round-trip |
+| `crates/gedcom/tests/citation_roundtrip_test.rs` | Synthetic inline citation round-trip coverage (`SOUR`/`PAGE`/`QUAY`/`DATA`/`TEXT`) |
+| `crates/gedcom/tests/corpus_roundtrip_test.rs` | Phase 1B 5-vendor GEDCOM corpus import/export/re-import hardening gate |
+| `crates/gedcom/tests/torture551_tag_accounting_test.rs` | Enforces zero unhandled standard GEDCOM tags for `torture551.ged` |
 
 Running all tests: `cargo test --workspace`
 
@@ -221,13 +224,7 @@ Running all tests: `cargo test --workspace`
 
 ## Remaining Phase 1A Work
 
-The following items are required by `INITIAL_SPEC.md` and must be completed
-before Phase 1A can be closed. See `docs/GEDCOM_GAPS.md` for full details.
-
-- Person event import from INDI records (bead `rustygene-46m`)
-- GEDCOM event export to INDI/FAM nodes (bead `rustygene-ed8`)
-- Citation round-trip from SOUR references (bead `rustygene-h88`)
-- Gate test assertion graph comparison (bead `rustygene-yvk`)
+No open Phase 1A blockers remain.
 
 ## Phase 2+ Roadmap
 
