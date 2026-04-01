@@ -1,102 +1,71 @@
 # GEDCOM 5.5.1 Import/Export Gaps
 
-Discovered during Phase 8.1/8.2 testing with real-world GEDCOM files:
+Known limitations in GEDCOM handling, discovered during Phase 1A testing with
 `testdata/gedcom/kennedy.ged`, `simpsons.ged`, and `torture551.ged`.
 
----
-
-## Critical Export Gaps
-
-### 1. Person Events Not Exported to INDI Nodes
-
-**Impact: HIGH**
-
-Events (birth, death, burial, christening, etc.) are parsed and stored in the
-`events` table during import, but `person_to_indi_node_with_policy` does not
-accept or emit any event subrecords. The exported INDI node only contains NAME
-and SEX tags.
-
-Missing GEDCOM tags in INDI records:
-- `BIRT` (birth: date + place)
-- `DEAT` (death: date + place)
-- `BURI` (burial)
-- `CHR` (christening)
-- `BAPM` (baptism)
-- `CONF` (confirmation)
-- `GRAD` (graduation)
-- `OCCU`, `RELI`, `EDUC`, `NATI`, `TITL` (attribute events)
-- `NOTE` references attached to persons
-
-**Affected test data:** kennedy.ged shows 238 missing DATE, 83 missing PLAC, 66
-missing BIRT, and 41 missing DEAT tags in the exported output.
-
-**Root cause:** `person_to_indi_node_with_policy` signature does not take events
-as a parameter. The events are stored with participant person IDs in the events
-table, but are never re-attached to the INDI node during export. The fix
-requires loading events per person in the CLI export pipeline and passing them
-into the export function.
-
-### 2. Family Events Not Exported to FAM Nodes
-
-**Impact: HIGH**
-
-Family events (marriage, divorce, separation, etc.) are parsed during import but
-`family_to_fam_node` does not emit any FAM event subrecords.
-
-Missing GEDCOM tags in FAM records:
-- `MARR` (marriage: date + place)
-- `DIV` (divorce)
-- `SEPR`, `CENS`, `EVEN` (other family events)
-
-**Root cause:** Same as person events — `family_to_fam_node` does not accept an
-events slice.
+Last reviewed: 2026-04-01.
 
 ---
 
-## Import Gaps
+## Resolved Gaps (kept for history)
 
-### 3. Source Citation Mapping Incomplete
+### ~~1. Person Events Not Exported to INDI Nodes~~ — FIXED
+`person_to_indi_node_with_policy` now accepts `&[Event]` and `&[Place]` and
+emits BIRT/DEAT/BURI/CHR/BAPM and other event tags. Gate test verifies
+event-type distribution round-trip.
 
-**Impact: MEDIUM**
+### ~~2. Family Events Not Exported to FAM Nodes~~ — FIXED
+`family_to_fam_node` now accepts `&[Event]` and `&[Place]` and emits MARR/DIV
+and other family event tags.
 
-SOUR references within event records and individual notes (`1 SOUR @S1@`) are
-parsed, but the linkage between citations and assertions is incomplete.
-kennedy.ged imports 70 persons, 23 events, 474 assertions, and 239 unknown
-tags, but 0 citation entities are created. The `SOUR` reference tracking within
-event subrecords is likely going to the unknown-tag collector rather than being
-resolved to Source entities.
+### ~~5. Repository (REPO) Records Not Handled~~ — FIXED
+REPO records are imported and exported. Gate test verifies repository count
+round-trip.
+
+---
+
+## Open Gaps
+
+### 3. Inline Citation Round-Trip (Phase 1B)
+
+**Impact: MEDIUM** · Bead: rustygene-dy8
+
+The import code for inline SOUR citations (`2 SOUR @Sx@` within INDI/FAM event
+subrecords → Citation + CitationRef) exists and unit tests pass. However:
+
+- **kennedy.ged has zero inline SOUR citations.** Its `0 @Sx@ SOUR` records are
+  top-level Sources, not inline citations. The `2 SOUR 11` on line 22 is a HEAD
+  stats counter. No test corpus file currently exercises the inline citation
+  import path end-to-end.
+- **GEDCOM exporter does not emit inline SOUR references** back into INDI/FAM
+  subrecords, so citation round-trip would fail even if import worked.
+- **torture551.ged** has inline citations but uses CR-only line endings + ANSEL
+  encoding, which prevents direct `include_str!` usage.
+
+**Resolution path:** Create a small synthetic GEDCOM test fixture with inline
+`2 SOUR @S1@` + PAGE/QUAY sub-nodes. Verify citation import AND export
+round-trip with that fixture. This is Phase 1B work (spec §16.1 sub-step 4.5
+says "inline source citations" but the primary gate test corpus lacks them).
 
 ### 4. NOTE Records Not Stored
 
-**Impact: MEDIUM**
+**Impact: LOW** · Phase 1B
 
-`NOTE` root-level records and inline `1 NOTE` subrecords are not persisted to
-any typed entity table. They are absorbed by the custom tag / raw GEDCOM
-fallback mechanism, which means they survive round-trip only if attached to a
-person record (via `_raw_gedcom`), and only if that person is exported.
-Stand-alone `NOTE @N1@ ...` records are lost entirely on export.
-
-### 5. Repository (REPO) Records Not Handled
-
-**Impact: LOW**
-
-`REPO` (repository) root-level records are not imported to any entity type.
-They are silently skipped. References from Source records to repositories
-(`3 REPO @R1@`) remain as raw/unknown tags.
+Stand-alone `NOTE @N1@` records and inline `1 NOTE` subrecords are absorbed by
+the raw GEDCOM fallback. They survive round-trip via `_raw_gedcom` but are not
+typed entities.
 
 ### 6. Multimedia (OBJE) Records Not Handled
 
-**Impact: LOW**
+**Impact: LOW** · Phase 1B
 
-`OBJE` (object/media) root-level records are not imported. Inline `1 OBJE`
-subrecords are captured as raw tags.
+`OBJE` root-level records are not imported as typed Media entities.
 
 ### 7. ASSO (Association) Records Ignored
 
-**Impact: LOW**
+**Impact: LOW** · Phase 1B+
 
-`1 ASSO @I1@` records linking persons (witness relationships, etc.) are not
-parsed or stored.
+`1 ASSO @I1@` association records are not parsed or stored.
 
 ---
 
