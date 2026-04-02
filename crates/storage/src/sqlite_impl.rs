@@ -1,8 +1,8 @@
 use crate::{
-    AuditLogEntry, EntityType, JsonAssertion, JsonExportManifest, JsonExportMode, JsonExportResult,
-    JsonImportMode, JsonImportReport, Pagination, RelationshipEdge, ResearchLogFilter,
-    SandboxAssertionDiff, StagingProposal, StagingProposalFilter, Storage, StorageError,
-    StorageErrorCode,
+    AuditLogEntry, EntityType, FieldAssertion, JsonAssertion, JsonExportManifest,
+    JsonExportMode, JsonExportResult, JsonImportMode, JsonImportReport, Pagination,
+    RelationshipEdge, ResearchLogFilter, SandboxAssertionDiff, StagingProposal,
+    StagingProposalFilter, Storage, StorageError, StorageErrorCode,
 };
 use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
 use rustygene_core::assertion::{
@@ -17,6 +17,7 @@ use rustygene_core::place::Place;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -59,7 +60,9 @@ struct ResearchRowData {
 }
 
 impl SqliteBackend {
+    #[tracing::instrument(skip(connection))]
     pub fn new(connection: Connection) -> Self {
+        tracing::debug!("opened sqlite backend connection");
         Self {
             connection: Arc::new(Mutex::new(connection)),
         }
@@ -1049,6 +1052,8 @@ impl SqliteBackend {
         Ok(())
     }
 
+
+
     fn rebuild_search_index_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), StorageError> {
         tx.execute("DELETE FROM search_index", [])
             .map_err(|e| StorageError {
@@ -1617,8 +1622,118 @@ impl Storage for SqliteBackend {
         self.delete_sync("persons", id)
     }
 
+    #[tracing::instrument(skip(self), fields(limit = pagination.limit, offset = pagination.offset))]
     async fn list_persons(&self, pagination: Pagination) -> Result<Vec<Person>, StorageError> {
-        self.list_sync::<Person>("persons", pagination)
+        let persons = self.list_sync::<Person>("persons", pagination)?;
+        tracing::debug!(count = persons.len(), "listed persons from sqlite backend");
+        Ok(persons)
+    }
+
+    #[tracing::instrument(skip(self), fields(person_id = %person_id))]
+    async fn list_families_for_person(&self, person_id: EntityId) -> Result<Vec<Family>, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let id_text = person_id.to_string();
+        let mut stmt = conn
+            .prepare(
+                "SELECT data
+                 FROM families
+                 WHERE json_extract(data, '$.partner1_id') = ?
+                    OR json_extract(data, '$.partner2_id') = ?
+                    OR EXISTS (
+                        SELECT 1
+                        FROM json_each(data, '$.child_links') c
+                        WHERE json_extract(c.value, '$.child_id') = ?
+                    )
+                 ORDER BY created_at DESC",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare families-for-person query failed: {}", e),
+            })?;
+
+        let rows: Vec<String> = stmt
+            .query_map(rusqlite::params![&id_text, &id_text, &id_text], |row| row.get(0))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Families-for-person query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Families-for-person collection failed: {}", e),
+            })?;
+
+        let families = rows
+            .into_iter()
+            .map(|raw| serde_json::from_str::<Family>(&raw).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Family JSON parse failed: {}", e),
+            }))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        tracing::debug!(count = families.len(), "listed families for person");
+        Ok(families)
+    }
+
+    #[tracing::instrument(skip(self), fields(person_id = %person_id))]
+    async fn list_events_for_person(&self, person_id: EntityId) -> Result<Vec<Event>, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let id_text = person_id.to_string();
+        let mut stmt = conn
+            .prepare(
+                "SELECT data
+                 FROM events e
+                 WHERE EXISTS (
+                    SELECT 1
+                    FROM json_each(e.data, '$.participants') p
+                    WHERE json_extract(p.value, '$.person_id') = ?
+                 )",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare events-for-person query failed: {}", e),
+            })?;
+
+        let rows: Vec<String> = stmt
+            .query_map(rusqlite::params![&id_text], |row| row.get(0))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Events-for-person query failed: {}", e),
+            })?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Events-for-person collection failed: {}", e),
+            })?;
+
+        let mut events = rows
+            .into_iter()
+            .map(|raw| serde_json::from_str::<Event>(&raw).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Event JSON parse failed: {}", e),
+            }))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        events.sort_by(|left, right| match (&left.date, &right.date) {
+            (Some(left_date), Some(right_date)) => left_date
+                .partial_cmp(right_date)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.id.to_string().cmp(&right.id.to_string())),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => left.id.to_string().cmp(&right.id.to_string()),
+        });
+
+        tracing::debug!(count = events.len(), "listed timeline events for person");
+        Ok(events)
     }
 
     // Family
@@ -1862,6 +1977,7 @@ impl Storage for SqliteBackend {
         self.list_sync::<LdsOrdinance>("lds_ordinances", pagination)
     }
 
+    #[tracing::instrument(skip(self, assertion), fields(entity_id = %entity_id, entity_type = ?entity_type, field = field))]
     async fn create_assertion(
         &self,
         entity_id: EntityId,
@@ -1903,6 +2019,7 @@ impl Storage for SqliteBackend {
             })?;
 
         if existing_id.is_some() {
+            tracing::debug!(idempotency_key = %idempotency_key, "skipping duplicate assertion insert");
             tx.commit().map_err(|e| StorageError {
                 code: StorageErrorCode::Backend,
                 message: format!("Transaction commit failed: {}", e),
@@ -1964,6 +2081,13 @@ impl Storage for SqliteBackend {
             code: StorageErrorCode::Backend,
             message: format!("Assertion insert failed: {}", e),
         })?;
+
+        tracing::debug!(
+            preferred,
+            confidence = assertion.confidence,
+            citations = assertion.source_citations.len(),
+            "inserted assertion into sqlite backend"
+        );
 
         Self::recompute_entity_snapshot_tx(&tx, entity_id, entity_type)?;
 
@@ -2050,6 +2174,93 @@ impl Storage for SqliteBackend {
                         reviewed_at_text: reviewed_at,
                         reviewed_by_text: reviewed_by,
                     })
+                },
+            )
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Row mapping failed: {:?}", e),
+            })
+    }
+
+    async fn list_assertion_records_for_entity(
+        &self,
+        entity_id: EntityId,
+    ) -> Result<Vec<FieldAssertion>, StorageError> {
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT field, id, value, confidence, status, evidence_type, source_citations,
+                        proposed_by, created_at, reviewed_at, reviewed_by
+                 FROM assertions
+                 WHERE entity_id = ? AND sandbox_id IS NULL
+                 ORDER BY field ASC, preferred DESC, confidence DESC, created_at DESC",
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Prepare failed: {}", e),
+            })?;
+
+        let mapped = stmt
+            .query_map(rusqlite::params![entity_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                ))
+            })
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Query failed: {}", e),
+            })?;
+
+        let rows = mapped
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Row collection failed: {}", e),
+            })?;
+
+        rows.into_iter()
+            .map(
+                |(
+                    field,
+                    id,
+                    value,
+                    confidence,
+                    status,
+                    evidence_type,
+                    source_citations,
+                    proposed_by,
+                    created_at,
+                    reviewed_at,
+                    reviewed_by,
+                )| {
+                    Self::row_to_assertion(AssertionRowData {
+                        id_str: id,
+                        value_text: value,
+                        confidence,
+                        status_text: status,
+                        evidence_type_text: evidence_type,
+                        source_citations_text: source_citations,
+                        proposed_by_text: proposed_by,
+                        created_at_text: created_at,
+                        reviewed_at_text: reviewed_at,
+                        reviewed_by_text: reviewed_by,
+                    })
+                    .map(|assertion| FieldAssertion { field, assertion })
                 },
             )
             .collect::<Result<Vec<_>, _>>()

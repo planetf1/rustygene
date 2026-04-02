@@ -238,6 +238,8 @@ fn bump_tag_counter(counter: &mut BTreeMap<String, usize>, tag: &str) {
 
 fn record_deferred_standard_tag(report: &mut GedcomTagHandlingReport, tag: &str) {
     bump_tag_counter(&mut report.deferred_standard_tags, tag);
+    let count = report.deferred_standard_tags.get(tag).copied().unwrap_or_default();
+    tracing::warn!(tag, count, "deferred standard GEDCOM tag encountered");
 }
 
 fn is_standard_gedcom_tag(tag: &str) -> bool {
@@ -368,7 +370,8 @@ fn record_unhandled_tag(report: &mut GedcomTagHandlingReport, tag: &str) {
     }
 
     bump_tag_counter(&mut report.unhandled_tags, tag);
-    eprintln!("unhandled GEDCOM tag encountered: {tag}");
+    let count = report.unhandled_tags.get(tag).copied().unwrap_or_default();
+    tracing::warn!(tag, count, "unhandled GEDCOM custom tag encountered");
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2472,15 +2475,22 @@ impl From<rusqlite::Error> for GedcomImportError {
     }
 }
 
+#[tracing::instrument(skip(connection, input), fields(import_job_id = import_job_id, input_bytes = input.len()))]
 pub fn import_gedcom_to_sqlite(
     connection: &mut Connection,
     import_job_id: &str,
     input: &str,
 ) -> Result<GedcomImportReport, GedcomImportError> {
+    tracing::info!("starting GEDCOM import");
     run_migrations(connection).map_err(|e| GedcomImportError::Migration(e.to_string()))?;
 
     let lines = tokenize_gedcom(input)?;
     let roots = build_gedcom_tree(&lines)?;
+
+    tracing::debug!(line_count = lines.len(), root_count = roots.len(), "parsed GEDCOM document");
+    for root in &roots {
+        tracing::info!(record_tag = %root.tag, xref = ?root.xref, "processing GEDCOM root record");
+    }
 
     let mut tag_handling_report = GedcomTagHandlingReport::default();
     let persons = map_indi_nodes_to_persons_with_report(&roots, &mut tag_handling_report);
@@ -2628,7 +2638,17 @@ pub fn import_gedcom_to_sqlite(
         insert_assertion_row(&tx, assertion)?;
     }
 
+    tracing::debug!(assertions_created = assertions.len(), "persisted GEDCOM assertions to sqlite");
+
     tx.commit()?;
+
+    tracing::info!(
+        assertions_created = assertions.len(),
+        unknown_tags_preserved,
+        deferred_standard_tags = tag_handling_report.deferred_standard_tags.len(),
+        unhandled_tags = tag_handling_report.unhandled_tags.len(),
+        "completed GEDCOM import"
+    );
 
     Ok(GedcomImportReport {
         entities_created_by_type,

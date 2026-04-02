@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -23,6 +24,8 @@ use rustygene_storage::{
     StagingProposalFilter, Storage, run_migrations,
     sqlite_impl::SqliteBackend,
 };
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
@@ -311,8 +314,17 @@ impl From<StagingStatusArg> for AssertionStatus {
 }
 
 fn main() {
+    let _logging_guard = match init_tracing() {
+        Ok(guard) => guard,
+        Err(err) => {
+            eprintln!("failed to initialize tracing: {}", err);
+            std::process::exit(1);
+        }
+    };
+
     let cli = Cli::parse();
     let db_path = resolve_db_path(&cli.db);
+    tracing::debug!(db_path = %db_path.display(), command = ?cli.command, "starting rustygene CLI");
     if let Some(parent) = db_path.parent()
         && let Err(err) = std::fs::create_dir_all(parent)
     {
@@ -330,6 +342,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    tracing::debug!(db_path = %db_path.display(), "opened sqlite database");
 
     if let Err(err) = run_migrations(&mut connection) {
         eprintln!("failed to run migrations: {}", err);
@@ -398,6 +411,38 @@ fn main() {
             );
         }
     }
+}
+
+fn init_tracing() -> Result<WorkerGuard, String> {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let log_format = std::env::var("RUSTYGENE_LOG_FORMAT").unwrap_or_default();
+    let json_logs = log_format.eq_ignore_ascii_case("json");
+
+    if json_logs {
+        let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(writer)
+            .json()
+            .with_current_span(true)
+            .with_span_list(true)
+            .try_init()
+            .map_err(|err| err.to_string())?;
+        return Ok(guard);
+    }
+
+    let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(writer);
+
+    if std::io::stderr().is_terminal() {
+        subscriber.pretty().try_init().map_err(|err| err.to_string())?;
+    } else {
+        subscriber.compact().try_init().map_err(|err| err.to_string())?;
+    }
+
+    Ok(guard)
 }
 
 /// Read a GEDCOM file, handling UTF-8 with BOM, and Latin-1 (ISO-8859-1) fallback.
@@ -859,6 +904,7 @@ fn run_import_command(
     output_format: OutputFormat,
     backend: &SqliteBackend,
 ) {
+    tracing::info!(format = ?format, merge, file = %file.display(), job_id = ?job_id, "starting import command");
     match format {
         ImportFormat::Gedcom => {
             if merge {
@@ -884,7 +930,14 @@ fn run_import_command(
             };
             match import_gedcom_to_sqlite(&mut conn, &effective_job_id, &content) {
                 Ok(report) => {
+                    tracing::info!(
+                        job_id = %effective_job_id,
+                        assertions_created = report.assertions_created,
+                        entity_types = report.entities_created_by_type.len(),
+                        "gedcom import command completed"
+                    );
                     if let Err(err) = backend.rebuild_all_snapshots() {
+                        tracing::warn!(error = %err.message, "snapshot rebuild failed after import");
                         eprintln!(
                             "warning: snapshot rebuild failed after import: {}",
                             err.message
@@ -914,6 +967,7 @@ fn run_import_command(
                     }
                 }
                 Err(err) => {
+                    tracing::error!(error = %err, "gedcom import command failed");
                     eprintln!("gedcom import failed: {}", err);
                     std::process::exit(1);
                 }
@@ -934,7 +988,14 @@ fn run_import_command(
 
             match gramps::import_gramps_xml_to_sqlite(backend, &effective_job_id, &content) {
                 Ok(report) => {
+                    tracing::info!(
+                        job_id = %effective_job_id,
+                        assertions_created = report.assertions_created,
+                        entity_types = report.entities_created_by_type.len(),
+                        "gramps import command completed"
+                    );
                     if let Err(err) = backend.rebuild_all_snapshots() {
+                        tracing::warn!(error = %err.message, "snapshot rebuild failed after import");
                         eprintln!(
                             "warning: snapshot rebuild failed after import: {}",
                             err.message
@@ -959,6 +1020,7 @@ fn run_import_command(
                     }
                 }
                 Err(err) => {
+                    tracing::error!(error = %err, "gramps import command failed");
                     eprintln!("gramps xml import failed: {}", err);
                     std::process::exit(1);
                 }
@@ -975,23 +1037,31 @@ fn run_import_command(
                 }
             };
             match backend.import_json_dump(mode) {
-                Ok(report) => match output_format {
-                    OutputFormat::Text => {
-                        println!("json import complete");
-                        for (entity_type, count) in &report.entities_imported_by_type {
-                            println!("  {}: {} entities imported", entity_type, count);
+                Ok(report) => {
+                    tracing::info!(
+                        assertions_imported = report.assertions_imported,
+                        entity_types = report.entities_imported_by_type.len(),
+                        "json import command completed"
+                    );
+                    match output_format {
+                        OutputFormat::Text => {
+                            println!("json import complete");
+                            for (entity_type, count) in &report.entities_imported_by_type {
+                                println!("  {}: {} entities imported", entity_type, count);
+                            }
+                            println!("  assertions imported: {}", report.assertions_imported);
                         }
-                        println!("  assertions imported: {}", report.assertions_imported);
+                        OutputFormat::Json => {
+                            let json = serde_json::json!({
+                                "entities_imported": report.entities_imported_by_type,
+                                "assertions_imported": report.assertions_imported,
+                            });
+                            println!("{}", json);
+                        }
                     }
-                    OutputFormat::Json => {
-                        let json = serde_json::json!({
-                            "entities_imported": report.entities_imported_by_type,
-                            "assertions_imported": report.assertions_imported,
-                        });
-                        println!("{}", json);
-                    }
-                },
+                }
                 Err(err) => {
+                    tracing::error!(error = %err.message, "json import command failed");
                     eprintln!("json import failed: {}", err.message);
                     std::process::exit(1);
                 }

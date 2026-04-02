@@ -59,8 +59,12 @@ pub const REQUIRED_SCHEMA_INDEXES: &[&str] = &[
     "idx_staging_queue_entity",
 ];
 
+#[tracing::instrument(skip(connection))]
 pub fn run_migrations(connection: &mut Connection) -> Result<refinery::Report, refinery::Error> {
-    migrations::runner().run(connection)
+    tracing::debug!("starting sqlite migrations");
+    let report = migrations::runner().run(connection)?;
+    tracing::debug!(applied = report.applied_migrations().len(), "completed sqlite migrations");
+    Ok(report)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +207,12 @@ pub struct SandboxAssertionDiff {
 
 pub type JsonAssertion = Assertion<Value>;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldAssertion {
+    pub field: String,
+    pub assertion: JsonAssertion,
+}
+
 /// Storage abstraction used by the core and API layers.
 ///
 /// Concrete backends (SQLite now, PostgreSQL later) implement this trait.
@@ -213,6 +223,8 @@ pub trait Storage {
     async fn update_person(&self, person: &Person) -> Result<(), StorageError>;
     async fn delete_person(&self, id: EntityId) -> Result<(), StorageError>;
     async fn list_persons(&self, pagination: Pagination) -> Result<Vec<Person>, StorageError>;
+    async fn list_families_for_person(&self, person_id: EntityId) -> Result<Vec<Family>, StorageError>;
+    async fn list_events_for_person(&self, person_id: EntityId) -> Result<Vec<Event>, StorageError>;
 
     async fn create_family(&self, family: &Family) -> Result<(), StorageError>;
     async fn get_family(&self, id: EntityId) -> Result<Family, StorageError>;
@@ -294,6 +306,10 @@ pub trait Storage {
         &self,
         entity_id: EntityId,
     ) -> Result<Vec<JsonAssertion>, StorageError>;
+    async fn list_assertion_records_for_entity(
+        &self,
+        entity_id: EntityId,
+    ) -> Result<Vec<FieldAssertion>, StorageError>;
     async fn list_assertions_for_field(
         &self,
         entity_id: EntityId,
