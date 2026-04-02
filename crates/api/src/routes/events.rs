@@ -1,15 +1,265 @@
-use axum::http::StatusCode;
-use axum::routing::get;
-use axum::Router;
+use std::collections::BTreeMap;
 
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
+use rustygene_core::types::EntityId;
+use rustygene_storage::Pagination;
+use serde::Deserialize;
+use uuid::Uuid;
+
+use crate::errors::ApiError;
+use crate::models::events::{AddParticipantRequest, CreateEventRequest, EventDetailResponse, EventParticipantResponse};
 use crate::AppState;
+
+#[derive(Debug, Deserialize)]
+struct EventsQuery {
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    offset: Option<u32>,
+    #[serde(default)]
+    person_id: Option<String>,
+    #[serde(default)]
+    family_id: Option<String>,
+    #[serde(default)]
+    event_type: Option<String>,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/", get(not_implemented).post(not_implemented))
-        .route("/:id", get(not_implemented).put(not_implemented).delete(not_implemented))
+        .route("/", get(list_events).post(create_event))
+        .route("/:id", get(get_event).put(update_event).delete(delete_event))
+        .route("/:id/participants", post(add_participant))
+        .route("/:id/participants/:pid", delete(remove_participant))
 }
 
-async fn not_implemented() -> StatusCode {
-    StatusCode::NOT_IMPLEMENTED
+async fn list_events(
+    State(state): State<AppState>,
+    Query(query): Query<EventsQuery>,
+) -> Result<Json<Vec<EventDetailResponse>>, ApiError> {
+    let pagination = Pagination {
+        limit: query.limit.unwrap_or(100),
+        offset: query.offset.unwrap_or(0),
+    };
+
+    let events = state.storage.list_events(pagination).await?;
+
+    let mut response = Vec::with_capacity(events.len());
+    for event in events {
+        let assertions = state
+            .storage
+            .list_assertion_records_for_entity(event.id)
+            .await?;
+
+        let confidence = assertions
+            .iter()
+            .find(|a| a.field == "date")
+            .map(|a| a.assertion.confidence)
+            .unwrap_or(0.8);
+
+        response.push(EventDetailResponse {
+            id: event.id,
+            event_type: format!("{:?}", event.event_type),
+            date: event.date.as_ref().map(|d| format!("{:?}", d)),
+            place_id: event.place_ref,
+            participants: event
+                .participants
+                .iter()
+                .map(EventParticipantResponse::from)
+                .collect(),
+            citations: Vec::new(), // TODO: fetch from storage
+            confidence,
+        });
+    }
+
+    Ok(Json(response))
+}
+
+async fn create_event(
+    State(state): State<AppState>,
+    Json(request): Json<CreateEventRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Validate event_type
+    let event_type = parse_event_type(&request.event_type)?;
+
+    let event_id = EntityId::new();
+    let event = Event {
+        id: event_id,
+        event_type,
+        date: None, // TODO: parse date
+        place_ref: request.place_id,
+        participants: Vec::new(),
+        description: request.description,
+        _raw_gedcom: BTreeMap::new(),
+    };
+
+    state.storage.create_event(&event).await?;
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": event_id }))))
+}
+
+async fn get_event(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<EventDetailResponse>, ApiError> {
+    let event_id = parse_entity_id(&id)?;
+    let event = state.storage.get_event(event_id).await?;
+
+    let assertions = state
+        .storage
+        .list_assertion_records_for_entity(event_id)
+        .await?;
+
+    let confidence = assertions
+        .iter()
+        .find(|a| a.field == "date")
+        .map(|a| a.assertion.confidence)
+        .unwrap_or(0.8);
+
+    Ok(Json(EventDetailResponse {
+        id: event.id,
+        event_type: format!("{:?}", event.event_type),
+        date: event.date.as_ref().map(|d| format!("{:?}", d)),
+        place_id: event.place_ref,
+        participants: event
+            .participants
+            .iter()
+            .map(EventParticipantResponse::from)
+            .collect(),
+        citations: Vec::new(), // TODO: fetch from storage
+        confidence,
+    }))
+}
+
+async fn update_event(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<CreateEventRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let event_id = parse_entity_id(&id)?;
+    let mut event = state.storage.get_event(event_id).await?;
+
+    // Validate and update event_type
+    event.event_type = parse_event_type(&request.event_type)?;
+
+    // Update other fields if provided
+    if let Some(description) = request.description {
+        event.description = Some(description);
+    }
+    if let Some(place_id) = request.place_id {
+        event.place_ref = Some(place_id);
+    }
+
+    state.storage.update_event(&event).await?;
+
+    Ok(Json(serde_json::json!({ "id": event_id })))
+}
+
+async fn delete_event(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let event_id = parse_entity_id(&id)?;
+    let _ = state.storage.get_event(event_id).await?;
+    state.storage.delete_event(event_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn add_participant(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<AddParticipantRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let event_id = parse_entity_id(&id)?;
+    let mut event = state.storage.get_event(event_id).await?;
+
+    // Validate person exists
+    let _ = state.storage.get_person(request.person_id).await?;
+
+    // Validate and parse role
+    let role = if let Some(role_str) = request.role {
+        parse_event_role(&role_str)?
+    } else {
+        EventRole::Principal
+    };
+
+    // Add participant
+    event.participants.push(EventParticipant {
+        person_id: request.person_id,
+        role,
+        census_role: None,
+    });
+
+    state.storage.update_event(&event).await?;
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({}))))
+}
+
+async fn remove_participant(
+    State(state): State<AppState>,
+    Path((id, pid)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let event_id = parse_entity_id(&id)?;
+    let participant_id = parse_entity_id(&pid)?;
+
+    let mut event = state.storage.get_event(event_id).await?;
+
+    // Remove participant
+    event.participants.retain(|p| p.person_id != participant_id);
+
+    state.storage.update_event(&event).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// Helpers
+
+fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
+    Uuid::parse_str(raw)
+        .map(EntityId)
+        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
+}
+
+fn parse_event_type(event_type_str: &str) -> Result<EventType, ApiError> {
+    match event_type_str.to_lowercase().as_str() {
+        "birth" => Ok(EventType::Birth),
+        "death" => Ok(EventType::Death),
+        "marriage" => Ok(EventType::Marriage),
+        "census" => Ok(EventType::Census),
+        "baptism" => Ok(EventType::Baptism),
+        "burial" => Ok(EventType::Burial),
+        "migration" => Ok(EventType::Migration),
+        "occupation" => Ok(EventType::Occupation),
+        "residence" => Ok(EventType::Residence),
+        "immigration" => Ok(EventType::Immigration),
+        "emigration" => Ok(EventType::Emigration),
+        "naturalization" => Ok(EventType::Naturalization),
+        "probate" => Ok(EventType::Probate),
+        "will" => Ok(EventType::Will),
+        "graduation" => Ok(EventType::Graduation),
+        "retirement" => Ok(EventType::Retirement),
+        custom => Ok(EventType::Custom(custom.to_string())),
+    }
+}
+
+fn parse_event_role(role_str: &str) -> Result<EventRole, ApiError> {
+    match role_str.to_lowercase().as_str() {
+        "principal" => Ok(EventRole::Principal),
+        "witness" => Ok(EventRole::Witness),
+        "godparent" => Ok(EventRole::Godparent),
+        "informant" => Ok(EventRole::Informant),
+        "clergy" => Ok(EventRole::Clergy),
+        "registrar" => Ok(EventRole::Registrar),
+        "celebrant" => Ok(EventRole::Celebrant),
+        "parent" => Ok(EventRole::Parent),
+        "spouse" => Ok(EventRole::Spouse),
+        "child" => Ok(EventRole::Child),
+        "servant" => Ok(EventRole::Servant),
+        "boarder" => Ok(EventRole::Boarder),
+        custom => Ok(EventRole::Custom(custom.to_string())),
+    }
 }

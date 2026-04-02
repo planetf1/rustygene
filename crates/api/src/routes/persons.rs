@@ -38,6 +38,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/:id/assertions", get(get_person_assertions).post(create_person_assertion))
         .route("/:id/timeline", get(get_person_timeline))
+        .route("/:id/families", get(get_person_families))
 }
 
 async fn list_persons(
@@ -278,6 +279,55 @@ async fn get_person_timeline(
     Ok(Json(
         events.iter().map(TimelineEventResponse::from).collect(),
     ))
+}
+
+async fn get_person_families(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<super::super::models::families::FamilySummaryForPerson>>, ApiError> {
+    let person_id = parse_entity_id(&id)?;
+    let _ = state.storage.get_person(person_id).await?;
+
+    let families = state.storage.list_families_for_person(person_id).await?;
+
+    let mut response = Vec::with_capacity(families.len());
+    for family in families {
+        let partner1 = if let Some(pid) = family.partner1_id {
+            state.storage.get_person(pid).await.ok()
+        } else {
+            None
+        };
+        let partner2 = if let Some(pid) = family.partner2_id {
+            state.storage.get_person(pid).await.ok()
+        } else {
+            None
+        };
+
+        let your_role = if family.partner1_id == Some(person_id) {
+            "partner1".to_string()
+        } else if family.partner2_id == Some(person_id) {
+            "partner2".to_string()
+        } else if family.child_links.iter().any(|c| c.child_id == person_id) {
+            "child".to_string()
+        } else {
+            "unknown".to_string()
+        };
+
+        response.push(super::super::models::families::FamilySummaryForPerson {
+            id: family.id,
+            partner1: partner1.as_ref().map(|p| super::super::models::families::PartnerSummary {
+                id: p.id,
+                display_name: display_name_for_person(p),
+            }),
+            partner2: partner2.as_ref().map(|p| super::super::models::families::PartnerSummary {
+                id: p.id,
+                display_name: display_name_for_person(p),
+            }),
+            your_role,
+        });
+    }
+
+    Ok(Json(response))
 }
 
 fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
