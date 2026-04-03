@@ -18,7 +18,7 @@
 
 <header class="toolbar">
   <form on:submit={runSearch}>
-    <input bind:value={quickSearch} type="search" placeholder="Quick search…" />
+    <input bind:value={quickSearch} type="search" placeholder="Quick search…" aria-label="Search records" />
     <button type="submit">Search</button>
   </form>
 
@@ -78,6 +78,12 @@
   button:hover {
     transform: translateY(-1px);
     filter: brightness(1.02);
+  }
+
+  button:focus-visible,
+  input:focus-visible {
+    outline: 3px solid rgb(125 93 242 / 45%);
+    outline-offset: 2px;
   }
 
   .actions {

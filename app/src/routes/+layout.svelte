@@ -104,6 +104,15 @@
       linear-gradient(180deg, #fff9ff 0%, var(--rg-bg) 100%);
   }
 
+  :global(a:focus-visible),
+  :global(button:focus-visible),
+  :global(input:focus-visible),
+  :global(select:focus-visible),
+  :global(textarea:focus-visible) {
+    outline: 3px solid rgb(125 93 242 / 45%);
+    outline-offset: 2px;
+  }
+
   :global(.content h1),
   :global(.content h2),
   :global(.content h3) {
@@ -188,6 +197,17 @@
   :global(.content button:not(.overlay):hover) {
     transform: translateY(-1px);
     filter: brightness(1.02);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(*),
+    :global(*::before),
+    :global(*::after) {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 
   .centered {

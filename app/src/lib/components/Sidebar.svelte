@@ -181,6 +181,12 @@
     box-shadow: 0 4px 10px rgb(155 123 255 / 12%);
   }
 
+  a:focus-visible {
+    background: #f9f2ff;
+    border-color: #c9b1ff;
+    box-shadow: 0 0 0 3px rgb(125 93 242 / 24%);
+  }
+
   a.selected {
     background: linear-gradient(90deg, rgb(155 123 255 / 18%), rgb(255 159 207 / 16%));
     border-color: rgb(155 123 255 / 30%);
@@ -215,6 +221,12 @@
 
   .recent-toggle:hover {
     filter: brightness(0.98);
+  }
+
+  .recent-toggle:focus-visible,
+  .sandbox-toggle input:focus-visible {
+    outline: 3px solid rgb(125 93 242 / 45%);
+    outline-offset: 2px;
   }
 
   .recent-list {
