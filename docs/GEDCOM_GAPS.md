@@ -71,6 +71,25 @@ mapped into explicit `MediaRef` link structures.
 
 `1 ASSO @I1@` association records are not parsed or stored.
 
+### 15. torture551.ged Round-Trip Event Duplication
+
+**Impact: MEDIUM** · Phase 1B Corpus Hardening · **Bead: rustygene-buh**
+
+`torture551.ged` has documented (torturous) edge cases in GEDCOM structure.
+During round-trip testing (import → export → re-import), the event count
+increases from 71 to 75 (4 extra events created). This suggests:
+- Event references are being duplicated during export (e.g., same event
+  referenced in multiple contexts and exported separately)
+- Possible interaction with CHAN tags or complex citation/association structures
+- `simpsons.ged` round-trip works correctly, so the bug is specific to
+  torture551's edge cases.
+
+**Workaround:** `torture551.ged` is deferred from the corpus round-trip test
+harness until the export logic can be debugged. `corpus_roundtrip_test.rs` includes
+a separate diagnostic test `corpus_roundtrip_torture551_ged_diagnostic` for
+isolated investigation. `simpsons.ged` can be added to the corpus array without
+issue.
+
 ---
 
 ## Round-Trip Fidelity Gaps

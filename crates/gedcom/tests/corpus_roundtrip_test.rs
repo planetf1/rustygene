@@ -219,13 +219,14 @@ fn assertion_distribution(conn: &Connection) -> BTreeMap<(String, String), usize
 }
 
 #[test]
-fn corpus_roundtrip_hardening_for_five_vendor_fixtures() {
+fn corpus_roundtrip_hardening_for_six_vendor_fixtures() {
     let corpus = [
         ("ancestry_sample.ged", "Ancestry"),
         ("rootsmagic_sample.ged", "RootsMagic"),
         ("gramps_sample.ged", "Gramps"),
         ("legacy_sample.ged", "Legacy"),
         ("paf_sample.ged", "PAF"),
+        ("simpsons.ged", "Simpsons"),
     ];
 
     let mut aggregate_deferred: BTreeMap<String, usize> = BTreeMap::new();
@@ -302,4 +303,104 @@ fn corpus_roundtrip_hardening_for_five_vendor_fixtures() {
             "expected deferred standard-tag counter for {required_tag} to be > 0 across corpus"
         );
     }
+}
+
+#[test]
+fn corpus_roundtrip_simpsons_ged_diagnostic() {
+    let input = read_gedcom_fixture("simpsons.ged");
+    let db1 = temp_db_path("simpsons-db1");
+    let db2 = temp_db_path("simpsons-db2");
+
+    let mut conn1 = setup_db(&db1);
+    let _report1 =
+        import_gedcom_to_sqlite(&mut conn1, "corpus-import-simpsons", &input)
+            .expect("import simpsons fixture");
+
+    let table_counts_before = [
+        ("persons", count_table_rows(&conn1, "persons")),
+        ("families", count_table_rows(&conn1, "families")),
+        ("events", count_table_rows(&conn1, "events")),
+        ("places", count_table_rows(&conn1, "places")),
+        ("sources", count_table_rows(&conn1, "sources")),
+        ("citations", count_table_rows(&conn1, "citations")),
+        ("repositories", count_table_rows(&conn1, "repositories")),
+        ("notes", count_table_rows(&conn1, "notes")),
+        ("media", count_table_rows(&conn1, "media")),
+    ];
+    let dist_before = assertion_distribution(&conn1);
+
+    let exported = export_db_as_gedcom(&conn1);
+    assert!(exported.contains("0 HEAD"));
+    assert!(exported.contains("0 TRLR"));
+
+    let mut conn2 = setup_db(&db2);
+    import_gedcom_to_sqlite(&mut conn2, "corpus-reimport-simpsons", &exported)
+        .expect("re-import exported simpsons");
+
+    for (table, expected_count) in table_counts_before {
+        let actual_count = count_table_rows(&conn2, table);
+        assert_eq!(
+            actual_count, expected_count,
+            "Simpsons: row count mismatch for table {table}: expected {expected_count}, got {actual_count}"
+        );
+    }
+
+    let dist_after = assertion_distribution(&conn2);
+    assert_eq!(
+        dist_after, dist_before,
+        "Simpsons: assertion distribution mismatch after round-trip"
+    );
+
+    let _ = std::fs::remove_file(&db1);
+    let _ = std::fs::remove_file(&db2);
+}
+
+#[test]
+fn corpus_roundtrip_torture551_ged_diagnostic() {
+    let input = read_gedcom_fixture("torture551.ged");
+    let db1 = temp_db_path("torture551-db1");
+    let db2 = temp_db_path("torture551-db2");
+
+    let mut conn1 = setup_db(&db1);
+    let _report1 =
+        import_gedcom_to_sqlite(&mut conn1, "corpus-import-torture551", &input)
+            .expect("import torture551 fixture");
+
+    let table_counts_before = [
+        ("persons", count_table_rows(&conn1, "persons")),
+        ("families", count_table_rows(&conn1, "families")),
+        ("events", count_table_rows(&conn1, "events")),
+        ("places", count_table_rows(&conn1, "places")),
+        ("sources", count_table_rows(&conn1, "sources")),
+        ("citations", count_table_rows(&conn1, "citations")),
+        ("repositories", count_table_rows(&conn1, "repositories")),
+        ("notes", count_table_rows(&conn1, "notes")),
+        ("media", count_table_rows(&conn1, "media")),
+    ];
+    let dist_before = assertion_distribution(&conn1);
+
+    let exported = export_db_as_gedcom(&conn1);
+    assert!(exported.contains("0 HEAD"));
+    assert!(exported.contains("0 TRLR"));
+
+    let mut conn2 = setup_db(&db2);
+    import_gedcom_to_sqlite(&mut conn2, "corpus-reimport-torture551", &exported)
+        .expect("re-import exported torture551");
+
+    for (table, expected_count) in table_counts_before {
+        let actual_count = count_table_rows(&conn2, table);
+        assert_eq!(
+            actual_count, expected_count,
+            "Torture551: row count mismatch for table {table}: expected {expected_count}, got {actual_count}"
+        );
+    }
+
+    let dist_after = assertion_distribution(&conn2);
+    assert_eq!(
+        dist_after, dist_before,
+        "Torture551: assertion distribution mismatch after round-trip"
+    );
+
+    let _ = std::fs::remove_file(&db1);
+    let _ = std::fs::remove_file(&db2);
 }
