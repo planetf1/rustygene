@@ -35,7 +35,10 @@ async fn health_endpoint_returns_ok_and_version() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let body: serde_json::Value = response.json().await.expect("parse json response");
-    assert_eq!(body.get("status").and_then(serde_json::Value::as_str), Some("ok"));
+    assert_eq!(
+        body.get("status").and_then(serde_json::Value::as_str),
+        Some("ok")
+    );
     assert!(
         body.get("version")
             .and_then(serde_json::Value::as_str)

@@ -21,8 +21,7 @@ use rustygene_gedcom::{
 };
 use rustygene_storage::{
     EntityType, JsonExportMode, JsonImportMode, Pagination, ResearchLogFilter,
-    StagingProposalFilter, Storage, run_migrations,
-    sqlite_impl::SqliteBackend,
+    StagingProposalFilter, Storage, run_migrations, sqlite_impl::SqliteBackend,
 };
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
@@ -437,9 +436,15 @@ fn init_tracing() -> Result<WorkerGuard, String> {
         .with_writer(writer);
 
     if std::io::stderr().is_terminal() {
-        subscriber.pretty().try_init().map_err(|err| err.to_string())?;
+        subscriber
+            .pretty()
+            .try_init()
+            .map_err(|err| err.to_string())?;
     } else {
-        subscriber.compact().try_init().map_err(|err| err.to_string())?;
+        subscriber
+            .compact()
+            .try_init()
+            .map_err(|err| err.to_string())?;
     }
 
     Ok(guard)
@@ -614,7 +619,10 @@ fn build_merge_plan(existing: &[PersonMergeRecord], incoming: &[PersonMergeRecor
     let mut existing_by_key: BTreeMap<String, Vec<&PersonMergeRecord>> = BTreeMap::new();
     for person in existing {
         if !person.key.trim_matches('|').is_empty() {
-            existing_by_key.entry(person.key.clone()).or_default().push(person);
+            existing_by_key
+                .entry(person.key.clone())
+                .or_default()
+                .push(person);
         }
     }
 
@@ -807,7 +815,10 @@ fn run_merge_import_command(
                 field,
                 &assertion,
             )) {
-                eprintln!("failed to add assertion for new person {}: {}", new_id, err.message);
+                eprintln!(
+                    "failed to add assertion for new person {}: {}",
+                    new_id, err.message
+                );
                 std::process::exit(1);
             }
         }
@@ -856,7 +867,10 @@ fn run_merge_import_command(
     }
 
     if let Err(err) = backend.rebuild_all_snapshots() {
-        eprintln!("warning: snapshot rebuild failed after merge: {}", err.message);
+        eprintln!(
+            "warning: snapshot rebuild failed after merge: {}",
+            err.message
+        );
     }
 
     let report = MergeExecutionReport {
@@ -1441,7 +1455,10 @@ fn run_show_command(command: ShowCommands, db_path: &PathBuf, format: OutputForm
                 OutputFormat::Text => {
                     println!("source: {}", source.id);
                     println!("title: {}", source.title);
-                    println!("author: {}", source.author.unwrap_or_else(|| "-".to_string()));
+                    println!(
+                        "author: {}",
+                        source.author.unwrap_or_else(|| "-".to_string())
+                    );
                     println!(
                         "publication: {}",
                         source.publication_info.unwrap_or_else(|| "-".to_string())
@@ -1578,7 +1595,10 @@ fn run_show_command(command: ShowCommands, db_path: &PathBuf, format: OutputForm
                     println!("media: {}", media.id);
                     println!("file_path: {}", media.file_path);
                     println!("mime_type: {}", media.mime_type);
-                    println!("caption: {}", media.caption.unwrap_or_else(|| "-".to_string()));
+                    println!(
+                        "caption: {}",
+                        media.caption.unwrap_or_else(|| "-".to_string())
+                    );
                 }
             }
         }
@@ -1965,11 +1985,7 @@ fn simple_metaphone(token: &str) -> Option<String> {
         }
     }
 
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 fn build_person_match_query(name: &str, fuzzy: bool) -> String {
@@ -2057,11 +2073,7 @@ fn query_person_rows(
             String::from("si.entity_type = 'person' AND si.content MATCH ?"),
         )
     } else {
-        (
-            "0.0 AS rank",
-            "FROM persons p",
-            String::from("1 = 1"),
-        )
+        ("0.0 AS rank", "FROM persons p", String::from("1 = 1"))
     };
 
     if let Some(from) = birth_year_from {
@@ -2536,10 +2548,10 @@ fn resolve_db_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CliSearchResult, Commands, ExportFormat, ImportFormat, QueryCommands,
+        Cli, CliSearchResult, Commands, ExportFormat, ImportFormat, OutputFormat, QueryCommands,
         QueryPersonSort, ResearchLogCommands, SandboxCommands, ShowCommands, StagingCommands,
-        build_person_match_query, parse_entity_id_arg, preserved_or_generated_xref, resolve_db_path,
-        OutputFormat,
+        build_person_match_query, parse_entity_id_arg, preserved_or_generated_xref,
+        resolve_db_path,
     };
     use clap::Parser;
     use rusqlite::Connection;
@@ -2641,14 +2653,7 @@ mod tests {
 
     #[test]
     fn clap_parses_query_person_fuzzy() {
-        let cli = Cli::parse_from([
-            "rustygene",
-            "query",
-            "person",
-            "--name",
-            "Jon",
-            "--fuzzy",
-        ]);
+        let cli = Cli::parse_from(["rustygene", "query", "person", "--name", "Jon", "--fuzzy"]);
 
         match cli.command {
             Commands::Query {
@@ -2897,9 +2902,7 @@ mod tests {
             Commands::Sandbox {
                 command:
                     SandboxCommands::Compare {
-                        sandbox,
-                        entity,
-                        ..
+                        sandbox, entity, ..
                     },
             } => {
                 assert_eq!(sandbox, "550e8400-e29b-41d4-a716-446655440000");
@@ -2999,13 +3002,7 @@ mod tests {
 
     #[test]
     fn clap_parses_import_gramps() {
-        let cli = Cli::parse_from([
-            "rustygene",
-            "import",
-            "--format",
-            "gramps",
-            "sample.gramps",
-        ]);
+        let cli = Cli::parse_from(["rustygene", "import", "--format", "gramps", "sample.gramps"]);
 
         match cli.command {
             Commands::Import {

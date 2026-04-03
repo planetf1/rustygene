@@ -62,12 +62,10 @@ impl FamilyDetailResponse {
         events: Vec<Event>,
         assertions: Vec<super::super::models::persons::AssertionValueResponse>,
     ) -> Self {
-        let assertion_counts = assertions
-            .iter()
-            .fold(BTreeMap::new(), |mut acc, asrt| {
-                *acc.entry(asrt.field.clone()).or_insert(0) += 1;
-                acc
-            });
+        let assertion_counts = assertions.iter().fold(BTreeMap::new(), |mut acc, asrt| {
+            *acc.entry(asrt.field.clone()).or_insert(0) += 1;
+            acc
+        });
 
         Self {
             id: family.id,

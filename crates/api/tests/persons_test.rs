@@ -65,7 +65,10 @@ async fn person_crud_round_trip_returns_full_name_assertion_shape() {
         .expect("person id as string");
 
     let detail_response = client
-        .get(format!("http://{}/api/v1/persons/{}", server.local_addr, person_id))
+        .get(format!(
+            "http://{}/api/v1/persons/{}",
+            server.local_addr, person_id
+        ))
         .send()
         .await
         .expect("get person detail");
@@ -114,7 +117,10 @@ async fn person_crud_round_trip_returns_full_name_assertion_shape() {
     });
 
     let update_response = client
-        .put(format!("http://{}/api/v1/persons/{}", server.local_addr, person_id))
+        .put(format!(
+            "http://{}/api/v1/persons/{}",
+            server.local_addr, person_id
+        ))
         .json(&update_body)
         .send()
         .await
@@ -136,17 +142,26 @@ async fn person_crud_round_trip_returns_full_name_assertion_shape() {
         .get("name")
         .and_then(serde_json::Value::as_array)
         .expect("grouped name assertions");
-    assert!(grouped_names.len() >= 2, "updated person should have multiple name assertions");
+    assert!(
+        grouped_names.len() >= 2,
+        "updated person should have multiple name assertions"
+    );
 
     let delete_response = client
-        .delete(format!("http://{}/api/v1/persons/{}", server.local_addr, person_id))
+        .delete(format!(
+            "http://{}/api/v1/persons/{}",
+            server.local_addr, person_id
+        ))
         .send()
         .await
         .expect("delete person");
     assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
 
     let missing_response = client
-        .get(format!("http://{}/api/v1/persons/{}", server.local_addr, person_id))
+        .get(format!(
+            "http://{}/api/v1/persons/{}",
+            server.local_addr, person_id
+        ))
         .send()
         .await
         .expect("get deleted person");
@@ -203,8 +218,14 @@ async fn timeline_endpoint_returns_events_in_chronological_order() {
         _raw_gedcom: Default::default(),
     };
 
-    backend.create_event(&later_event).await.expect("create later event");
-    backend.create_event(&earlier_event).await.expect("create earlier event");
+    backend
+        .create_event(&later_event)
+        .await
+        .expect("create later event");
+    backend
+        .create_event(&earlier_event)
+        .await
+        .expect("create earlier event");
     backend
         .create_assertion(
             person.id,

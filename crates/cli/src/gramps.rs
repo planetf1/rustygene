@@ -3,8 +3,12 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::Utc;
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
-use rustygene_core::evidence::{Citation, Media, Note, NoteType, Repository, RepositoryType, Source};
-use rustygene_core::family::{ChildLink, Family, LineageType, PartnerLink, Relationship, RelationshipType};
+use rustygene_core::evidence::{
+    Citation, Media, Note, NoteType, Repository, RepositoryType, Source,
+};
+use rustygene_core::family::{
+    ChildLink, Family, LineageType, PartnerLink, Relationship, RelationshipType,
+};
 use rustygene_core::person::{NameType, Person, PersonName, Surname, SurnameOrigin};
 use rustygene_core::place::{Place, PlaceName, PlaceType};
 use rustygene_core::types::{ActorRef, Calendar, DateValue, EntityId, FuzzyDate, Gender};
@@ -41,7 +45,10 @@ fn entity_id_from_seed(entity_kind: &str, seed: &str) -> EntityId {
     ))
 }
 
-fn child_elements_named<'a>(element: &'a Element, name: &'a str) -> impl Iterator<Item = &'a Element> {
+fn child_elements_named<'a>(
+    element: &'a Element,
+    name: &'a str,
+) -> impl Iterator<Item = &'a Element> {
     element.children.iter().filter_map(move |node| match node {
         XMLNode::Element(child) if child.name == name => Some(child),
         _ => None,
@@ -74,7 +81,12 @@ fn child_text(element: &Element, name: &str) -> Option<String> {
 }
 
 fn parse_gender(value: Option<&str>) -> Gender {
-    match value.unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+    match value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "m" | "male" => Gender::Male,
         "f" | "female" => Gender::Female,
         "u" | "unknown" | "" => Gender::Unknown,
@@ -177,7 +189,8 @@ fn parse_database(root: &Element) -> GrampsImportData {
             let event_id = entity_id_from_seed("event", &event_xml_id);
             event_id_by_gramps.insert(event_xml_id.clone(), event_id);
 
-            let event_type = parse_event_type(event_elem.attributes.get("type").map(String::as_str));
+            let event_type =
+                parse_event_type(event_elem.attributes.get("type").map(String::as_str));
             let date = first_child_named(event_elem, "dateval")
                 .and_then(|d| d.attributes.get("val"))
                 .and_then(|v| parse_date_value(v));
@@ -282,7 +295,7 @@ fn parse_database(root: &Element) -> GrampsImportData {
                 .or_else(|| {
                     first_child_named(citation_elem, "sourceref")
                         .and_then(|s| s.attributes.get("hlink"))
-                    .map(std::string::ToString::to_string)
+                        .map(std::string::ToString::to_string)
                 });
             let Some(source_xml_id) = source_xml_id else {
                 continue;
@@ -367,7 +380,10 @@ fn parse_database(root: &Element) -> GrampsImportData {
                 if let Some(event_xml_id) = eventref.attributes.get("hlink")
                     && let Some(event_id) = event_id_by_gramps.get(event_xml_id)
                 {
-                    person_event_refs.entry(person_id).or_default().push(*event_id);
+                    person_event_refs
+                        .entry(person_id)
+                        .or_default()
+                        .push(*event_id);
                 }
             }
         }
@@ -455,7 +471,10 @@ fn parse_database(root: &Element) -> GrampsImportData {
                 if let Some(event_xml_id) = eventref.attributes.get("hlink")
                     && let Some(event_id) = event_id_by_gramps.get(event_xml_id)
                 {
-                    family_event_refs.entry(family_id).or_default().push(*event_id);
+                    family_event_refs
+                        .entry(family_id)
+                        .or_default()
+                        .push(*event_id);
                 }
             }
         }
@@ -483,7 +502,10 @@ fn parse_database(root: &Element) -> GrampsImportData {
             }
 
             if let Some(family) = data.families.iter().find(|family| family.id == *family_id) {
-                for partner in [family.partner1_id, family.partner2_id].into_iter().flatten() {
+                for partner in [family.partner1_id, family.partner2_id]
+                    .into_iter()
+                    .flatten()
+                {
                     if !event
                         .participants
                         .iter()
@@ -511,7 +533,9 @@ fn parse_database(root: &Element) -> GrampsImportData {
             };
             data.notes.push(Note {
                 id: entity_id_from_seed("note", &note_xml_id),
-                text: child_text(note_elem, "text").or_else(|| element_text(note_elem)).unwrap_or_default(),
+                text: child_text(note_elem, "text")
+                    .or_else(|| element_text(note_elem))
+                    .unwrap_or_default(),
                 note_type: NoteType::General,
                 original_xref: Some(format!("@N{}@", note_xml_id)),
                 _raw_gedcom: BTreeMap::new(),
@@ -537,7 +561,8 @@ fn parse_database(root: &Element) -> GrampsImportData {
                 .or_else(|| child_text(media_elem, "file"))
                 .unwrap_or_default();
 
-            let mime_type = child_text(media_elem, "mime").unwrap_or_else(|| "application/octet-stream".to_string());
+            let mime_type = child_text(media_elem, "mime")
+                .unwrap_or_else(|| "application/octet-stream".to_string());
 
             data.media.push(Media {
                 id: entity_id_from_seed("media", &media_xml_id),
@@ -579,10 +604,16 @@ async fn import_gramps_parsed_data(
     data: &GrampsImportData,
 ) -> Result<GrampsImportReport, String> {
     for person in &data.persons {
-        backend.create_person(person).await.map_err(|e| e.message.clone())?;
+        backend
+            .create_person(person)
+            .await
+            .map_err(|e| e.message.clone())?;
     }
     for family in &data.families {
-        backend.create_family(family).await.map_err(|e| e.message.clone())?;
+        backend
+            .create_family(family)
+            .await
+            .map_err(|e| e.message.clone())?;
     }
     for relationship in &data.relationships {
         backend
@@ -591,10 +622,16 @@ async fn import_gramps_parsed_data(
             .map_err(|e| e.message.clone())?;
     }
     for event in &data.events {
-        backend.create_event(event).await.map_err(|e| e.message.clone())?;
+        backend
+            .create_event(event)
+            .await
+            .map_err(|e| e.message.clone())?;
     }
     for place in &data.places {
-        backend.create_place(place).await.map_err(|e| e.message.clone())?;
+        backend
+            .create_place(place)
+            .await
+            .map_err(|e| e.message.clone())?;
     }
     for repository in &data.repositories {
         backend
@@ -603,7 +640,10 @@ async fn import_gramps_parsed_data(
             .map_err(|e| e.message.clone())?;
     }
     for source in &data.sources {
-        backend.create_source(source).await.map_err(|e| e.message.clone())?;
+        backend
+            .create_source(source)
+            .await
+            .map_err(|e| e.message.clone())?;
     }
     for citation in &data.citations {
         backend
@@ -612,10 +652,16 @@ async fn import_gramps_parsed_data(
             .map_err(|e| e.message.clone())?;
     }
     for note in &data.notes {
-        backend.create_note(note).await.map_err(|e| e.message.clone())?;
+        backend
+            .create_note(note)
+            .await
+            .map_err(|e| e.message.clone())?;
     }
     for media in &data.media {
-        backend.create_media(media).await.map_err(|e| e.message.clone())?;
+        backend
+            .create_media(media)
+            .await
+            .map_err(|e| e.message.clone())?;
     }
 
     let mut assertions_created = 0usize;
@@ -719,7 +765,10 @@ async fn import_gramps_parsed_data(
                     event.id,
                     EntityType::Event,
                     "date",
-                    &make_assertion(serde_json::to_value(date).map_err(|e| e.to_string())?, import_job_id),
+                    &make_assertion(
+                        serde_json::to_value(date).map_err(|e| e.to_string())?,
+                        import_job_id,
+                    ),
                 )
                 .await
                 .map_err(|e| e.message.clone())?;
@@ -888,8 +937,8 @@ mod tests {
         run_migrations(&mut conn).expect("migrate");
         let backend = SqliteBackend::new(conn);
 
-        let report = import_gramps_xml_to_sqlite(&backend, "gramps-test", xml)
-            .expect("import gramps xml");
+        let report =
+            import_gramps_xml_to_sqlite(&backend, "gramps-test", xml).expect("import gramps xml");
 
         assert_eq!(report.entities_created_by_type.get("person"), Some(&2));
         assert_eq!(report.entities_created_by_type.get("family"), Some(&1));

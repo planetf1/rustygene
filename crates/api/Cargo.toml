@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 axum = { version = "0.7", features = ["macros", "multipart"] }
 tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "limit", "set-header"] }
 serde = { version = "1", features = ["derive"] }
@@ -16,11 +17,19 @@ uuid = "1"
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 utoipa = { version = "5", features = ["axum_extras"] }
+tokio-util = { version = "0.7", features = ["io"] }
+async-stream = "0.3"
+zip = "2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "tiff", "webp"] }
+sha2 = "0.10"
+dirs = "6"
+ammonia = "4"
 rustygene-core = { path = "../core" }
 rustygene-storage = { path = "../storage" }
 rustygene-gedcom = { path = "../gedcom" }
+rusqlite = "0.33"
 
 [dev-dependencies]
 http-body-util = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
-rusqlite = "0.33"
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+futures-util = "0.3"

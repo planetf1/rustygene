@@ -7,3 +7,9 @@
 target/
 .DS_Store
 Cargo.lock
+
+# Frontend/Tauri app artifacts
+app/node_modules/
+app/.svelte-kit/
+app/build/
+app/dist/

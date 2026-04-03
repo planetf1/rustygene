@@ -5,7 +5,7 @@ Known limitations in GEDCOM handling, discovered during Phase 1A/1B testing with
 Phase 1B corpus fixtures (`ancestry_sample.ged`, `rootsmagic_sample.ged`,
 `gramps_sample.ged`, `legacy_sample.ged`, `paf_sample.ged`).
 
-Last reviewed: 2026-04-01.
+Last reviewed: 2026-04-02.
 
 ---
 
@@ -84,32 +84,21 @@ import/export. The exporter assigns sequential UUIDs as xrefs (`@I<uuid>@`),
 which breaks any external cross-references that relied on the original IDs.
 This is by design (UUID-based primary keys), but it is a fidelity loss.
 
-### 12. CHAN (Change Timestamp) Not Exported
+### ~~12. CHAN (Change Timestamp) Not Exported~~ — FIXED
 
-**Impact: LOW**
+`CHAN` subtrees are now explicitly preserved during import and re-emitted on
+export via raw GEDCOM subtree carryover. Regression tests verify DATE/TIME
+round-trip preservation.
 
-`1 CHAN` subrecords recording the date/time of last modification are parsed
-during import but no audit timestamp field is stored on entity types. They are
-not re-emitted on export.
+### ~~13. HEAD Block Incomplete on Export~~ — FIXED
 
-### 13. HEAD Block Incomplete on Export
+Exported HEAD now includes `GEDC/FORM LINEAGE-LINKED`, `DATE`, `TIME`, and
+`LANG` in addition to required `SOUR`, `GEDC/VERS`, and `CHAR UTF-8` fields.
 
-**Impact: LOW**
+### ~~14. Name TYPE Annotation Export Incomplete~~ — FIXED
 
-The exported HEAD record omits several standard fields present in valid GEDCOM
-5.5.1 files:
-- `1 SUBM @SUBM@` — submitter cross-reference
-- `1 DATE <export-date>` — file creation timestamp
-- `2 TIME <hh:mm:ss>`
-- `1 GEDC / 2 FORM LINEAGE-LINKED` — explicitly declares the GEDCOM form
-- `1 LANG <language>` — language of data
-
-### 14. Name TYPE Annotation Export Incomplete
-
-**Impact: LOW**
-
-`2 TYPE` on `NAME` is parsed during import into `PersonName.name_type`, but
-export currently does not emit `2 TYPE` back under `NAME` nodes.
+`PersonName.name_type` is now re-emitted as `2 TYPE` under `NAME` for
+non-default values (e.g., AKA, MARRIED, custom), with regression coverage.
 
 ---
 
@@ -166,10 +155,9 @@ The following improvements are deferred to a later phase:
 1. **ASSO record import**: Store witness/association links.
 2. **xref alias table**: Optionally preserve original xref IDs across
    import/export.
-3. **Name type export**: Emit `2 TYPE` annotation from `PersonName.name_type`.
 4. **Storage integration tests** (bead `rustygene-41z`): Cover Place, Note,
    Media, and LDS entity CRUD paths.
 5. **CLI show/query expansion** (bead `rustygene-c7h`): Add commands for
    Source, Citation, Repository, Note, and Media entities.
-6. **HEAD block completeness** (bead `rustygene-8mg`): Emit DATE, SUBM,
-   GEDC.FORM, LANG on export.
+6. **HEAD metadata parity**: Preserve/import/export submitter (`SUBM`) metadata
+   when represented in domain models.

@@ -12,7 +12,8 @@ use rustygene_core::assertion::{
 };
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
 use rustygene_core::evidence::{
-    Citation, CitationRef, Media, Note, NoteType, Repository, RepositoryRef, RepositoryType, Source,
+    Citation, CitationRef, Media, MediaRef, Note, NoteType, Repository, RepositoryRef,
+    RepositoryType, Source,
 };
 use rustygene_core::family::{
     ChildLink, Family, LineageType, PartnerLink, Relationship, RelationshipType,
@@ -238,7 +239,11 @@ fn bump_tag_counter(counter: &mut BTreeMap<String, usize>, tag: &str) {
 
 fn record_deferred_standard_tag(report: &mut GedcomTagHandlingReport, tag: &str) {
     bump_tag_counter(&mut report.deferred_standard_tags, tag);
-    let count = report.deferred_standard_tags.get(tag).copied().unwrap_or_default();
+    let count = report
+        .deferred_standard_tags
+        .get(tag)
+        .copied()
+        .unwrap_or_default();
     tracing::warn!(tag, count, "deferred standard GEDCOM tag encountered");
 }
 
@@ -596,6 +601,7 @@ pub fn map_family_nodes_with_report(
         let mut partner1_id: Option<EntityId> = None;
         let mut partner2_id: Option<EntityId> = None;
         let mut child_links: Vec<ChildLink> = Vec::new();
+        let mut chan_subtrees: Vec<String> = Vec::new();
 
         for child in &fam.children {
             match child.tag.as_str() {
@@ -633,8 +639,15 @@ pub fn map_family_nodes_with_report(
                     // Family event tags are mapped in `map_family_events`.
                 }
                 tag if tag.starts_with('_') => record_unhandled_tag(report, tag),
-                "NCHI" | "SUBM" | "SLGS" | "NOTE" | "SOUR" | "OBJE" | "REFN" | "RIN" | "CHAN" => {
+                "NCHI" | "SUBM" | "SLGS" | "NOTE" | "SOUR" | "REFN" | "RIN" => {
                     record_deferred_standard_tag(report, child.tag.as_str())
+                }
+                "CHAN" => {
+                    record_deferred_standard_tag(report, child.tag.as_str());
+                    chan_subtrees.push(serialize_subtree(child));
+                }
+                "OBJE" => {
+                    // Captured into family._raw_gedcom after Family is initialized.
                 }
                 _ => record_unhandled_tag(report, child.tag.as_str()),
             }
@@ -689,11 +702,30 @@ pub fn map_family_nodes_with_report(
             family._raw_gedcom.insert("XREF".to_string(), xref.clone());
         }
 
+        for (idx, subtree) in chan_subtrees.into_iter().enumerate() {
+            family
+                ._raw_gedcom
+                .insert(format!("CUSTOM_STD_CHAN_{idx}"), subtree);
+        }
+
         for child in &fam.children {
             if child.tag.starts_with('_') {
                 family
                     ._raw_gedcom
                     .insert(format!("CUSTOM_{}", child.tag), serialize_subtree(child));
+            }
+
+            if child.tag == "OBJE" {
+                record_deferred_standard_tag(report, child.tag.as_str());
+                let next_idx = family
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.contains("OBJE_REF_"))
+                    .count();
+                family._raw_gedcom.insert(
+                    format!("CUSTOM_OBJE_REF_{next_idx}"),
+                    serialize_subtree(child),
+                );
             }
         }
 
@@ -832,6 +864,10 @@ fn map_family_events(
                 "TYPE" => {
                     record_deferred_standard_tag(report, nested.tag.as_str());
                 }
+                "CHAN" => {
+                    record_deferred_standard_tag(report, nested.tag.as_str());
+                    capture_standard_subtree(&mut event._raw_gedcom, "CHAN", nested);
+                }
                 _ => record_unhandled_tag(report, nested.tag.as_str()),
             }
         }
@@ -844,7 +880,11 @@ fn map_family_events(
 
 fn map_obje_node(node: &GedcomNode, report: &mut GedcomTagHandlingReport) -> Media {
     let mut media = Media {
-        id: EntityId::new(),
+        id: node
+            .xref
+            .as_deref()
+            .map(|xref| entity_id_from_xref("OBJE", xref))
+            .unwrap_or_default(),
         file_path: node.value.clone().unwrap_or_default(),
         content_hash: "unhashed".to_string(),
         mime_type: "application/octet-stream".to_string(),
@@ -890,8 +930,12 @@ fn map_obje_node(node: &GedcomNode, report: &mut GedcomTagHandlingReport) -> Med
                     ._raw_gedcom
                     .insert(format!("CUSTOM_{tag}"), serialize_subtree(child));
             }
-            "BLOB" | "REFN" | "RIN" | "NOTE" | "SOUR" | "CHAN" => {
+            "BLOB" | "REFN" | "RIN" | "NOTE" | "SOUR" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
+            }
+            "CHAN" => {
+                record_deferred_standard_tag(report, child.tag.as_str());
+                capture_standard_subtree(&mut media._raw_gedcom, "CHAN", child);
             }
             _ => record_unhandled_tag(report, child.tag.as_str()),
         }
@@ -917,6 +961,11 @@ fn map_note_node(node: &GedcomNode) -> Note {
         if child.tag.starts_with('_') {
             note._raw_gedcom
                 .insert(format!("CUSTOM_{}", child.tag), serialize_subtree(child));
+            continue;
+        }
+
+        if child.tag == "CHAN" {
+            capture_standard_subtree(&mut note._raw_gedcom, "CHAN", child);
         }
     }
 
@@ -1069,8 +1118,12 @@ fn map_repository_node(node: &GedcomNode, report: &mut GedcomTagHandlingReport) 
                 let key = format!("CUSTOM_{tag}");
                 repository._raw_gedcom.insert(key, serialize_subtree(child));
             }
-            "REFN" | "RIN" | "NOTE" | "CHAN" => {
+            "REFN" | "RIN" | "NOTE" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
+            }
+            "CHAN" => {
+                record_deferred_standard_tag(report, child.tag.as_str());
+                capture_standard_subtree(&mut repository._raw_gedcom, "CHAN", child);
             }
             _ => record_unhandled_tag(report, child.tag.as_str()),
         }
@@ -1137,8 +1190,12 @@ fn map_source_node(
                 let key = format!("CUSTOM_{tag}");
                 source._raw_gedcom.insert(key, serialize_subtree(child));
             }
-            "TEXT" | "DATA" | "RIN" | "REFN" | "CHAN" | "NOTE" | "OBJE" => {
+            "TEXT" | "DATA" | "RIN" | "REFN" | "NOTE" | "OBJE" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
+            }
+            "CHAN" => {
+                record_deferred_standard_tag(report, child.tag.as_str());
+                capture_standard_subtree(&mut source._raw_gedcom, "CHAN", child);
             }
             _ => record_unhandled_tag(report, child.tag.as_str()),
         }
@@ -1403,6 +1460,10 @@ fn map_indi_node_to_events_with_report(
                 "AGNC" | "TYPE" | "CAUS" | "NOTE" | "OBJE" => {
                     record_deferred_standard_tag(report, nested.tag.as_str());
                 }
+                "CHAN" => {
+                    record_deferred_standard_tag(report, nested.tag.as_str());
+                    capture_standard_subtree(&mut event._raw_gedcom, "CHAN", nested);
+                }
                 _ => record_unhandled_tag(report, nested.tag.as_str()),
             }
         }
@@ -1480,9 +1541,25 @@ fn map_indi_node_to_person_with_report(
                 // Delegated to map_indi_node_to_events — intentional no-op here.
             }
             // Linking and cross-reference tags handled by family/source mappers.
-            "FAMS" | "FAMC" | "SUBM" | "ALIA" | "ANCI" | "DESI" | "NICK" | "RFN" | "AFN" | "REFN"
-            | "RIN" | "CHAN" | "NOTE" | "SOUR" | "OBJE" | "ASSO" | "ASSOC" | "RESN" => {
+            "FAMS" | "FAMC" | "SUBM" | "ALIA" | "ANCI" | "DESI" | "NICK" | "RFN" | "AFN"
+            | "REFN" | "RIN" | "NOTE" | "SOUR" | "ASSO" | "ASSOC" | "RESN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
+            }
+            "CHAN" => {
+                record_deferred_standard_tag(report, child.tag.as_str());
+                capture_standard_subtree(&mut person._raw_gedcom, "CHAN", child);
+            }
+            "OBJE" => {
+                record_deferred_standard_tag(report, child.tag.as_str());
+                let next_idx = person
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.contains("OBJE_REF_"))
+                    .count();
+                person._raw_gedcom.insert(
+                    format!("CUSTOM_OBJE_REF_{next_idx}"),
+                    serialize_subtree(child),
+                );
             }
             tag if tag.starts_with('_') => {
                 record_unhandled_tag(report, tag);
@@ -1834,6 +1911,85 @@ fn family_event_owner_tag(event: &Event) -> Option<&'static str> {
     }
 }
 
+fn parse_obje_media_refs(raw_gedcom: &std::collections::BTreeMap<String, String>) -> Vec<MediaRef> {
+    let mut refs = Vec::new();
+
+    for (key, serialized) in raw_gedcom {
+        if !key.contains("OBJE_REF_") {
+            continue;
+        }
+
+        for node in deserialize_serialized_subtrees(serialized) {
+            if node.tag != "OBJE" {
+                continue;
+            }
+
+            let Some(value) = node.value.as_deref() else {
+                continue;
+            };
+
+            if !(value.starts_with('@') && value.ends_with('@')) {
+                continue;
+            }
+
+            refs.push(MediaRef {
+                media_id: entity_id_from_xref("OBJE", value),
+                crop_rect_pct: None,
+                caption: None,
+            });
+        }
+    }
+
+    refs
+}
+
+fn parse_obje_external_paths(
+    raw_gedcom: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, Option<String>)> {
+    let mut paths = Vec::new();
+
+    for (key, serialized) in raw_gedcom {
+        if !key.contains("OBJE_REF_") {
+            continue;
+        }
+
+        for node in deserialize_serialized_subtrees(serialized) {
+            if node.tag != "OBJE" {
+                continue;
+            }
+
+            if let Some(value) = node.value.as_deref() {
+                let trimmed = value.trim();
+                if !(trimmed.is_empty() || (trimmed.starts_with('@') && trimmed.ends_with('@'))) {
+                    paths.push((trimmed.to_string(), None));
+                    continue;
+                }
+            }
+
+            let mut file_path: Option<String> = None;
+            let mut caption: Option<String> = None;
+
+            for child in &node.children {
+                if child.tag == "FILE" {
+                    file_path = child.value.clone();
+                }
+                if child.tag == "TITL" {
+                    caption = child.value.clone();
+                }
+            }
+
+            if let Some(file_path) = file_path {
+                let trimmed = file_path.trim().to_string();
+                if !trimmed.is_empty() {
+                    paths.push((trimmed, caption));
+                }
+            }
+        }
+    }
+
+    paths
+}
+
 pub fn generate_import_assertions(
     import_job_id: &str,
     persons: &[Person],
@@ -1871,6 +2027,31 @@ pub fn generate_import_assertions(
                 "gender",
                 to_value(&person.gender)?,
                 source_citations,
+                &proposed_by,
+            ));
+        }
+
+        for media_ref in parse_obje_media_refs(&person._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                person.id,
+                EntityType::Person,
+                "media_ref",
+                to_value(&media_ref)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for (external_path, caption) in parse_obje_external_paths(&person._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                person.id,
+                EntityType::Person,
+                "media_ref",
+                json!({
+                    "external_path": external_path,
+                    "caption": caption,
+                }),
+                Vec::new(),
                 &proposed_by,
             ));
         }
@@ -1955,6 +2136,31 @@ pub fn generate_import_assertions(
                 "child_link",
                 to_value(child_link)?,
                 source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        for media_ref in parse_obje_media_refs(&family._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                family.id,
+                EntityType::Family,
+                "media_ref",
+                to_value(&media_ref)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for (external_path, caption) in parse_obje_external_paths(&family._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                family.id,
+                EntityType::Family,
+                "media_ref",
+                json!({
+                    "external_path": external_path,
+                    "caption": caption,
+                }),
+                Vec::new(),
                 &proposed_by,
             ));
         }
@@ -2487,7 +2693,11 @@ pub fn import_gedcom_to_sqlite(
     let lines = tokenize_gedcom(input)?;
     let roots = build_gedcom_tree(&lines)?;
 
-    tracing::debug!(line_count = lines.len(), root_count = roots.len(), "parsed GEDCOM document");
+    tracing::debug!(
+        line_count = lines.len(),
+        root_count = roots.len(),
+        "parsed GEDCOM document"
+    );
     for root in &roots {
         tracing::info!(record_tag = %root.tag, xref = ?root.xref, "processing GEDCOM root record");
     }
@@ -2638,7 +2848,10 @@ pub fn import_gedcom_to_sqlite(
         insert_assertion_row(&tx, assertion)?;
     }
 
-    tracing::debug!(assertions_created = assertions.len(), "persisted GEDCOM assertions to sqlite");
+    tracing::debug!(
+        assertions_created = assertions.len(),
+        "persisted GEDCOM assertions to sqlite"
+    );
 
     tx.commit()?;
 
@@ -2986,6 +3199,21 @@ fn append_raw_gedcom_subtrees(
     }
 }
 
+fn capture_standard_subtree(
+    raw_gedcom: &mut std::collections::BTreeMap<String, String>,
+    tag: &str,
+    subtree: &GedcomNode,
+) {
+    let next_idx = raw_gedcom
+        .keys()
+        .filter(|key| key.starts_with(&format!("CUSTOM_STD_{tag}_")))
+        .count();
+    raw_gedcom.insert(
+        format!("CUSTOM_STD_{tag}_{next_idx}"),
+        serialize_subtree(subtree),
+    );
+}
+
 // ============================================================================
 // GEDCOM EXPORT FUNCTIONS (Step 5.1)
 // ============================================================================
@@ -3287,6 +3515,27 @@ fn person_name_to_name_node(name: &PersonName) -> GedcomNode {
             xref: None,
             tag: "NSFX".to_string(),
             value: Some(suffix.clone()),
+            children: Vec::new(),
+        });
+    }
+
+    let name_type_value = match &name.name_type {
+        NameType::Married => Some("MARRIED".to_string()),
+        NameType::Aka => Some("AKA".to_string()),
+        NameType::Immigrant => Some("IMMIGRANT".to_string()),
+        NameType::Religious => Some("RELIGIOUS".to_string()),
+        NameType::Custom(value) if !value.trim().is_empty() => {
+            Some(value.trim().to_ascii_uppercase())
+        }
+        _ => None,
+    };
+
+    if let Some(value) = name_type_value {
+        children.push(GedcomNode {
+            level: 2,
+            xref: None,
+            tag: "TYPE".to_string(),
+            value: Some(value),
             children: Vec::new(),
         });
     }
@@ -3674,6 +3923,10 @@ impl ExportPrivacyPolicy {
 
 #[must_use]
 pub fn gedcom_head_node() -> GedcomNode {
+    let now = Utc::now();
+    let date_value = now.format("%d %b %Y").to_string().to_ascii_uppercase();
+    let time_value = now.format("%H:%M:%S").to_string();
+
     GedcomNode {
         level: 0,
         xref: None,
@@ -3692,11 +3945,33 @@ pub fn gedcom_head_node() -> GedcomNode {
                 xref: None,
                 tag: "GEDC".to_string(),
                 value: None,
+                children: vec![
+                    GedcomNode {
+                        level: 2,
+                        xref: None,
+                        tag: "VERS".to_string(),
+                        value: Some("5.5.1".to_string()),
+                        children: Vec::new(),
+                    },
+                    GedcomNode {
+                        level: 2,
+                        xref: None,
+                        tag: "FORM".to_string(),
+                        value: Some("LINEAGE-LINKED".to_string()),
+                        children: Vec::new(),
+                    },
+                ],
+            },
+            GedcomNode {
+                level: 1,
+                xref: None,
+                tag: "DATE".to_string(),
+                value: Some(date_value),
                 children: vec![GedcomNode {
                     level: 2,
                     xref: None,
-                    tag: "VERS".to_string(),
-                    value: Some("5.5.1".to_string()),
+                    tag: "TIME".to_string(),
+                    value: Some(time_value),
                     children: Vec::new(),
                 }],
             },
@@ -3705,6 +3980,13 @@ pub fn gedcom_head_node() -> GedcomNode {
                 xref: None,
                 tag: "CHAR".to_string(),
                 value: Some("UTF-8".to_string()),
+                children: Vec::new(),
+            },
+            GedcomNode {
+                level: 1,
+                xref: None,
+                tag: "LANG".to_string(),
+                value: Some("ENG".to_string()),
                 children: Vec::new(),
             },
         ],
@@ -4558,6 +4840,27 @@ mod tests {
     }
 
     #[test]
+    fn person_name_to_name_node_emits_type_for_non_birth_name() {
+        let name = PersonName {
+            name_type: NameType::Aka,
+            given_names: "Johnny".to_string(),
+            surnames: vec![Surname {
+                value: "Smith".to_string(),
+                origin_type: SurnameOrigin::Patrilineal,
+                connector: None,
+            }],
+            ..Default::default()
+        };
+
+        let node = person_name_to_name_node(&name);
+        assert!(
+            node.children
+                .iter()
+                .any(|child| child.tag == "TYPE" && child.value.as_deref() == Some("AKA"))
+        );
+    }
+
+    #[test]
     fn family_to_fam_node_renders_family_with_children() {
         let person1_id = EntityId::new();
         let person2_id = EntityId::new();
@@ -5038,7 +5341,10 @@ mod tests {
         let rendered = render_gedcom_file(&entity_nodes);
 
         assert!(rendered.starts_with("0 HEAD\n1 SOUR RUSTYGENE\n"));
-        assert!(rendered.contains("1 CHAR UTF-8\n0 @I1@ INDI\n"));
+        assert!(rendered.contains("2 FORM LINEAGE-LINKED\n"));
+        assert!(rendered.contains("1 DATE "));
+        assert!(rendered.contains("2 TIME "));
+        assert!(rendered.contains("1 CHAR UTF-8\n1 LANG ENG\n0 @I1@ INDI\n"));
         assert!(rendered.ends_with("0 TRLR\n"));
 
         let lines = tokenize_gedcom(&rendered).expect("tokenize full GEDCOM document");
@@ -5046,6 +5352,41 @@ mod tests {
         assert_eq!(roots.first().map(|node| node.tag.as_str()), Some("HEAD"));
         assert_eq!(roots.get(1).map(|node| node.tag.as_str()), Some("INDI"));
         assert_eq!(roots.last().map(|node| node.tag.as_str()), Some("TRLR"));
+    }
+
+    #[test]
+    fn chan_subtree_roundtrips_via_person_raw_gedcom() {
+        let input = "0 @I1@ INDI\n1 NAME John /Doe/\n1 CHAN\n2 DATE 1 APR 2026\n3 TIME 20:15:01\n";
+        let lines = tokenize_gedcom(input).expect("tokenize should succeed");
+        let roots = build_gedcom_tree(&lines).expect("tree build should succeed");
+        let persons = map_indi_nodes_to_persons(&roots);
+        let person = persons.first().expect("person should exist");
+
+        assert!(
+            person
+                ._raw_gedcom
+                .keys()
+                .any(|key| key.starts_with("CUSTOM_STD_CHAN_"))
+        );
+
+        let node = person_to_indi_node(person, &[], &[], "@I1@");
+        let chan = node
+            .children
+            .iter()
+            .find(|child| child.tag == "CHAN")
+            .expect("CHAN subtree should be re-emitted on export");
+
+        let date = chan
+            .children
+            .iter()
+            .find(|child| child.tag == "DATE")
+            .expect("CHAN should include DATE child");
+        assert_eq!(date.value.as_deref(), Some("1 APR 2026"));
+        assert!(
+            date.children
+                .iter()
+                .any(|grand| grand.tag == "TIME" && grand.value.as_deref() == Some("20:15:01"))
+        );
     }
 
     #[test]

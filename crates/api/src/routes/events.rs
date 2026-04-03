@@ -5,14 +5,20 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use chrono::Utc;
+use rustygene_core::assertion::{AssertionStatus, EvidenceType};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
+use rustygene_core::types::ActorRef;
 use rustygene_core::types::EntityId;
-use rustygene_storage::Pagination;
+use rustygene_storage::{EntityType, JsonAssertion, Pagination};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::errors::ApiError;
-use crate::models::events::{AddParticipantRequest, CreateEventRequest, EventDetailResponse, EventParticipantResponse};
+use crate::models::events::{
+    AddParticipantRequest, CreateEventRequest, EventDetailResponse, EventParticipantResponse,
+};
+use crate::models::persons::{AssertionValueResponse, CreateAssertionRequest};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -22,17 +28,27 @@ struct EventsQuery {
     #[serde(default)]
     offset: Option<u32>,
     #[serde(default)]
-    person_id: Option<String>,
+    #[serde(rename = "person_id")]
+    _person_id: Option<String>,
     #[serde(default)]
-    family_id: Option<String>,
+    #[serde(rename = "family_id")]
+    _family_id: Option<String>,
     #[serde(default)]
-    event_type: Option<String>,
+    #[serde(rename = "event_type")]
+    _event_type: Option<String>,
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_events).post(create_event))
-        .route("/:id", get(get_event).put(update_event).delete(delete_event))
+        .route(
+            "/:id",
+            get(get_event).put(update_event).delete(delete_event),
+        )
+        .route(
+            "/:id/assertions",
+            get(get_event_assertions).post(create_event_assertion),
+        )
         .route("/:id/participants", post(add_participant))
         .route("/:id/participants/:pid", delete(remove_participant))
 }
@@ -99,7 +115,10 @@ async fn create_event(
 
     state.storage.create_event(&event).await?;
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": event_id }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "id": event_id })),
+    ))
 }
 
 async fn get_event(
@@ -214,6 +233,82 @@ async fn remove_participant(
     state.storage.update_event(&event).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_event_assertions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<BTreeMap<String, Vec<AssertionValueResponse>>>, ApiError> {
+    let event_id = parse_entity_id(&id)?;
+    let _ = state.storage.get_event(event_id).await?;
+    let records = state
+        .storage
+        .list_assertion_records_for_entity(event_id)
+        .await?;
+
+    let mut grouped: BTreeMap<String, Vec<AssertionValueResponse>> = BTreeMap::new();
+    for record in records {
+        grouped
+            .entry(record.field.clone())
+            .or_default()
+            .push(AssertionValueResponse {
+                assertion_id: record.assertion.id,
+                field: record.field,
+                value: record.assertion.value,
+                status: record.assertion.status,
+                confidence: record.assertion.confidence,
+                sources: record.assertion.source_citations,
+            });
+    }
+
+    Ok(Json(grouped))
+}
+
+async fn create_event_assertion(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<CreateAssertionRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if request.field.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "assertion field must not be empty".to_string(),
+        ));
+    }
+
+    let event_id = parse_entity_id(&id)?;
+    let _ = state.storage.get_event(event_id).await?;
+
+    let assertion = JsonAssertion {
+        id: EntityId::new(),
+        value: request.value,
+        confidence: request.confidence.unwrap_or(0.8),
+        status: request.status.unwrap_or(AssertionStatus::Proposed),
+        evidence_type: request.evidence_type.unwrap_or(EvidenceType::Direct),
+        source_citations: request.source_citations,
+        proposed_by: request
+            .proposed_by
+            .unwrap_or_else(|| ActorRef::User("api".to_string())),
+        created_at: Utc::now(),
+        reviewed_at: None,
+        reviewed_by: None,
+    };
+
+    state
+        .storage
+        .create_assertion(event_id, EntityType::Event, &request.field, &assertion)
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AssertionValueResponse {
+            assertion_id: assertion.id,
+            field: request.field,
+            value: assertion.value,
+            status: assertion.status,
+            confidence: assertion.confidence,
+            sources: assertion.source_citations,
+        }),
+    ))
 }
 
 // Helpers

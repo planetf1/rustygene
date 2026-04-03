@@ -6,7 +6,9 @@ use chrono::Utc;
 use rusqlite::Connection;
 use rustygene_core::assertion::{Assertion, AssertionStatus, EvidenceType};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
-use rustygene_core::evidence::{Citation, CitationRef, Media, Note, NoteType, Repository, RepositoryType, Source};
+use rustygene_core::evidence::{
+    Citation, CitationRef, Media, Note, NoteType, Repository, RepositoryType, Source,
+};
 use rustygene_core::family::{ChildLink, Family, LineageType, PartnerLink};
 use rustygene_core::lds::{LdsOrdinance, LdsOrdinanceType, LdsStatus};
 use rustygene_core::person::Person;
@@ -205,7 +207,10 @@ async fn sqlite_end_to_end_storage_flow() {
     backend.create_media(&media).await.expect("create media");
     let fetched_media = backend.get_media(media.id).await.expect("get media");
     assert_eq!(fetched_media.mime_type, "image/jpeg");
-    assert_eq!(fetched_media.caption.as_deref(), Some("Marriage Register Scan"));
+    assert_eq!(
+        fetched_media.caption.as_deref(),
+        Some("Marriage Register Scan")
+    );
     let listed_media = backend
         .list_media(Pagination {
             limit: 50,

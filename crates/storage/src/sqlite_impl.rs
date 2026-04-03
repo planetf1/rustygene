@@ -1,15 +1,15 @@
 use crate::{
-    AuditLogEntry, EntityType, FieldAssertion, JsonAssertion, JsonExportManifest,
-    JsonExportMode, JsonExportResult, JsonImportMode, JsonImportReport, Pagination,
-    RelationshipEdge, ResearchLogFilter, SandboxAssertionDiff, StagingProposal,
-    StagingProposalFilter, Storage, StorageError, StorageErrorCode,
+    AuditLogEntry, EntityType, FieldAssertion, JsonAssertion, JsonExportManifest, JsonExportMode,
+    JsonExportResult, JsonImportMode, JsonImportReport, Pagination, RelationshipEdge,
+    ResearchLogFilter, SandboxAssertionDiff, StagingProposal, StagingProposalFilter, Storage,
+    StorageError, StorageErrorCode,
 };
 use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
 use rustygene_core::assertion::{
     AssertionStatus, EvidenceType, Sandbox, SandboxStatus, compute_assertion_idempotency_key,
 };
 use rustygene_core::event::Event;
-use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
+use rustygene_core::evidence::{Citation, CitationRef, Media, Note, Repository, Source};
 use rustygene_core::family::{Family, Relationship};
 use rustygene_core::lds::LdsOrdinance;
 use rustygene_core::person::Person;
@@ -66,6 +66,18 @@ impl SqliteBackend {
         Self {
             connection: Arc::new(Mutex::new(connection)),
         }
+    }
+
+    pub fn with_connection<T, F>(&self, operation: F) -> Result<T, StorageError>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, StorageError>,
+    {
+        let mut connection = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        operation(&mut connection)
     }
 
     pub fn rebuild_all_snapshots(&self) -> Result<usize, StorageError> {
@@ -1011,11 +1023,7 @@ impl SqliteBackend {
             }
         }
 
-        if out.is_empty() {
-            None
-        } else {
-            Some(out)
-        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     fn build_person_search_content(names: &[String]) -> String {
@@ -1051,8 +1059,6 @@ impl SqliteBackend {
 
         Ok(())
     }
-
-
 
     fn rebuild_search_index_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), StorageError> {
         tx.execute("DELETE FROM search_index", [])
@@ -1096,7 +1102,10 @@ impl SqliteBackend {
                 .and_then(|v| v.as_str().map(std::borrow::ToOwned::to_owned))
                 .unwrap_or(value_json);
 
-            names_by_person.entry(entity_id).or_default().push(parsed_name);
+            names_by_person
+                .entry(entity_id)
+                .or_default()
+                .push(parsed_name);
         }
 
         for (entity_id, names) in names_by_person {
@@ -1106,14 +1115,16 @@ impl SqliteBackend {
             }
         }
 
-        let mut place_stmt = tx
-            .prepare("SELECT id, data FROM places")
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("place search_index query prepare failed: {}", e),
-            })?;
+        let mut place_stmt =
+            tx.prepare("SELECT id, data FROM places")
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("place search_index query prepare failed: {}", e),
+                })?;
         let place_rows = place_stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(|e| StorageError {
                 code: StorageErrorCode::Backend,
                 message: format!("place search_index query failed: {}", e),
@@ -1143,14 +1154,16 @@ impl SqliteBackend {
             }
         }
 
-        let mut source_stmt = tx
-            .prepare("SELECT id, data FROM sources")
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("source search_index query prepare failed: {}", e),
-            })?;
+        let mut source_stmt =
+            tx.prepare("SELECT id, data FROM sources")
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("source search_index query prepare failed: {}", e),
+                })?;
         let source_rows = source_stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(|e| StorageError {
                 code: StorageErrorCode::Backend,
                 message: format!("source search_index query failed: {}", e),
@@ -1186,7 +1199,9 @@ impl SqliteBackend {
                 message: format!("note search_index query prepare failed: {}", e),
             })?;
         let note_rows = note_stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(|e| StorageError {
                 code: StorageErrorCode::Backend,
                 message: format!("note search_index query failed: {}", e),
@@ -1630,7 +1645,10 @@ impl Storage for SqliteBackend {
     }
 
     #[tracing::instrument(skip(self), fields(person_id = %person_id))]
-    async fn list_families_for_person(&self, person_id: EntityId) -> Result<Vec<Family>, StorageError> {
+    async fn list_families_for_person(
+        &self,
+        person_id: EntityId,
+    ) -> Result<Vec<Family>, StorageError> {
         let conn = self.connection.lock().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
             message: format!("Mutex lock failed: {}", e),
@@ -1656,7 +1674,9 @@ impl Storage for SqliteBackend {
             })?;
 
         let rows: Vec<String> = stmt
-            .query_map(rusqlite::params![&id_text, &id_text, &id_text], |row| row.get(0))
+            .query_map(rusqlite::params![&id_text, &id_text, &id_text], |row| {
+                row.get(0)
+            })
             .map_err(|e| StorageError {
                 code: StorageErrorCode::Backend,
                 message: format!("Families-for-person query failed: {}", e),
@@ -1669,10 +1689,12 @@ impl Storage for SqliteBackend {
 
         let families = rows
             .into_iter()
-            .map(|raw| serde_json::from_str::<Family>(&raw).map_err(|e| StorageError {
-                code: StorageErrorCode::Serialization,
-                message: format!("Family JSON parse failed: {}", e),
-            }))
+            .map(|raw| {
+                serde_json::from_str::<Family>(&raw).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Family JSON parse failed: {}", e),
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         tracing::debug!(count = families.len(), "listed families for person");
@@ -1680,7 +1702,10 @@ impl Storage for SqliteBackend {
     }
 
     #[tracing::instrument(skip(self), fields(person_id = %person_id))]
-    async fn list_events_for_person(&self, person_id: EntityId) -> Result<Vec<Event>, StorageError> {
+    async fn list_events_for_person(
+        &self,
+        person_id: EntityId,
+    ) -> Result<Vec<Event>, StorageError> {
         let conn = self.connection.lock().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
             message: format!("Mutex lock failed: {}", e),
@@ -1716,10 +1741,12 @@ impl Storage for SqliteBackend {
 
         let mut events = rows
             .into_iter()
-            .map(|raw| serde_json::from_str::<Event>(&raw).map_err(|e| StorageError {
-                code: StorageErrorCode::Serialization,
-                message: format!("Event JSON parse failed: {}", e),
-            }))
+            .map(|raw| {
+                serde_json::from_str::<Event>(&raw).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Event JSON parse failed: {}", e),
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         events.sort_by(|left, right| match (&left.date, &right.date) {
@@ -2355,6 +2382,79 @@ impl Storage for SqliteBackend {
             })
     }
 
+    async fn append_citation_ref_to_assertion(
+        &self,
+        assertion_id: EntityId,
+        citation_ref: &CitationRef,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        let existing: Option<Option<String>> = tx
+            .query_row(
+                "SELECT source_citations FROM assertions WHERE id = ?",
+                rusqlite::params![assertion_id.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Assertion lookup failed: {}", e),
+            })?;
+
+        let Some(source_citations_json) = existing else {
+            return Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("Assertion not found: {}", assertion_id),
+            });
+        };
+
+        let mut source_citations: Vec<CitationRef> = match source_citations_json {
+            Some(json) if !json.trim().is_empty() => {
+                serde_json::from_str(&json).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("Source citations parse failed: {}", e),
+                })?
+            }
+            _ => Vec::new(),
+        };
+
+        if !source_citations
+            .iter()
+            .any(|existing_ref| existing_ref.citation_id == citation_ref.citation_id)
+        {
+            source_citations.push(citation_ref.clone());
+        }
+
+        let updated_json = serde_json::to_string(&source_citations).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("Source citations serialization failed: {}", e),
+        })?;
+
+        tx.execute(
+            "UPDATE assertions SET source_citations = ? WHERE id = ?",
+            rusqlite::params![updated_json, assertion_id.to_string()],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Assertion update failed: {}", e),
+        })?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
     async fn update_assertion_status(
         &self,
         assertion_id: EntityId,
@@ -2666,7 +2766,14 @@ impl Storage for SqliteBackend {
             message: format!("Mutex lock failed: {}", e),
         })?;
 
-        let row: (String, String, Option<String>, String, Option<String>, String) = conn
+        let row: (
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            String,
+        ) = conn
             .query_row(
                 "SELECT id, name, description, created_at, parent_sandbox, status
                  FROM sandboxes WHERE id = ?",
@@ -2702,7 +2809,11 @@ impl Storage for SqliteBackend {
                     message: format!("Invalid sandbox created_at '{}': {}", row.3, e),
                 })?
                 .with_timezone(&chrono::Utc),
-            parent_sandbox: row.4.as_deref().map(Self::parse_entity_id_str).transpose()?,
+            parent_sandbox: row
+                .4
+                .as_deref()
+                .map(Self::parse_entity_id_str)
+                .transpose()?,
             status: Self::sandbox_status_from_db(&row.5)?,
         })
     }
@@ -2834,7 +2945,10 @@ impl Storage for SqliteBackend {
                         created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
                             .map_err(|e| StorageError {
                                 code: StorageErrorCode::Serialization,
-                                message: format!("Invalid sandbox created_at '{}': {}", created_at, e),
+                                message: format!(
+                                    "Invalid sandbox created_at '{}': {}",
+                                    created_at, e
+                                ),
                             })?
                             .with_timezone(&chrono::Utc),
                         parent_sandbox: parent_sandbox
@@ -2876,10 +2990,11 @@ impl Storage for SqliteBackend {
                 message: format!("Entity {} not found in table {}", entity_id, table),
             })?;
 
-        let mut snapshot_json: Value = serde_json::from_str(&base_data).map_err(|e| StorageError {
-            code: StorageErrorCode::Serialization,
-            message: format!("Snapshot parse failed: {}", e),
-        })?;
+        let mut snapshot_json: Value =
+            serde_json::from_str(&base_data).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Snapshot parse failed: {}", e),
+            })?;
 
         let obj = snapshot_json.as_object_mut().ok_or(StorageError {
             code: StorageErrorCode::Serialization,
@@ -2918,7 +3033,10 @@ impl Storage for SqliteBackend {
         for (field, value_text) in overlays {
             let value: Value = serde_json::from_str(&value_text).map_err(|e| StorageError {
                 code: StorageErrorCode::Serialization,
-                message: format!("Sandbox assertion value parse failed for field '{}': {}", field, e),
+                message: format!(
+                    "Sandbox assertion value parse failed for field '{}': {}",
+                    field, e
+                ),
             })?;
             obj.insert(field, value);
         }
@@ -3160,7 +3278,9 @@ impl Storage for SqliteBackend {
 
         query.push_str(" ORDER BY submitted_at DESC LIMIT ? OFFSET ?");
         args.push(rusqlite::types::Value::Integer(i64::from(pagination.limit)));
-        args.push(rusqlite::types::Value::Integer(i64::from(pagination.offset)));
+        args.push(rusqlite::types::Value::Integer(i64::from(
+            pagination.offset,
+        )));
 
         let mut stmt = conn.prepare(&query).map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -3262,12 +3382,11 @@ impl Storage for SqliteBackend {
                 message: format!("Staging proposal lookup failed: {}", e),
             })?;
 
-        let (assertion_id, entity_id, entity_type_text, field, queue_status) = found.ok_or(
-            StorageError {
+        let (assertion_id, entity_id, entity_type_text, field, queue_status) =
+            found.ok_or(StorageError {
                 code: StorageErrorCode::NotFound,
                 message: format!("Staging proposal not found: {}", proposal_id),
-            },
-        )?;
+            })?;
 
         if queue_status != "proposed" {
             return Err(StorageError {
@@ -3315,7 +3434,11 @@ impl Storage for SqliteBackend {
         })?;
 
         let entity_type = Self::entity_type_from_db(&entity_type_text)?;
-        Self::recompute_entity_snapshot_tx(&tx, Self::parse_entity_id_str(&entity_id)?, entity_type)?;
+        Self::recompute_entity_snapshot_tx(
+            &tx,
+            Self::parse_entity_id_str(&entity_id)?,
+            entity_type,
+        )?;
 
         tx.commit().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -3395,7 +3518,11 @@ impl Storage for SqliteBackend {
         })?;
 
         let entity_type = Self::entity_type_from_db(&entity_type_text)?;
-        Self::recompute_entity_snapshot_tx(&tx, Self::parse_entity_id_str(&entity_id)?, entity_type)?;
+        Self::recompute_entity_snapshot_tx(
+            &tx,
+            Self::parse_entity_id_str(&entity_id)?,
+            entity_type,
+        )?;
 
         tx.commit().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -4292,7 +4419,10 @@ mod tests {
             .await
             .expect("create sandbox assertion b");
 
-        let trunk = backend.get_person(person_id).await.expect("get trunk person");
+        let trunk = backend
+            .get_person(person_id)
+            .await
+            .expect("get trunk person");
         assert!(trunk.names.is_empty());
 
         let overlay_a = backend

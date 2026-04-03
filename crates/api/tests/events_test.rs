@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use rusqlite::Connection;
-use rustygene_core::event::{Event, EventType, EventParticipant, EventRole};
+use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
 use rustygene_core::person::{Person, PersonName, Surname};
 use rustygene_core::types::{EntityId, Gender};
 use rustygene_storage::run_migrations;
 use rustygene_storage::sqlite_impl::SqliteBackend;
-use rustygene_storage::{Storage, Pagination};
+use rustygene_storage::{Pagination, Storage};
 
 fn in_memory_backend() -> Arc<SqliteBackend> {
     let mut conn = Connection::open_in_memory().expect("open in-memory sqlite connection");
@@ -37,10 +37,7 @@ async fn create_test_person(
         original_xref: None,
         _raw_gedcom: Default::default(),
     };
-    backend
-        .create_person(&person)
-        .await
-        .expect("create person");
+    backend.create_person(&person).await.expect("create person");
     person_id
 }
 
@@ -64,15 +61,9 @@ async fn event_crud_create_event_with_participants() {
         _raw_gedcom: Default::default(),
     };
 
-    backend
-        .create_event(&event)
-        .await
-        .expect("create event");
+    backend.create_event(&event).await.expect("create event");
 
-    let retrieved = backend
-        .get_event(event_id)
-        .await
-        .expect("get_event");
+    let retrieved = backend.get_event(event_id).await.expect("get_event");
 
     assert_eq!(retrieved.event_type, EventType::Marriage);
     assert_eq!(retrieved.participants.len(), 1);
@@ -105,14 +96,8 @@ async fn event_crud_list_events_returns_all() {
         _raw_gedcom: Default::default(),
     };
 
-    backend
-        .create_event(&event1)
-        .await
-        .expect("create event 1");
-    backend
-        .create_event(&event2)
-        .await
-        .expect("create event 2");
+    backend.create_event(&event1).await.expect("create event 1");
+    backend.create_event(&event2).await.expect("create event 2");
 
     let events = backend
         .list_events(Pagination::default())
@@ -137,26 +122,20 @@ async fn event_crud_update_event() {
         _raw_gedcom: Default::default(),
     };
 
-    backend
-        .create_event(&event)
-        .await
-        .expect("create event");
+    backend.create_event(&event).await.expect("create event");
 
     event.event_type = EventType::Death;
     event.description = Some("Updated description".to_string());
 
-    backend
-        .update_event(&event)
-        .await
-        .expect("update_event");
+    backend.update_event(&event).await.expect("update_event");
 
-    let retrieved = backend
-        .get_event(event_id)
-        .await
-        .expect("get_event");
+    let retrieved = backend.get_event(event_id).await.expect("get_event");
 
     assert_eq!(retrieved.event_type, EventType::Death);
-    assert_eq!(retrieved.description, Some("Updated description".to_string()));
+    assert_eq!(
+        retrieved.description,
+        Some("Updated description".to_string())
+    );
 }
 
 #[tokio::test]
@@ -174,19 +153,11 @@ async fn event_crud_delete_event() {
         _raw_gedcom: Default::default(),
     };
 
-    backend
-        .create_event(&event)
-        .await
-        .expect("create event");
+    backend.create_event(&event).await.expect("create event");
 
-    backend
-        .delete_event(event_id)
-        .await
-        .expect("delete_event");
+    backend.delete_event(event_id).await.expect("delete_event");
 
-    let result = backend
-        .get_event(event_id)
-        .await;
+    let result = backend.get_event(event_id).await;
 
     assert!(result.is_err(), "event should be deleted");
 }
@@ -219,30 +190,18 @@ async fn event_participant_add_and_remove() {
         _raw_gedcom: Default::default(),
     };
 
-    backend
-        .create_event(&event)
-        .await
-        .expect("create event");
+    backend.create_event(&event).await.expect("create event");
 
     // Verify two participants
-    let retrieved = backend
-        .get_event(event_id)
-        .await
-        .expect("get_event");
+    let retrieved = backend.get_event(event_id).await.expect("get_event");
     assert_eq!(retrieved.participants.len(), 2);
 
     // Remove one participant
     event.participants.retain(|p| p.person_id != person1_id);
-    backend
-        .update_event(&event)
-        .await
-        .expect("update_event");
+    backend.update_event(&event).await.expect("update_event");
 
     // Verify only one remains
-    let updated = backend
-        .get_event(event_id)
-        .await
-        .expect("get_event");
+    let updated = backend.get_event(event_id).await.expect("get_event");
     assert_eq!(updated.participants.len(), 1);
     assert_eq!(updated.participants[0].person_id, person2_id);
 }
@@ -268,10 +227,7 @@ async fn event_type_validation_accepts_custom_types() {
         .await
         .expect("create event with custom type");
 
-    let retrieved = backend
-        .get_event(event_id)
-        .await
-        .expect("get_event");
+    let retrieved = backend.get_event(event_id).await.expect("get_event");
 
     match retrieved.event_type {
         EventType::Custom(ref s) => assert_eq!(s, "custom_event_type"),

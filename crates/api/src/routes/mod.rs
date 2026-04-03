@@ -1,8 +1,15 @@
+pub mod assertions;
+pub mod citations;
 pub mod events;
+pub mod events_sse;
 pub mod families;
 pub mod graph;
 pub mod import_export;
 pub mod media;
+pub mod notes;
 pub mod persons;
+pub mod repositories;
+pub mod research_log;
 pub mod search;
+pub mod sources;
 pub mod staging;

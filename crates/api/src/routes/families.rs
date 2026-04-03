@@ -13,9 +13,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::errors::ApiError;
-use crate::models::families::{
-    CreateFamilyRequest, FamilyDetailResponse, PartnerSummary,
-};
+use crate::models::families::{CreateFamilyRequest, FamilyDetailResponse, PartnerSummary};
+use crate::models::persons::AssertionValueResponse;
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -25,15 +24,8 @@ struct FamiliesQuery {
     #[serde(default)]
     offset: Option<u32>,
     #[serde(default)]
-    person_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PersonFamiliesQuery {
-    #[serde(default)]
-    limit: Option<u32>,
-    #[serde(default)]
-    offset: Option<u32>,
+    #[serde(rename = "person_id")]
+    _person_id: Option<String>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -43,6 +35,7 @@ pub fn router() -> Router<AppState> {
             "/:id",
             get(get_family).put(update_family).delete(delete_family),
         )
+        .route("/:id/assertions", get(get_family_assertions))
 }
 
 async fn list_families(
@@ -121,12 +114,10 @@ async fn list_families(
                     date: e.date.as_ref().map(|d| format!("{:?}", d)),
                 })
                 .collect(),
-            assertion_counts: assertions
-                .iter()
-                .fold(BTreeMap::new(), |mut acc, asrt| {
-                    *acc.entry(asrt.field.clone()).or_insert(0) += 1;
-                    acc
-                }),
+            assertion_counts: assertions.iter().fold(BTreeMap::new(), |mut acc, asrt| {
+                *acc.entry(asrt.field.clone()).or_insert(0) += 1;
+                acc
+            }),
         };
 
         response.push(detail);
@@ -253,12 +244,10 @@ async fn get_family(
                 date: e.date.as_ref().map(|d| format!("{:?}", d)),
             })
             .collect(),
-        assertion_counts: assertions
-            .iter()
-            .fold(BTreeMap::new(), |mut acc, asrt| {
-                *acc.entry(asrt.field.clone()).or_insert(0) += 1;
-                acc
-            }),
+        assertion_counts: assertions.iter().fold(BTreeMap::new(), |mut acc, asrt| {
+            *acc.entry(asrt.field.clone()).or_insert(0) += 1;
+            acc
+        }),
     }))
 }
 
@@ -308,6 +297,35 @@ async fn delete_family(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn get_family_assertions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<BTreeMap<String, Vec<AssertionValueResponse>>>, ApiError> {
+    let family_id = parse_entity_id(&id)?;
+    let _ = state.storage.get_family(family_id).await?;
+    let records = state
+        .storage
+        .list_assertion_records_for_entity(family_id)
+        .await?;
+
+    let mut grouped: BTreeMap<String, Vec<AssertionValueResponse>> = BTreeMap::new();
+    for record in records {
+        grouped
+            .entry(record.field.clone())
+            .or_default()
+            .push(AssertionValueResponse {
+                assertion_id: record.assertion.id,
+                field: record.field,
+                value: record.assertion.value,
+                status: record.assertion.status,
+                confidence: record.assertion.confidence,
+                sources: record.assertion.source_citations,
+            });
+    }
+
+    Ok(Json(grouped))
+}
+
 // Helpers
 
 fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
@@ -316,10 +334,7 @@ fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
         .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
 }
 
-async fn fetch_family_events(
-    _state: &AppState,
-    _family: &Family,
-) -> Result<Vec<Event>, ApiError> {
+async fn fetch_family_events(_state: &AppState, _family: &Family) -> Result<Vec<Event>, ApiError> {
     // Fetch all events, filter by participants
     // For now, return empty - this would need filtering logic
     // In a real implementation, we'd query events where participants include the partners

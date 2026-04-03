@@ -3,13 +3,16 @@ use std::collections::BTreeMap;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use chrono::Utc;
+use rusqlite::OptionalExtension;
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
 use rustygene_core::person::{Person, PersonName};
 use rustygene_core::types::{ActorRef, EntityId, Gender};
-use rustygene_storage::{EntityType, FieldAssertion, JsonAssertion, Pagination};
+use rustygene_storage::{
+    EntityType, FieldAssertion, JsonAssertion, Pagination, StorageError, StorageErrorCode,
+};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -29,6 +32,16 @@ struct PersonsQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct UpdatePersonAssertionRequest {
+    #[serde(default)]
+    confidence: Option<f64>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    preferred: Option<bool>,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_persons).post(create_person))
@@ -36,7 +49,14 @@ pub fn router() -> Router<AppState> {
             "/:id",
             get(get_person).put(update_person).delete(delete_person),
         )
-        .route("/:id/assertions", get(get_person_assertions).post(create_person_assertion))
+        .route(
+            "/:id/assertions",
+            get(get_person_assertions).post(create_person_assertion),
+        )
+        .route(
+            "/:id/assertions/:assertion_id",
+            put(update_person_assertion),
+        )
         .route("/:id/timeline", get(get_person_timeline))
         .route("/:id/families", get(get_person_families))
 }
@@ -117,6 +137,8 @@ async fn create_person(
             .await?;
     }
 
+    state.publish_entity_created("person", person_id, "user");
+
     Ok((
         StatusCode::CREATED,
         Json(CreatedPersonResponse { id: person_id }),
@@ -184,6 +206,8 @@ async fn update_person(
             .await?;
     }
 
+    state.publish_entity_updated("person", person_id, "user");
+
     Ok(Json(CreatedPersonResponse { id: person_id }))
 }
 
@@ -194,6 +218,7 @@ async fn delete_person(
     let person_id = parse_entity_id(&id)?;
     let _ = state.storage.get_person(person_id).await?;
     state.storage.delete_person(person_id).await?;
+    state.publish_entity_deleted("person", person_id, "user");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -210,14 +235,17 @@ async fn get_person_assertions(
 
     let mut grouped: BTreeMap<String, Vec<AssertionValueResponse>> = BTreeMap::new();
     for record in records {
-        grouped.entry(record.field.clone()).or_default().push(AssertionValueResponse {
-            assertion_id: record.assertion.id,
-            field: record.field,
-            value: record.assertion.value,
-            status: record.assertion.status,
-            confidence: record.assertion.confidence,
-            sources: record.assertion.source_citations,
-        });
+        grouped
+            .entry(record.field.clone())
+            .or_default()
+            .push(AssertionValueResponse {
+                assertion_id: record.assertion.id,
+                field: record.field,
+                value: record.assertion.value,
+                status: record.assertion.status,
+                confidence: record.assertion.confidence,
+                sources: record.assertion.source_citations,
+            });
     }
 
     Ok(Json(grouped))
@@ -256,6 +284,8 @@ async fn create_person_assertion(
         .create_assertion(person_id, EntityType::Person, &request.field, &assertion)
         .await?;
 
+    state.publish_entity_updated("person", person_id, "user");
+
     Ok((
         StatusCode::CREATED,
         Json(AssertionValueResponse {
@@ -267,6 +297,151 @@ async fn create_person_assertion(
             sources: assertion.source_citations,
         }),
     ))
+}
+
+async fn update_person_assertion(
+    State(state): State<AppState>,
+    Path((id, assertion_id)): Path<(String, String)>,
+    Json(request): Json<UpdatePersonAssertionRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let person_id = parse_entity_id(&id)?;
+    let _ = state.storage.get_person(person_id).await?;
+    let assertion_id = parse_entity_id(&assertion_id)?;
+
+    if request.confidence.is_none() && request.status.is_none() && request.preferred.is_none() {
+        return Err(ApiError::BadRequest(
+            "at least one of confidence/status/preferred must be provided".to_string(),
+        ));
+    }
+
+    if let Some(confidence) = request.confidence {
+        if !(0.0..=1.0).contains(&confidence) {
+            return Err(ApiError::BadRequest(
+                "confidence must be between 0.0 and 1.0".to_string(),
+            ));
+        }
+
+        let backend = state.sqlite_backend.clone().ok_or_else(|| {
+            ApiError::InternalError("assertion updates require sqlite backend".to_string())
+        })?;
+
+        backend.with_connection(|conn| {
+            let tx = conn.transaction().map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("begin assertion update transaction failed: {e}"),
+            })?;
+
+            let rows = tx
+                .execute(
+                    "UPDATE assertions SET confidence = ? WHERE id = ? AND entity_id = ?",
+                    rusqlite::params![confidence, assertion_id.to_string(), person_id.to_string()],
+                )
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("update assertion confidence failed: {e}"),
+                })?;
+
+            if rows == 0 {
+                return Err(StorageError {
+                    code: StorageErrorCode::NotFound,
+                    message: format!("assertion not found for person: {assertion_id}"),
+                });
+            }
+
+            tx.commit().map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("commit assertion confidence failed: {e}"),
+            })?;
+
+            Ok(())
+        })?;
+    }
+
+    if let Some(status_raw) = request.status.as_deref() {
+        let status = match status_raw.trim().to_ascii_lowercase().as_str() {
+            "pending" | "proposed" => AssertionStatus::Proposed,
+            "approved" | "confirmed" => AssertionStatus::Confirmed,
+            "rejected" | "retract" | "retracted" => AssertionStatus::Rejected,
+            "disputed" => AssertionStatus::Disputed,
+            value => {
+                return Err(ApiError::BadRequest(format!(
+                    "invalid assertion status: {value}"
+                )))
+            }
+        };
+
+        state
+            .storage
+            .update_assertion_status(assertion_id, status)
+            .await?;
+    }
+
+    if let Some(preferred) = request.preferred {
+        let backend = state.sqlite_backend.clone().ok_or_else(|| {
+            ApiError::InternalError("assertion updates require sqlite backend".to_string())
+        })?;
+
+        backend.with_connection(|conn| {
+            let tx = conn.transaction().map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("begin preferred update transaction failed: {e}"),
+            })?;
+
+            let found: Option<String> = tx
+                .query_row(
+                    "SELECT field FROM assertions WHERE id = ? AND entity_id = ?",
+                    rusqlite::params![assertion_id.to_string(), person_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("lookup assertion for preferred update failed: {e}"),
+                })?;
+
+            let field = found.ok_or(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("assertion not found for person: {assertion_id}"),
+            })?;
+
+            if preferred {
+                tx.execute(
+                    "UPDATE assertions
+                     SET preferred = 0
+                     WHERE entity_id = ? AND field = ? AND id != ? AND sandbox_id IS NULL",
+                    rusqlite::params![person_id.to_string(), field, assertion_id.to_string()],
+                )
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("clear existing preferred assertions failed: {e}"),
+                })?;
+            }
+
+            tx.execute(
+                "UPDATE assertions SET preferred = ? WHERE id = ? AND entity_id = ?",
+                rusqlite::params![
+                    if preferred { 1 } else { 0 },
+                    assertion_id.to_string(),
+                    person_id.to_string()
+                ],
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("set assertion preferred flag failed: {e}"),
+            })?;
+
+            tx.commit().map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("commit preferred update failed: {e}"),
+            })?;
+
+            Ok(())
+        })?;
+    }
+
+    state.publish_entity_updated("person", person_id, "user");
+
+    Ok(Json(serde_json::json!({ "id": assertion_id })))
 }
 
 async fn get_person_timeline(
@@ -315,14 +490,18 @@ async fn get_person_families(
 
         response.push(super::super::models::families::FamilySummaryForPerson {
             id: family.id,
-            partner1: partner1.as_ref().map(|p| super::super::models::families::PartnerSummary {
-                id: p.id,
-                display_name: display_name_for_person(p),
-            }),
-            partner2: partner2.as_ref().map(|p| super::super::models::families::PartnerSummary {
-                id: p.id,
-                display_name: display_name_for_person(p),
-            }),
+            partner1: partner1
+                .as_ref()
+                .map(|p| super::super::models::families::PartnerSummary {
+                    id: p.id,
+                    display_name: display_name_for_person(p),
+                }),
+            partner2: partner2
+                .as_ref()
+                .map(|p| super::super::models::families::PartnerSummary {
+                    id: p.id,
+                    display_name: display_name_for_person(p),
+                }),
             your_role,
         });
     }

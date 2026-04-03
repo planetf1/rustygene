@@ -4,7 +4,7 @@ use refinery::embed_migrations;
 use rusqlite::Connection;
 use rustygene_core::assertion::{Assertion, AssertionStatus, Sandbox, SandboxStatus};
 use rustygene_core::event::Event;
-use rustygene_core::evidence::{Citation, Media, Note, Repository, Source};
+use rustygene_core::evidence::{Citation, CitationRef, Media, Note, Repository, Source};
 use rustygene_core::family::{Family, Relationship};
 use rustygene_core::lds::LdsOrdinance;
 use rustygene_core::person::Person;
@@ -63,7 +63,10 @@ pub const REQUIRED_SCHEMA_INDEXES: &[&str] = &[
 pub fn run_migrations(connection: &mut Connection) -> Result<refinery::Report, refinery::Error> {
     tracing::debug!("starting sqlite migrations");
     let report = migrations::runner().run(connection)?;
-    tracing::debug!(applied = report.applied_migrations().len(), "completed sqlite migrations");
+    tracing::debug!(
+        applied = report.applied_migrations().len(),
+        "completed sqlite migrations"
+    );
     Ok(report)
 }
 
@@ -223,8 +226,12 @@ pub trait Storage {
     async fn update_person(&self, person: &Person) -> Result<(), StorageError>;
     async fn delete_person(&self, id: EntityId) -> Result<(), StorageError>;
     async fn list_persons(&self, pagination: Pagination) -> Result<Vec<Person>, StorageError>;
-    async fn list_families_for_person(&self, person_id: EntityId) -> Result<Vec<Family>, StorageError>;
-    async fn list_events_for_person(&self, person_id: EntityId) -> Result<Vec<Event>, StorageError>;
+    async fn list_families_for_person(
+        &self,
+        person_id: EntityId,
+    ) -> Result<Vec<Family>, StorageError>;
+    async fn list_events_for_person(&self, person_id: EntityId)
+    -> Result<Vec<Event>, StorageError>;
 
     async fn create_family(&self, family: &Family) -> Result<(), StorageError>;
     async fn get_family(&self, id: EntityId) -> Result<Family, StorageError>;
@@ -315,6 +322,11 @@ pub trait Storage {
         entity_id: EntityId,
         field: &str,
     ) -> Result<Vec<JsonAssertion>, StorageError>;
+    async fn append_citation_ref_to_assertion(
+        &self,
+        assertion_id: EntityId,
+        citation_ref: &CitationRef,
+    ) -> Result<(), StorageError>;
     async fn update_assertion_status(
         &self,
         assertion_id: EntityId,

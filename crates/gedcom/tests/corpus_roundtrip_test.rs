@@ -9,8 +9,8 @@ use rustygene_core::person::Person;
 use rustygene_core::place::Place;
 use rustygene_gedcom::{
     ExportPrivacyPolicy, family_to_fam_node, import_gedcom_to_sqlite, media_to_obje_node,
-    note_to_note_node, person_to_indi_node_with_policy, render_gedcom_file, repository_to_repo_node,
-    source_to_sour_node,
+    note_to_note_node, person_to_indi_node_with_policy, render_gedcom_file,
+    repository_to_repo_node, source_to_sour_node,
 };
 use rustygene_storage::run_migrations;
 
@@ -236,8 +236,9 @@ fn corpus_roundtrip_hardening_for_five_vendor_fixtures() {
         let db2 = temp_db_path(&format!("{vendor}-db2"));
 
         let mut conn1 = setup_db(&db1);
-        let report1 = import_gedcom_to_sqlite(&mut conn1, &format!("corpus-import-{vendor}"), &input)
-            .expect("import corpus fixture");
+        let report1 =
+            import_gedcom_to_sqlite(&mut conn1, &format!("corpus-import-{vendor}"), &input)
+                .expect("import corpus fixture");
 
         let unhandled_standard_tags: BTreeMap<String, usize> = report1
             .unhandled_tags
@@ -273,12 +274,8 @@ fn corpus_roundtrip_hardening_for_five_vendor_fixtures() {
         assert!(exported.contains("0 TRLR"));
 
         let mut conn2 = setup_db(&db2);
-        import_gedcom_to_sqlite(
-            &mut conn2,
-            &format!("corpus-reimport-{vendor}"),
-            &exported,
-        )
-        .expect("re-import exported fixture");
+        import_gedcom_to_sqlite(&mut conn2, &format!("corpus-reimport-{vendor}"), &exported)
+            .expect("re-import exported fixture");
 
         for (table, expected_count) in table_counts_before {
             let actual_count = count_table_rows(&conn2, table);
