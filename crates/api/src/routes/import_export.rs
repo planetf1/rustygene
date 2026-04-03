@@ -14,14 +14,22 @@ use chrono::{DateTime, Utc};
 use rustygene_core::evidence::{Media, Note, Repository, Source};
 use rustygene_core::family::Family;
 use rustygene_core::person::Person;
+use rustygene_core::types::{ActorRef, EntityId};
 use rustygene_gedcom::{
+    build_gedcom_tree,
+    diff::generate_person_import_diff,
     family_to_fam_node, gramps, import_gedcom_to_sqlite, media_to_obje_node, note_to_note_node,
+    matching::{match_persons, MatchConfidence},
+    map_indi_nodes_to_events,
+    map_indi_nodes_to_persons,
     person_to_indi_node_with_policy, render_gedcom_file, repository_to_repo_node,
-    source_to_sour_node, ExportPrivacyPolicy, GedcomImportError,
+    source_to_sour_node, tokenize_gedcom, ExportPrivacyPolicy, GedcomImportError,
 };
+use rustygene_core::assertion::AssertionStatus;
 use rustygene_storage::sqlite_impl::SqliteBackend;
-use rustygene_storage::{JsonExportMode, JsonImportMode, StorageError, StorageErrorCode};
+use rustygene_storage::{EntityType, JsonAssertion, JsonExportMode, JsonImportMode, Pagination, StorageError, StorageErrorCode};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::fs as tokio_fs;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -90,6 +98,54 @@ struct ImportAcceptedResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct MergeDiffFieldPreview {
+    entity_id: EntityId,
+    field: String,
+    old_value: Value,
+    new_value: Value,
+    source: String,
+    confidence: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct MergeNewEntityPreview {
+    entity_id: EntityId,
+    label: String,
+    xref: Option<String>,
+    fields: Vec<MergeSelection>,
+}
+
+#[derive(Debug, Serialize)]
+struct MergeDiffResponse {
+    changed_fields: Vec<MergeDiffFieldPreview>,
+    new_entities: Vec<MergeNewEntityPreview>,
+    unchanged_entities: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct MergeSelection {
+    entity_type: String,
+    entity_id: EntityId,
+    field: String,
+    new_value: Value,
+    source: Option<String>,
+    confidence: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportMergeRequest {
+    selected_changes: Vec<MergeSelection>,
+    #[serde(default)]
+    submitted_by: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ImportMergeResponse {
+    proposals_created: usize,
+    proposal_ids: Vec<EntityId>,
+}
+
+#[derive(Debug, Serialize)]
 struct BundleManifest {
     version: String,
     exported_at: String,
@@ -109,6 +165,8 @@ struct ImportExecutionSummary {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/import", post(start_import))
+    .route("/import/diff", post(import_diff))
+    .route("/import/merge", post(import_merge))
         .route("/import/:job_id", get(get_import_job_status))
         .route("/export", get(export_data))
 }
@@ -119,42 +177,9 @@ pub fn legacy_router() -> Router<AppState> {
 
 async fn start_import(
     State(state): State<AppState>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut import_format: Option<ImportFormat> = None;
-    let mut file_bytes: Option<Vec<u8>> = None;
-    let mut file_name: Option<String> = None;
-
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|err| ApiError::BadRequest(format!("failed to read multipart field: {err}")))?
-    {
-        let Some(name) = field.name().map(ToString::to_string) else {
-            continue;
-        };
-
-        match name.as_str() {
-            "format" => {
-                let raw = field.text().await.map_err(|err| {
-                    ApiError::BadRequest(format!("failed to read format field: {err}"))
-                })?;
-                import_format = Some(parse_import_format(&raw)?);
-            }
-            "file" => {
-                file_name = field.file_name().map(ToString::to_string);
-                let bytes = field.bytes().await.map_err(|err| {
-                    ApiError::BadRequest(format!("failed to read file field: {err}"))
-                })?;
-                file_bytes = Some(bytes.to_vec());
-            }
-            _ => {}
-        }
-    }
-
-    let format =
-        import_format.ok_or_else(|| ApiError::BadRequest("missing format field".to_string()))?;
-    let input = file_bytes.ok_or_else(|| ApiError::BadRequest("missing file field".to_string()))?;
+    let (format, input, file_name) = extract_import_upload(multipart).await?;
 
     let job_id = Uuid::new_v4();
     let initial_status = ImportJobStatus {
@@ -298,6 +323,263 @@ async fn get_import_job_status(
         .ok_or_else(|| ApiError::NotFound(format!("job not found: {parsed_job_id}")))?;
 
     Ok(Json(status))
+}
+
+async fn import_diff(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<Json<MergeDiffResponse>, ApiError> {
+    let (format, input, file_name) = extract_import_upload(multipart).await?;
+    if !matches!(format, ImportFormat::Gedcom) {
+        return Err(ApiError::BadRequest(
+            "import diff currently supports only GEDCOM uploads".to_string(),
+        ));
+    }
+
+    let text = std::str::from_utf8(&input)
+        .map_err(|err| ApiError::BadRequest(format!("GEDCOM file must be UTF-8 text: {err}")))?;
+    let lines = tokenize_gedcom(text)
+        .map_err(|err| ApiError::BadRequest(format!("invalid GEDCOM payload: {err}")))?;
+    let nodes = build_gedcom_tree(&lines)
+        .map_err(|err| ApiError::BadRequest(format!("invalid GEDCOM structure: {err}")))?;
+
+    let gedcom_persons = map_indi_nodes_to_persons(&nodes);
+    let gedcom_events = map_indi_nodes_to_events(&nodes);
+
+    let existing_persons = state
+        .storage
+        .list_persons(Pagination {
+            limit: 10_000,
+            offset: 0,
+        })
+        .await?;
+    let existing_events = state
+        .storage
+        .list_events(Pagination {
+            limit: 20_000,
+            offset: 0,
+        })
+        .await?;
+
+    let prior_xref_map = existing_persons
+        .iter()
+        .filter_map(|person| person.original_xref.clone().map(|xref| (xref, person.id)))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let match_result = match_persons(
+        &gedcom_persons,
+        &gedcom_events,
+        &existing_persons,
+        &existing_events,
+        &prior_xref_map,
+    );
+    let source_name = file_name
+        .as_deref()
+        .unwrap_or("uploaded-merge-preview.ged")
+        .to_string();
+    let diff = generate_person_import_diff(
+        &match_result,
+        &gedcom_persons,
+        &gedcom_events,
+        &existing_persons,
+        &existing_events,
+        &source_name,
+    );
+
+    let confidence_by_entity = match_result
+        .matched
+        .iter()
+        .map(|entry| {
+            (
+                entry.entity_id,
+                match entry.confidence {
+                    MatchConfidence::Exact => 1.0,
+                    MatchConfidence::High => 0.9,
+                    MatchConfidence::Medium => 0.7,
+                },
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let changed_fields = diff
+        .updated_fields
+        .into_iter()
+        .map(|field| MergeDiffFieldPreview {
+            entity_id: field.entity_id,
+            field: field.field,
+            old_value: field.old_value,
+            new_value: field.new_value,
+            source: field.source,
+            confidence: confidence_by_entity
+                .get(&field.entity_id)
+                .copied()
+                .unwrap_or(0.8),
+        })
+        .collect::<Vec<_>>();
+
+    let new_entities = diff
+        .new_entities
+        .into_iter()
+        .filter_map(|entry| {
+            let rustygene_gedcom::matching::GedcomRef::Person { xref, label } = entry else {
+                return None;
+            };
+
+            let person = if let Some(ref xref_value) = xref {
+                gedcom_persons
+                    .iter()
+                    .find(|p| p.original_xref.as_deref() == Some(xref_value.as_str()))
+            } else {
+                gedcom_persons.iter().find(|p| {
+                    let primary = p.primary_name();
+                    let surname = primary
+                        .surnames
+                        .first()
+                        .map(|s| s.value.as_str())
+                        .unwrap_or_default();
+                    format!("{} {}", primary.given_names.trim(), surname.trim())
+                        .trim()
+                        .eq_ignore_ascii_case(label.as_str())
+                })
+            }?;
+
+            let fields = person_fields_for_merge(person, &gedcom_events, &source_name)
+                .into_iter()
+                .map(|(field, new_value)| MergeSelection {
+                    entity_type: "person".to_string(),
+                    entity_id: person.id,
+                    field,
+                    new_value,
+                    source: Some(source_name.clone()),
+                    confidence: Some(0.7),
+                })
+                .collect::<Vec<_>>();
+
+            Some(MergeNewEntityPreview {
+                entity_id: person.id,
+                label,
+                xref,
+                fields,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(MergeDiffResponse {
+        changed_fields,
+        new_entities,
+        unchanged_entities: diff.unchanged,
+    }))
+}
+
+async fn import_merge(
+    State(state): State<AppState>,
+    Json(request): Json<ImportMergeRequest>,
+) -> Result<(StatusCode, Json<ImportMergeResponse>), ApiError> {
+    if request.selected_changes.is_empty() {
+        return Err(ApiError::BadRequest(
+            "selected_changes must not be empty".to_string(),
+        ));
+    }
+
+    let submitted_by = request.submitted_by.as_deref().unwrap_or("import-merge");
+    let mut proposal_ids = Vec::with_capacity(request.selected_changes.len());
+
+    for selection in request.selected_changes {
+        if selection.field.trim().is_empty() {
+            return Err(ApiError::BadRequest(
+                "selection field must not be empty".to_string(),
+            ));
+        }
+
+        let entity_type = parse_merge_entity_type(&selection.entity_type)?;
+        let source = selection
+            .source
+            .clone()
+            .unwrap_or_else(|| "gedcom-merge".to_string());
+
+        let assertion = JsonAssertion {
+            id: EntityId::new(),
+            value: selection.new_value,
+            confidence: selection.confidence.unwrap_or(0.8),
+            status: AssertionStatus::Proposed,
+            evidence_type: rustygene_core::assertion::EvidenceType::Direct,
+            source_citations: Vec::new(),
+            proposed_by: ActorRef::Import(source),
+            created_at: Utc::now(),
+            reviewed_at: None,
+            reviewed_by: None,
+        };
+
+        let proposal_id = match state
+            .storage
+            .submit_staging_proposal(
+                selection.entity_id,
+                entity_type,
+                &selection.field,
+                &assertion,
+                submitted_by,
+            )
+            .await
+        {
+            Ok(id) => id,
+            Err(err) if err.code == StorageErrorCode::NotFound => {
+                return Err(ApiError::BadRequest(format!(
+                    "selected change references unknown entity {}; promote existing entities first",
+                    selection.entity_id
+                )));
+            }
+            Err(err) => return Err(ApiError::from(err)),
+        };
+        proposal_ids.push(proposal_id);
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ImportMergeResponse {
+            proposals_created: proposal_ids.len(),
+            proposal_ids,
+        }),
+    ))
+}
+
+async fn extract_import_upload(
+    mut multipart: Multipart,
+) -> Result<(ImportFormat, Vec<u8>, Option<String>), ApiError> {
+    let mut import_format: Option<ImportFormat> = None;
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_name: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| ApiError::BadRequest(format!("failed to read multipart field: {err}")))?
+    {
+        let Some(name) = field.name().map(ToString::to_string) else {
+            continue;
+        };
+
+        match name.as_str() {
+            "format" => {
+                let raw = field.text().await.map_err(|err| {
+                    ApiError::BadRequest(format!("failed to read format field: {err}"))
+                })?;
+                import_format = Some(parse_import_format(&raw)?);
+            }
+            "file" => {
+                file_name = field.file_name().map(ToString::to_string);
+                let bytes = field.bytes().await.map_err(|err| {
+                    ApiError::BadRequest(format!("failed to read file field: {err}"))
+                })?;
+                file_bytes = Some(bytes.to_vec());
+            }
+            _ => {}
+        }
+    }
+
+    let format =
+        import_format.ok_or_else(|| ApiError::BadRequest("missing format field".to_string()))?;
+    let input = file_bytes.ok_or_else(|| ApiError::BadRequest("missing file field".to_string()))?;
+    Ok((format, input, file_name))
 }
 
 async fn export_data(
@@ -660,6 +942,96 @@ fn parse_import_format(raw: &str) -> Result<ImportFormat, ApiError> {
             "unsupported import format: {other}"
         ))),
     }
+}
+
+fn parse_merge_entity_type(raw: &str) -> Result<EntityType, ApiError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "person" => Ok(EntityType::Person),
+        "family" => Ok(EntityType::Family),
+        "relationship" => Ok(EntityType::Relationship),
+        "event" => Ok(EntityType::Event),
+        "place" => Ok(EntityType::Place),
+        "source" => Ok(EntityType::Source),
+        "citation" => Ok(EntityType::Citation),
+        "repository" => Ok(EntityType::Repository),
+        "media" => Ok(EntityType::Media),
+        "note" => Ok(EntityType::Note),
+        "lds_ordinance" | "ldsordinance" => Ok(EntityType::LdsOrdinance),
+        other => Err(ApiError::BadRequest(format!(
+            "invalid merge entity type: {other}"
+        ))),
+    }
+}
+
+fn person_fields_for_merge(
+    person: &Person,
+    events: &[rustygene_core::event::Event],
+    source_name: &str,
+) -> Vec<(String, Value)> {
+    let primary = person.primary_name();
+    let mut out = Vec::new();
+
+    out.push((
+        "name.given".to_string(),
+        Value::String(primary.given_names.clone()),
+    ));
+    out.push((
+        "name.surname".to_string(),
+        Value::String(
+            primary
+                .surnames
+                .first()
+                .map(|surname| surname.value.clone())
+                .unwrap_or_default(),
+        ),
+    ));
+    out.push((
+        "gender".to_string(),
+        Value::String(format!("{:?}", person.gender)),
+    ));
+
+    if let Some(date) = person_event_date_for_merge(person.id, events, "birth") {
+        out.push(("birth.date".to_string(), date));
+    }
+    if let Some(date) = person_event_date_for_merge(person.id, events, "death") {
+        out.push(("death.date".to_string(), date));
+    }
+
+    out.into_iter()
+        .filter(|(_, value)| !matches!(value, Value::String(v) if v.trim().is_empty()))
+        .map(|(field, value)| {
+            let normalized = if field == "source" {
+                Value::String(source_name.to_string())
+            } else {
+                value
+            };
+            (field, normalized)
+        })
+        .collect()
+}
+
+fn person_event_date_for_merge(
+    person_id: EntityId,
+    events: &[rustygene_core::event::Event],
+    kind: &str,
+) -> Option<Value> {
+    let event_type = match kind {
+        "birth" => rustygene_core::event::EventType::Birth,
+        "death" => rustygene_core::event::EventType::Death,
+        _ => return None,
+    };
+
+    events
+        .iter()
+        .find(|event| {
+            event.event_type == event_type
+                && event
+                    .participants
+                    .iter()
+                    .any(|participant| participant.person_id == person_id)
+        })
+        .and_then(|event| event.date.as_ref())
+        .map(|date| serde_json::to_value(date).unwrap_or(Value::Null))
 }
 
 fn import_format_label(format: ImportFormat) -> &'static str {

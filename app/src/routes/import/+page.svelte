@@ -455,6 +455,9 @@
       <button type="button" on:click={startImport} disabled={busy || !selectedFile}>
         {busy ? 'Import running…' : 'Start Import'}
       </button>
+      <button type="button" class="secondary" on:click={() => goto('/import/merge')} disabled={busy}>
+        Open merge review
+      </button>
       <button type="button" class="secondary" on:click={selectFileFromDesktopDialog} disabled={busy}>
         Browse files
       </button>
