@@ -66,7 +66,7 @@
     on: (event: string, selectorOrHandler: string | ((event: unknown) => void), handler?: (event: unknown) => void) => void;
     off: (event: string) => void;
     add: (elements: { nodes: Array<{ data: Record<string, unknown> }>; edges: Array<{ data: Record<string, unknown> }> }) => void;
-    getElementById: (id: string) => CytoscapeElementLike;
+    getElementById: (id: string) => CytoscapeElementLike & { length: number };
     nodes: () => CytoscapeCollectionLike;
     edges: () => CytoscapeCollectionLike;
     elements: () => CytoscapeCollectionLike;
@@ -673,7 +673,7 @@
       nodeSeenFrom.set(node.id, seen);
 
       const exists = cy.getElementById(node.id);
-      if (!exists || !exists.id || exists.id() === '') {
+      if (exists.length === 0) {
         nodesToAdd.push({
           data: {
             id: node.id,
@@ -708,11 +708,12 @@
       });
     }
 
-    if (nodesToAdd.length > 0 || edgesToAdd.length > 0) {
-      cy.add({
-        nodes: nodesToAdd,
-        edges: edgesToAdd
-      });
+    // Nodes must be added before edges to avoid "nonexistent source" errors
+    if (nodesToAdd.length > 0) {
+      cy.add({ nodes: nodesToAdd, edges: [] });
+    }
+    if (edgesToAdd.length > 0) {
+      cy.add({ nodes: [], edges: edgesToAdd });
     }
 
     return newNodeIds;
