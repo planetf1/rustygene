@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { api } from '$lib/api';
   import {
     detectImportFormat,
@@ -80,6 +80,64 @@
     sseConnected = false;
   }
 
+  function saveWizardState(): void {
+    const state = {
+      currentStep,
+      selectedFileName,
+      selectedFormat,
+      formatWasManuallyChanged
+    };
+
+    try {
+      sessionStorage.setItem('import_wizard_state', JSON.stringify(state));
+    } catch {
+      // Silently ignore if sessionStorage fails
+    }
+  }
+
+  function restoreWizardState(): void {
+    const stored = sessionStorage.getItem('import_wizard_state');
+    if (!stored) {
+      return;
+    }
+
+    try {
+      const state = JSON.parse(stored) as {
+        currentStep?: number;
+        selectedFileName?: string;
+        selectedFormat?: ImportFormat;
+        formatWasManuallyChanged?: boolean;
+      };
+
+      if (typeof state.currentStep === 'number' && state.currentStep > 1) {
+        currentStep = state.currentStep;
+      }
+      if (typeof state.selectedFileName === 'string') {
+        selectedFileName = state.selectedFileName;
+      }
+      if (typeof state.selectedFormat === 'string' && ['gedcom', 'gramps_xml', 'json'].includes(state.selectedFormat)) {
+        selectedFormat = state.selectedFormat;
+      }
+      if (typeof state.formatWasManuallyChanged === 'boolean') {
+        formatWasManuallyChanged = state.formatWasManuallyChanged;
+      }
+
+      if (currentStep > 1) {
+        info = 'Wizard state restored from previous session';
+      }
+    } catch (e) {
+      sessionStorage.removeItem('import_wizard_state');
+    }
+  }
+
+  function clearWizardState(): void {
+    try {
+      sessionStorage.removeItem('import_wizard_state');
+    } catch {
+      // Silently ignore if sessionStorage fails
+    }
+  }
+
   function applySelectedFile(file: File): void {
     selectedFile = file;
     selectedFileName = file.name;
@@ -153,6 +211,7 @@
       busy = false;
       displayedProgress = 100;
       resetTimers();
+      clearWizardState();
     } else if (nextStatus.status === 'failed') {
       currentStep = 2;
       busy = false;
@@ -317,6 +376,15 @@
   onDestroy(() => {
     resetTimers();
   });
+
+  onMount(() => {
+    restoreWizardState();
+  });
+
+  // Auto-save wizard state when it changes
+  $: if (currentStep || selectedFormat) {
+    saveWizardState();
+  }
 </script>
 
 <main class="panel">

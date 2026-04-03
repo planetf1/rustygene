@@ -1,7 +1,7 @@
 <script lang="ts">
   import Sidebar from '$lib/components/Sidebar.svelte';
   import Toolbar from '$lib/components/Toolbar.svelte';
-  import { appState, restoreRecentItems, setCurrentView } from '$lib/state.svelte';
+  import { appState, restoreRecentItems, restoreSandboxState, setCurrentView } from '$lib/state.svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { afterNavigate } from '$app/navigation';
@@ -16,6 +16,7 @@
       await initializeApiClient();
 
       restoreRecentItems();
+      restoreSandboxState();
 
       const currentPath = window.location.pathname;
       const lastRoute = localStorage.getItem('last_route');
