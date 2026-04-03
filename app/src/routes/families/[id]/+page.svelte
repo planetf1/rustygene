@@ -298,9 +298,9 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.75rem;
+    background: linear-gradient(180deg, #ffffff 0%, #fff9ff 100%);
+    border: 1px solid var(--rg-border, #e8def8);
+    border-radius: 1rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
@@ -320,12 +320,24 @@
 
   .header p {
     margin: 0.2rem 0 0;
-    color: #64748b;
+    color: #6b6192;
   }
 
   .actions {
     display: inline-flex;
     gap: 0.5rem;
+  }
+
+  section {
+    border: 1px solid #efe6ff;
+    border-radius: 0.85rem;
+    padding: 0.85rem;
+    background: #fffdff;
+  }
+
+  section h2 {
+    margin-top: 0;
+    color: #593ca8;
   }
 
   .list {
@@ -344,14 +356,14 @@
   }
 
   .muted {
-    color: #64748b;
+    color: #6b6192;
     margin-left: 0.35rem;
   }
 
   select {
-    border: 1px solid #cbd5e1;
-    border-radius: 0.45rem;
-    padding: 0.45rem 0.55rem;
+    border: 1px solid #dfd2f8;
+    border-radius: 0.7rem;
+    padding: 0.5rem 0.62rem;
     font: inherit;
     min-width: 17rem;
   }
@@ -360,8 +372,8 @@
     background: #2563eb;
     color: #fff;
     border: 0;
-    border-radius: 0.45rem;
-    padding: 0.45rem 0.7rem;
+    border-radius: 0.7rem;
+    padding: 0.45rem 0.72rem;
     cursor: pointer;
   }
 
@@ -372,22 +384,23 @@
   }
 
   .danger {
-    background: #dc2626;
+    background: #d03165;
   }
 
   .linkish {
     border: 0;
     background: transparent;
-    color: #1d4ed8;
+    color: #6a46dc;
     cursor: pointer;
     padding: 0;
     font: inherit;
+    font-weight: 600;
   }
 
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgb(15 23 42 / 35%);
+    background: rgb(52 32 97 / 32%);
     border: 0;
     width: 100%;
     padding: 0;
@@ -401,7 +414,7 @@
     bottom: 0;
     width: min(760px, 100%);
     background: #ffffff;
-    border-left: 1px solid #e2e8f0;
+    border-left: 1px solid var(--rg-border, #e8def8);
     padding: 1rem;
     overflow: auto;
   }
@@ -412,8 +425,8 @@
   }
 
   code {
-    background: #f1f5f9;
+    background: #f5efff;
     padding: 0.1rem 0.3rem;
-    border-radius: 0.25rem;
+    border-radius: 0.35rem;
   }
 </style>

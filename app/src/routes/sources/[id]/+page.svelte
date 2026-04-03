@@ -236,13 +236,13 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.75rem;
+    background: linear-gradient(180deg, #ffffff 0%, #fff9ff 100%);
+    border: 1px solid var(--rg-border, #e8def8);
+    border-radius: 1rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
-    gap: 0.8rem;
+    gap: 0.9rem;
   }
 
   .header {
@@ -262,26 +262,39 @@
     gap: 0.45rem;
   }
 
+  section {
+    border: 1px solid #efe6ff;
+    border-radius: 0.85rem;
+    padding: 0.85rem;
+    background: #fffdff;
+  }
+
+  section h2 {
+    margin-top: 0;
+    color: #593ca8;
+  }
+
   .form {
-    border: 1px solid #cbd5e1;
-    border-radius: 0.6rem;
-    padding: 0.65rem;
+    border: 1px solid #dfd2f8;
+    border-radius: 0.8rem;
+    background: #fffdff;
+    padding: 0.72rem;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.45rem;
+    gap: 0.5rem;
   }
 
   input,
   select {
-    border: 1px solid #cbd5e1;
-    border-radius: 0.45rem;
-    padding: 0.45rem 0.55rem;
+    border: 1px solid #dfd2f8;
+    border-radius: 0.7rem;
+    padding: 0.5rem 0.62rem;
     font: inherit;
   }
 
   button {
     border: 0;
-    border-radius: 0.45rem;
+    border-radius: 0.7rem;
     background: #2563eb;
     color: #fff;
     padding: 0.4rem 0.65rem;
@@ -290,11 +303,11 @@
   }
 
   .secondary {
-    background: #475569;
+    background: #7258c7;
   }
 
   .danger {
-    background: #b91c1c;
+    background: #d03165;
   }
 
   .list {
@@ -305,8 +318,18 @@
     gap: 0.3rem;
   }
 
+  .list a {
+    color: #6a46dc;
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .list a:hover {
+    text-decoration: underline;
+  }
+
   .muted {
-    color: #64748b;
+    color: #6b6192;
     margin-left: 0.35rem;
   }
 
@@ -316,8 +339,8 @@
   }
 
   code {
-    background: #f1f5f9;
+    background: #f5efff;
     padding: 0.1rem 0.3rem;
-    border-radius: 0.25rem;
+    border-radius: 0.35rem;
   }
 </style>

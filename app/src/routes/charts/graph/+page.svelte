@@ -858,6 +858,20 @@
     <p>Cytoscape network explorer with async neighbourhood expansion.</p>
   </header>
 
+  <section class="guide" aria-label="How to read relationship graph">
+    <h2>How to follow relationships (including divorce cases)</h2>
+    <p>
+      When tracing ancestry, prioritize <strong>parent_of / child_of edges</strong>. Partner edges
+      (including divorced/separated histories) describe household/union context but do not change
+      who the biological/adoptive parents are in lineage traversal.
+    </p>
+    <ul>
+      <li><strong>Parent/child edges</strong>: use these to move up/down generations.</li>
+      <li><strong>Partner edges</strong>: relationship context only (married/divorced/etc.).</li>
+      <li><strong>Hide event edges</strong> can reduce noise while following tree structure.</li>
+    </ul>
+  </section>
+
   <section class="controls">
     <div class="search-area">
       <label for="person-search">Root person</label>
@@ -1030,6 +1044,31 @@
   .header p {
     margin: 0.35rem 0 0;
     color: #64748b;
+  }
+
+  .guide {
+    border: 1px solid #dbe3f1;
+    background: #f8fbff;
+    border-radius: 0.65rem;
+    padding: 0.75rem 0.85rem;
+  }
+
+  .guide h2 {
+    margin: 0 0 0.35rem;
+    font-size: 0.98rem;
+  }
+
+  .guide p {
+    margin: 0;
+    color: #334155;
+    font-size: 0.9rem;
+  }
+
+  .guide ul {
+    margin: 0.5rem 0 0;
+    padding-left: 1rem;
+    color: #334155;
+    font-size: 0.86rem;
   }
 
   .controls {

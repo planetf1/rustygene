@@ -130,13 +130,13 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.75rem;
+    background: linear-gradient(180deg, #ffffff 0%, #fff9ff 100%);
+    border: 1px solid var(--rg-border, #e8def8);
+    border-radius: 1rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
-    gap: 0.85rem;
+    gap: 0.95rem;
   }
 
   .header {
@@ -151,17 +151,23 @@
 
   table {
     width: 100%;
-    border-collapse: collapse;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.5rem;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--rg-border, #e8def8);
+    border-radius: 0.85rem;
     overflow: hidden;
+  }
+
+  thead th {
+    background: linear-gradient(180deg, #f9f2ff 0%, #fff1f9 100%);
+    color: #55389a;
   }
 
   th,
   td {
     text-align: left;
     padding: 0.55rem 0.65rem;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid #f0e8ff;
   }
 
   tr {
@@ -169,7 +175,7 @@
   }
 
   tr:hover {
-    background: #f8fafc;
+    background: #fdf7ff;
   }
 
   button {
@@ -203,7 +209,7 @@
     bottom: 0;
     width: min(760px, 100%);
     background: #ffffff;
-    border-left: 1px solid #e2e8f0;
+    border-left: 1px solid var(--rg-border, #e8def8);
     padding: 1rem;
     overflow: auto;
   }

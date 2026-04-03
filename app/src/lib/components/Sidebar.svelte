@@ -25,6 +25,11 @@
     { href: '/charts/graph', label: 'Relationship Graph' }
   ];
 
+  const transferItems = [
+    { href: '/import', label: 'Import' },
+    { href: '/export', label: 'Export' }
+  ];
+
   function iconFor(type: string): string {
     switch (type) {
       case 'person':
@@ -79,6 +84,13 @@
     {/each}
   </div>
 
+  <div class="section" aria-label="Data transfer">
+    <h2>Data Transfer</h2>
+    {#each transferItems as item}
+      <a class:selected={$page.url.pathname.startsWith(item.href)} href={item.href}>{item.label}</a>
+    {/each}
+  </div>
+
   <footer class="footer">
     <label class="sandbox-toggle">
       <input
@@ -114,54 +126,65 @@
 
 <style>
   .sidebar {
-    border-right: 1px solid #e2e8f0;
-    background: #ffffff;
-    padding: 1rem;
+    border: 1px solid var(--rg-border, #dbe3f1);
+    background:
+      linear-gradient(180deg, #ffffff 0%, #fff6ff 100%);
+    border-radius: 1.25rem;
+    box-shadow: 0 16px 30px rgb(125 93 242 / 13%);
+    padding: 1.1rem;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 1.1rem;
   }
 
   header h1 {
     margin: 0;
-    font-size: 1.15rem;
+    font-size: 1.26rem;
+    letter-spacing: 0.01em;
+    color: #5b3ec9;
   }
 
   header p {
     margin: 0.25rem 0 0;
-    color: #64748b;
-    font-size: 0.875rem;
+    color: var(--rg-muted, #64748b);
+    font-size: 0.88rem;
   }
 
   .section {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.38rem;
   }
 
   .section h2 {
-    margin: 0.5rem 0 0.25rem;
-    font-size: 0.85rem;
-    color: #64748b;
-    font-weight: 600;
+    margin: 0.45rem 0 0.25rem;
+    font-size: 0.75rem;
+    color: var(--rg-muted, #64748b);
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.08em;
   }
 
   a {
-    color: #0f172a;
+    color: var(--rg-text, #172036);
     text-decoration: none;
-    padding: 0.4rem 0.5rem;
-    border-radius: 0.4rem;
+    padding: 0.52rem 0.68rem;
+    border-radius: 0.72rem;
+    border: 1px solid transparent;
+    transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
   }
 
   a:hover {
-    background: #f1f5f9;
+    background: #f9f2ff;
+    border-color: #e7d6ff;
+    transform: translateX(2px);
+    box-shadow: 0 4px 10px rgb(155 123 255 / 12%);
   }
 
   a.selected {
-    background: #dbeafe;
-    color: #1e3a8a;
+    background: linear-gradient(90deg, rgb(155 123 255 / 18%), rgb(255 159 207 / 16%));
+    border-color: rgb(155 123 255 / 30%);
+    color: #4b2db8;
     font-weight: 600;
   }
 
@@ -176,15 +199,22 @@
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
+    color: var(--rg-text, #172036);
+    font-size: 0.93rem;
   }
 
   .recent-toggle {
-    background: #f1f5f9;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.4rem;
-    padding: 0.35rem 0.5rem;
+    background: #f7efff;
+    border: 1px solid #e7d6ff;
+    border-radius: 0.68rem;
+    padding: 0.5rem 0.68rem;
     text-align: left;
-    color: #334155;
+    color: #513488;
+    font-weight: 550;
+  }
+
+  .recent-toggle:hover {
+    filter: brightness(0.98);
   }
 
   .recent-list {
@@ -200,11 +230,11 @@
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.9rem;
+    font-size: 0.91rem;
   }
 
   .empty {
-    color: #64748b;
+    color: var(--rg-muted, #64748b);
     font-size: 0.85rem;
     padding: 0.25rem 0;
   }

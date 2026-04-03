@@ -49,7 +49,7 @@
     loading = true;
     error = '';
     try {
-      sandboxes = await api.get<Sandbox[]>('/api/v1/sandboxes/');
+      sandboxes = await api.get<Sandbox[]>('/api/v1/sandboxes');
     } catch (err) {
       error = err instanceof ApiError ? err.message : 'Failed to load sandboxes';
     } finally {
@@ -62,7 +62,7 @@
     creating = true;
     error = '';
     try {
-      await api.post<Sandbox>('/api/v1/sandboxes/', {
+      await api.post<Sandbox>('/api/v1/sandboxes', {
         name: newName.trim(),
         description: newDescription.trim() || null
       });
@@ -252,24 +252,24 @@
             <td class="actions">
               {#if sandbox.status === 'active'}
                 {#if appState.activeSandboxId === sandbox.id}
-                  <button type="button" class="small" on:click={deactivateSandbox}
+                  <button type="button" class="small action-btn" on:click={deactivateSandbox}
                     >Deactivate</button
                   >
                 {:else}
-                  <button type="button" class="small" on:click={() => activateSandbox(sandbox)}
+                  <button type="button" class="small action-btn" on:click={() => activateSandbox(sandbox)}
                     >Activate</button
                   >
                 {/if}
                 <button
                   type="button"
-                  class="small success"
+                  class="small action-btn success"
                   on:click={() => {
                     confirmAction = { sandbox, action: 'promoted' };
                   }}>Promote</button
                 >
                 <button
                   type="button"
-                  class="small danger"
+                  class="small action-btn danger"
                   on:click={() => {
                     confirmAction = { sandbox, action: 'discarded' };
                   }}>Discard</button
@@ -277,7 +277,7 @@
               {:else}
                 <button
                   type="button"
-                  class="small danger"
+                  class="small action-btn danger"
                   on:click={() => deleteSandbox(sandbox)}>Delete</button
                 >
               {/if}
@@ -533,6 +533,12 @@
   button.small {
     padding: 0.2rem 0.6rem;
     font-size: 0.8rem;
+  }
+
+  .action-btn {
+    min-width: 5.75rem;
+    text-align: center;
+    justify-content: center;
   }
 
   button.link {

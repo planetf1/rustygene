@@ -177,13 +177,13 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.75rem;
+    background: linear-gradient(180deg, #ffffff 0%, #fff9ff 100%);
+    border: 1px solid var(--rg-border, #e8def8);
+    border-radius: 1rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
-    gap: 0.7rem;
+    gap: 0.85rem;
   }
 
   header {
@@ -197,30 +197,40 @@
   }
 
   .form {
-    border: 1px solid #cbd5e1;
-    border-radius: 0.6rem;
-    padding: 0.65rem;
+    border: 1px solid #dfd2f8;
+    border-radius: 0.85rem;
+    background: #fffdff;
+    padding: 0.72rem;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.45rem;
+    gap: 0.52rem;
   }
 
   table {
     width: 100%;
-    border-collapse: collapse;
-    border: 1px solid #e2e8f0;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--rg-border, #e8def8);
+    border-radius: 0.85rem;
+    overflow: hidden;
+  }
+
+  thead th {
+    background: linear-gradient(180deg, #f9f2ff 0%, #fff1f9 100%);
+    color: #55389a;
   }
 
   th,
   td {
     padding: 0.5rem 0.6rem;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid #f0e8ff;
     text-align: left;
   }
 
   a {
-    color: #1d4ed8;
+    color: #6a46dc;
     text-decoration: none;
+    font-weight: 600;
   }
 
   a:hover {
@@ -229,9 +239,9 @@
 
   input,
   select {
-    border: 1px solid #cbd5e1;
-    border-radius: 0.45rem;
-    padding: 0.45rem 0.55rem;
+    border: 1px solid #dfd2f8;
+    border-radius: 0.7rem;
+    padding: 0.5rem 0.62rem;
     font: inherit;
   }
 

@@ -676,8 +676,15 @@ pub fn map_family_nodes_with_report(
         };
 
         let couple_relationship = if let (Some(p1), Some(p2)) = (partner1_id, partner2_id) {
+            let relationship_seed = fam
+                .xref
+                .as_ref()
+                .map_or_else(
+                    || format!("{}:{}", p1.0, p2.0),
+                    |xref| format!("{xref}:couple"),
+                );
             let relationship = Relationship {
-                id: EntityId::new(),
+                id: entity_id_from_seed("FAM_REL", &relationship_seed),
                 person1_id: p1,
                 person2_id: p2,
                 relationship_type: RelationshipType::Couple,
@@ -691,8 +698,12 @@ pub fn map_family_nodes_with_report(
             None
         };
 
+        let family_seed = fam
+            .xref
+            .clone()
+            .unwrap_or_else(|| serialize_subtree(fam));
         let mut family = Family {
-            id: EntityId::new(),
+            id: entity_id_from_seed("FAM", &family_seed),
             partner1_id,
             partner2_id,
             partner_link,
@@ -806,8 +817,12 @@ fn map_family_events(
             continue;
         };
 
+        let event_seed = fam_node.xref.as_ref().map_or_else(
+            || format!("{}:{}", child.tag, serialize_subtree(child)),
+            |xref| format!("{xref}:{}:{}", child.tag, serialize_subtree(child)),
+        );
         let mut event = Event {
-            id: EntityId::new(),
+            id: entity_id_from_seed("FAM_EVT", &event_seed),
             event_type,
             date: None,
             place_ref: None,
@@ -950,7 +965,11 @@ fn map_obje_node(node: &GedcomNode, report: &mut GedcomTagHandlingReport) -> Med
 
 fn map_note_node(node: &GedcomNode) -> Note {
     let mut note = Note {
-        id: EntityId::new(),
+        id: node
+            .xref
+            .as_deref()
+            .map(|xref| entity_id_from_xref("NOTE", xref))
+            .unwrap_or_default(),
         text: node.value.clone().unwrap_or_default(),
         note_type: NoteType::General,
         original_xref: node.xref.clone(),
@@ -1086,7 +1105,11 @@ fn map_lds_status(value: Option<&str>) -> LdsStatus {
 
 fn map_repository_node(node: &GedcomNode, report: &mut GedcomTagHandlingReport) -> Repository {
     let mut repository = Repository {
-        id: EntityId::new(),
+        id: node
+            .xref
+            .as_deref()
+            .map(|xref| entity_id_from_xref("REPO", xref))
+            .unwrap_or_default(),
         name: node
             .value
             .clone()
@@ -1142,7 +1165,11 @@ fn map_source_node(
     report: &mut GedcomTagHandlingReport,
 ) -> Source {
     let mut source = Source {
-        id: EntityId::new(),
+        id: node
+            .xref
+            .as_deref()
+            .map(|xref| entity_id_from_xref("SOUR", xref))
+            .unwrap_or_default(),
         title: node
             .value
             .clone()
@@ -1305,8 +1332,9 @@ fn map_citation_node(
     source_id: EntityId,
     report: &mut GedcomTagHandlingReport,
 ) -> Citation {
+    let citation_seed = format!("{}:{}", source_id.0, serialize_subtree(node));
     let mut citation = Citation {
-        id: EntityId::new(),
+        id: entity_id_from_seed("CIT", &citation_seed),
         source_id,
         volume: None,
         page: None,
@@ -1408,8 +1436,12 @@ fn map_indi_node_to_events_with_report(
             continue;
         };
 
+        let event_seed = indi_node.xref.as_ref().map_or_else(
+            || format!("{}:{}", child.tag, serialize_subtree(child)),
+            |xref| format!("{xref}:{}:{}", child.tag, serialize_subtree(child)),
+        );
         let mut event = Event {
-            id: EntityId::new(),
+            id: entity_id_from_seed("INDI_EVT", &event_seed),
             event_type,
             date: None,
             place_ref: None,
@@ -2885,7 +2917,7 @@ fn insert_entity_snapshot_row(
     let now = Utc::now().to_rfc3339();
     tx.execute(
         &format!(
-            "INSERT INTO {} (id, version, schema_version, data, created_at, updated_at) VALUES (?, 1, 1, ?, ?, ?)",
+            "INSERT OR REPLACE INTO {} (id, version, schema_version, data, created_at, updated_at) VALUES (?, 1, 1, ?, ?, ?)",
             table
         ),
         rusqlite::params![id.to_string(), data.to_string(), now, now],
@@ -5766,6 +5798,82 @@ mod tests {
 
         // Should have parsed the surname(s)
         assert!(!person.names[0].surnames.is_empty());
+    }
+
+    #[test]
+    fn import_gedcom_to_sqlite_is_idempotent_on_reimport_same_database() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n0 TRLR\n";
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        import_gedcom_to_sqlite(&mut conn, "job-idempotent-1", input)
+            .expect("first import should succeed");
+        import_gedcom_to_sqlite(&mut conn, "job-idempotent-2", input)
+            .expect("second import should also succeed without unique key failure");
+
+        let person_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+            .expect("count persons");
+
+        assert_eq!(person_count, 1, "re-import should not duplicate person rows");
+    }
+
+    #[test]
+    fn import_gedcom_to_sqlite_reimport_keeps_multi_entity_counts_stable() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n1 FAMS @F1@\n1 BIRT\n2 DATE 1 JAN 1900\n2 PLAC Springfield\n1 NOTE @N1@\n1 SOUR @S1@\n0 @I2@ INDI\n1 NAME Jane /Doe/\n1 SEX F\n1 FAMS @F1@\n0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1 JAN 1920\n2 PLAC Springfield\n1 SOUR @S1@\n0 @N1@ NOTE\n1 CONT Family note line\n0 @S1@ SOUR\n1 TITL Family Bible\n0 TRLR\n";
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+
+        import_gedcom_to_sqlite(&mut conn, "job-multi-idempotent-1", input)
+            .expect("first import should succeed");
+
+        let first_counts = [
+            ("persons", "SELECT COUNT(*) FROM persons"),
+            ("families", "SELECT COUNT(*) FROM families"),
+            (
+                "family_relationships",
+                "SELECT COUNT(*) FROM family_relationships",
+            ),
+            ("events", "SELECT COUNT(*) FROM events"),
+            ("places", "SELECT COUNT(*) FROM places"),
+            ("sources", "SELECT COUNT(*) FROM sources"),
+            ("notes", "SELECT COUNT(*) FROM notes"),
+            ("assertions", "SELECT COUNT(*) FROM assertions"),
+        ]
+        .into_iter()
+        .map(|(label, sql)| {
+            let count = conn
+                .query_row(sql, [], |row| row.get::<_, i64>(0))
+                .expect("count after first import");
+            (label, count)
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+        import_gedcom_to_sqlite(&mut conn, "job-multi-idempotent-2", input)
+            .expect("second import should succeed");
+
+        let second_counts = [
+            ("persons", "SELECT COUNT(*) FROM persons"),
+            ("families", "SELECT COUNT(*) FROM families"),
+            (
+                "family_relationships",
+                "SELECT COUNT(*) FROM family_relationships",
+            ),
+            ("events", "SELECT COUNT(*) FROM events"),
+            ("places", "SELECT COUNT(*) FROM places"),
+            ("sources", "SELECT COUNT(*) FROM sources"),
+            ("notes", "SELECT COUNT(*) FROM notes"),
+            ("assertions", "SELECT COUNT(*) FROM assertions"),
+        ]
+        .into_iter()
+        .map(|(label, sql)| {
+            let count = conn
+                .query_row(sql, [], |row| row.get::<_, i64>(0))
+                .expect("count after second import");
+            (label, count)
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(first_counts, second_counts, "re-import should not inflate entity/assertion counts");
     }
 
     #[test]

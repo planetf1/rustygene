@@ -221,12 +221,93 @@ async fn invalid_gedcom_import_fails_as_job_not_http_500() {
         "failed job should expose at least one error"
     );
     assert!(
+        status.errors.iter().any(|err| {
+            err.contains("tokenize failed")
+                || err.contains("tree build failed")
+                || err.contains("serialization failed")
+                || err.contains("sqlite failed")
+        }),
+        "failed import error should include parser/storage context, got: {:?}",
+        status.errors
+    );
+    assert!(
         status
             .log_messages
             .iter()
             .any(|message| message.contains("Import failed")),
         "failed import should include failure log message"
     );
+
+    server.shutdown().await.expect("shutdown server");
+}
+
+#[tokio::test]
+async fn importing_same_gedcom_twice_completes_without_unique_constraint_failure() {
+    let backend = in_memory_backend();
+    let state = AppState::with_default_cors_sqlite(backend, 0).expect("build app state");
+
+    let server = start_server(state, 0).await.expect("start server");
+    let client = reqwest::Client::new();
+    let content = include_str!("../../../testdata/gedcom/simpsons.ged");
+
+    for run in 1..=2 {
+        let part = reqwest::multipart::Part::text(content.to_string())
+            .file_name(format!("simpsons-run-{run}.ged"));
+        let form = reqwest::multipart::Form::new()
+            .text("format", "gedcom")
+            .part("file", part);
+
+        let accepted = client
+            .post(format!("http://{}/api/v1/import", server.local_addr))
+            .multipart(form)
+            .send()
+            .await
+            .expect("post import request");
+
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        let body: ImportAcceptedResponse = accepted.json().await.expect("parse accepted body");
+
+        let mut completed: Option<ImportJobStatusResponse> = None;
+        for _ in 0..300 {
+            let response = client
+                .get(format!(
+                    "http://{}/api/v1/import/{}",
+                    server.local_addr, body.job_id
+                ))
+                .send()
+                .await
+                .expect("poll import status");
+            assert_eq!(response.status(), StatusCode::OK);
+            let status: ImportJobStatusResponse = response.json().await.expect("parse status body");
+
+            if status.status == "completed" || status.status == "failed" {
+                completed = Some(status);
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let status = completed.expect("import job should complete or fail within poll budget");
+        assert_eq!(
+            status.status, "completed",
+            "run {run} failed with errors: {:?}",
+            status.errors
+        );
+        assert!(
+            status.errors.is_empty(),
+            "run {run} should not report errors: {:?}",
+            status.errors
+        );
+        assert!(
+            status
+                .errors
+                .iter()
+                .all(|err| !err.contains("UNIQUE constraint failed")),
+            "run {run} should not surface unique-constraint failures: {:?}",
+            status.errors
+        );
+    }
 
     server.shutdown().await.expect("shutdown server");
 }

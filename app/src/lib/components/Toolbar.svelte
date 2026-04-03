@@ -23,8 +23,6 @@
   </form>
 
   <div class="actions">
-    <a href="/import">Import</a>
-    <a href="/export">Export</a>
     {#if appState.sandboxMode}
       <span class="sandbox-badge">Sandbox</span>
     {/if}
@@ -37,9 +35,9 @@
     justify-content: space-between;
     align-items: center;
     gap: 0.75rem;
-    border-bottom: 1px solid #e2e8f0;
-    background: #ffffff;
-    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--rg-border, #e8def8);
+    background: linear-gradient(180deg, #ffffff 0%, #fff8ff 100%);
+    padding: 0.82rem 1rem;
   }
 
   form {
@@ -50,22 +48,36 @@
 
   input {
     width: min(540px, 100%);
-    padding: 0.5rem 0.65rem;
-    border: 1px solid #cbd5e1;
-    border-radius: 0.45rem;
+    padding: 0.58rem 0.78rem;
+    border: 1px solid #dfd2f8;
+    border-radius: 999px;
     font: inherit;
+    background: #ffffff;
+    transition: border-color 140ms ease, box-shadow 140ms ease;
   }
 
-  button,
-  .actions a {
-    background: #2563eb;
+  input:focus {
+    outline: none;
+    border-color: var(--rg-primary, #9b7bff);
+    box-shadow: 0 0 0 3px rgb(155 123 255 / 18%);
+  }
+
+  button {
+    background: linear-gradient(135deg, var(--rg-primary, #9b7bff), var(--rg-secondary, #ff9fcf));
     color: #ffffff;
     border: 0;
-    border-radius: 0.45rem;
-    padding: 0.5rem 0.75rem;
-    text-decoration: none;
+    border-radius: 999px;
+    padding: 0.52rem 0.95rem;
     cursor: pointer;
     font: inherit;
+    font-weight: 600;
+    box-shadow: 0 8px 16px rgb(125 93 242 / 24%);
+    transition: transform 120ms ease, filter 120ms ease;
+  }
+
+  button:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.02);
   }
 
   .actions {
@@ -75,11 +87,12 @@
   }
 
   .sandbox-badge {
-    background: #fef3c7;
-    color: #92400e;
+    background: linear-gradient(90deg, #fff2cc 0%, #ffd8e8 100%);
+    color: #7a2f62;
     border-radius: 999px;
-    padding: 0.25rem 0.6rem;
+    border: 1px solid #f8c6dc;
+    padding: 0.28rem 0.66rem;
     font-size: 0.8rem;
-    font-weight: 600;
+    font-weight: 650;
   }
 </style>

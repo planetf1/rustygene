@@ -27,7 +27,7 @@ use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
@@ -451,6 +451,7 @@ pub fn build_router(state: AppState) -> Router {
             Method::DELETE,
             Method::OPTIONS,
         ])
+        .allow_headers(AllowHeaders::any())
         .allow_origin(AllowOrigin::list(allowed_origins));
 
     Router::new()

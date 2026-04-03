@@ -33,7 +33,7 @@
     loading = true;
     error = '';
     try {
-      backups = await api.get<BackupInfo[]>('/api/v1/backup/');
+      backups = await api.get<BackupInfo[]>('/api/v1/backup');
     } catch (err) {
       error = err instanceof ApiError ? err.message : 'Failed to list backups';
     } finally {
@@ -46,7 +46,7 @@
     message = '';
     error = '';
     try {
-      const info = await api.post<BackupInfo>('/api/v1/backup/', null);
+      const info = await api.post<BackupInfo>('/api/v1/backup', null);
       message = `Backup created: ${info.filename} (${formatBytes(info.size_bytes)})`;
       await fetchBackups();
     } catch (err) {

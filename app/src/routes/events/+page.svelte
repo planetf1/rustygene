@@ -13,6 +13,14 @@
     confidence: number;
   };
 
+  type PersonOption = {
+    id: string;
+    display_name: string;
+  };
+
+  type SortField = 'event_type' | 'date' | 'principal' | 'confidence';
+  type SortDirection = 'asc' | 'desc';
+
   let rows: EventRow[] = [];
   let filteredRows: EventRow[] = [];
   let loading = false;
@@ -22,6 +30,11 @@
   const pageSize = 50;
   let hasMore = true;
   let showCreate = false;
+  let people: PersonOption[] = [];
+  const personNameById = new Map<string, string>();
+
+  let sortField: SortField = 'date';
+  let sortDirection: SortDirection = 'desc';
 
   let typeFilter = '';
   let personFilter = '';
@@ -29,7 +42,7 @@
   let toYear = '';
 
   function applyFilters(): void {
-    filteredRows = rows.filter((event) => {
+    const base = rows.filter((event) => {
       if (typeFilter && !event.event_type.toLowerCase().includes(typeFilter.toLowerCase())) {
         return false;
       }
@@ -50,6 +63,62 @@
 
       return true;
     });
+
+    filteredRows = [...base].sort((left, right) => compareRows(left, right));
+  }
+
+  function personName(personId: string): string {
+    return personNameById.get(personId) ?? personId;
+  }
+
+  function principalName(event: EventRow): string {
+    const principal = event.participants.find((participant) => participant.role.toLowerCase() === 'principal')
+      ?? event.participants[0];
+    return principal ? personName(principal.person_id) : '—';
+  }
+
+  function compareRows(left: EventRow, right: EventRow): number {
+    const direction = sortDirection === 'asc' ? 1 : -1;
+
+    switch (sortField) {
+      case 'event_type':
+        return left.event_type.localeCompare(right.event_type) * direction;
+      case 'principal':
+        return principalName(left).localeCompare(principalName(right)) * direction;
+      case 'confidence':
+        return (left.confidence - right.confidence) * direction;
+      case 'date':
+      default: {
+        const l = left.date ?? '';
+        const r = right.date ?? '';
+        return l.localeCompare(r) * direction;
+      }
+    }
+  }
+
+  function toggleSort(field: SortField): void {
+    if (sortField === field) {
+      sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortField = field;
+      sortDirection = field === 'date' || field === 'confidence' ? 'desc' : 'asc';
+    }
+    applyFilters();
+  }
+
+  function sortIndicator(field: SortField): string {
+    if (sortField !== field) {
+      return '↕';
+    }
+    return sortDirection === 'asc' ? '↑' : '↓';
+  }
+
+  async function loadPeople(): Promise<void> {
+    people = await api.get<PersonOption[]>('/api/v1/persons?limit=500&offset=0');
+    personNameById.clear();
+    for (const row of people) {
+      personNameById.set(row.id, row.display_name);
+    }
   }
 
   async function loadPage(reset = false): Promise<void> {
@@ -83,6 +152,7 @@
   $: typeFilter, personFilter, fromYear, toYear, applyFilters();
 
   onMount(async () => {
+    await loadPeople();
     await loadPage(true);
   });
 </script>
@@ -99,8 +169,13 @@
       <input bind:value={typeFilter} placeholder="Birth, Census, Marriage…" />
     </label>
     <label>
-      Person ID
-      <input bind:value={personFilter} placeholder="Participant person UUID" />
+      Person
+      <select bind:value={personFilter}>
+        <option value="">All people</option>
+        {#each people as person}
+          <option value={person.id}>{person.display_name}</option>
+        {/each}
+      </select>
     </label>
     <label>
       From year
@@ -122,22 +197,24 @@
     <table>
       <thead>
         <tr>
-          <th>Type</th>
-          <th>Date</th>
+          <th><button type="button" class="sort-head" on:click={() => toggleSort('event_type')}>Type {sortIndicator('event_type')}</button></th>
+          <th><button type="button" class="sort-head" on:click={() => toggleSort('date')}>Date {sortIndicator('date')}</button></th>
+          <th><button type="button" class="sort-head" on:click={() => toggleSort('principal')}>Principal {sortIndicator('principal')}</button></th>
           <th>Participants</th>
-          <th>Confidence</th>
+          <th><button type="button" class="sort-head" on:click={() => toggleSort('confidence')}>Confidence {sortIndicator('confidence')}</button></th>
         </tr>
       </thead>
       <tbody>
         {#if filteredRows.length === 0}
           <tr>
-            <td colspan="4">No events found.</td>
+            <td colspan="5">No events found.</td>
           </tr>
         {:else}
           {#each filteredRows as event}
             <tr on:click={() => goto(`/events/${event.id}`)}>
               <td>{event.event_type}</td>
               <td>{event.date ?? '—'}</td>
+              <td>{principalName(event)}</td>
               <td>{event.participants.length}</td>
               <td>{event.confidence.toFixed(2)}</td>
             </tr>
@@ -170,13 +247,13 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.75rem;
+    background: linear-gradient(180deg, #ffffff 0%, #fff9ff 100%);
+    border: 1px solid var(--rg-border, #e8def8);
+    border-radius: 1rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
-    gap: 0.85rem;
+    gap: 0.95rem;
   }
 
   .header {
@@ -192,7 +269,7 @@
   .filters {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.5rem;
+    gap: 0.6rem;
   }
 
   label {
@@ -203,25 +280,54 @@
   }
 
   input {
-    border: 1px solid #cbd5e1;
-    border-radius: 0.45rem;
-    padding: 0.45rem 0.55rem;
+    border: 1px solid #dfd2f8;
+    border-radius: 0.7rem;
+    padding: 0.5rem 0.6rem;
+    background: #ffffff;
+    font: inherit;
+  }
+
+  select {
+    border: 1px solid #dfd2f8;
+    border-radius: 0.7rem;
+    padding: 0.5rem 0.6rem;
+    background: #ffffff;
     font: inherit;
   }
 
   table {
     width: 100%;
-    border-collapse: collapse;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.5rem;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--rg-border, #e8def8);
+    border-radius: 0.8rem;
     overflow: hidden;
+  }
+
+  th,
+  td {
+    background: #ffffff;
+  }
+
+  thead th {
+    background: linear-gradient(180deg, #f9f2ff 0%, #fff1f9 100%);
+  }
+
+  .sort-head {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   th,
   td {
     text-align: left;
     padding: 0.55rem 0.65rem;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid #f0e8ff;
   }
 
   tr {
@@ -229,7 +335,7 @@
   }
 
   tr:hover {
-    background: #f8fafc;
+    background: #fdf7ff;
   }
 
   button {

@@ -627,6 +627,19 @@
     <p>D3 pedigree view with zoom/pan and async ancestor extension.</p>
   </header>
 
+  <section class="guide" aria-label="How to read this chart">
+    <h2>How to follow the tree</h2>
+    <p>
+      This view follows <strong>parent → child lineage</strong>. In cases of divorce or separation,
+      ancestry paths still follow biological/adoptive parent links, not partner status.
+    </p>
+    <ul>
+      <li><strong>Solid card</strong>: known ancestor node.</li>
+      <li><strong>Dashed card with “?”</strong>: parent unknown at current depth.</li>
+      <li><strong>↪ linked ancestor</strong>: same person appears elsewhere in the tree; click to jump.</li>
+    </ul>
+  </section>
+
   <section class="controls">
     <div class="search-box">
       <label for="root-search">Center on person</label>
@@ -715,6 +728,31 @@
   .header p {
     margin: 0.35rem 0 0;
     color: #64748b;
+  }
+
+  .guide {
+    border: 1px solid #dbe3f1;
+    background: #f8fbff;
+    border-radius: 0.65rem;
+    padding: 0.75rem 0.85rem;
+  }
+
+  .guide h2 {
+    margin: 0 0 0.35rem;
+    font-size: 0.98rem;
+  }
+
+  .guide p {
+    margin: 0;
+    color: #334155;
+    font-size: 0.9rem;
+  }
+
+  .guide ul {
+    margin: 0.5rem 0 0;
+    padding-left: 1rem;
+    color: #334155;
+    font-size: 0.86rem;
   }
 
   .controls {

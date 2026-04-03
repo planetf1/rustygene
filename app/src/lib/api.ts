@@ -132,16 +132,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 
   if (!response.ok) {
-    let payload: { message?: string; code?: string } | null = null;
+    let payload: { message?: string; error?: string; code?: string } | null = null;
 
     try {
-      payload = (await response.json()) as { message?: string; code?: string };
+      payload = (await response.json()) as { message?: string; error?: string; code?: string };
     } catch {
       payload = null;
     }
 
     throw new ApiError(
-      payload?.message ?? `${method} ${path} failed`,
+      payload?.message ?? payload?.error ?? `${method} ${path} failed`,
       payload?.code ?? 'request_failed',
       response.status
     );
@@ -170,16 +170,16 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
   }
 
   if (!response.ok) {
-    let payload: { message?: string; code?: string } | null = null;
+    let payload: { message?: string; error?: string; code?: string } | null = null;
 
     try {
-      payload = (await response.json()) as { message?: string; code?: string };
+      payload = (await response.json()) as { message?: string; error?: string; code?: string };
     } catch {
       payload = null;
     }
 
     throw new ApiError(
-      payload?.message ?? `POST ${path} failed`,
+      payload?.message ?? payload?.error ?? `POST ${path} failed`,
       payload?.code ?? 'request_failed',
       response.status
     );
@@ -206,16 +206,16 @@ async function download(path: string): Promise<{ blob: Blob; fileName: string | 
   }
 
   if (!response.ok) {
-    let payload: { message?: string; code?: string } | null = null;
+    let payload: { message?: string; error?: string; code?: string } | null = null;
 
     try {
-      payload = (await response.json()) as { message?: string; code?: string };
+      payload = (await response.json()) as { message?: string; error?: string; code?: string };
     } catch {
       payload = null;
     }
 
     throw new ApiError(
-      payload?.message ?? `GET ${path} failed`,
+      payload?.message ?? payload?.error ?? `GET ${path} failed`,
       payload?.code ?? 'request_failed',
       response.status
     );

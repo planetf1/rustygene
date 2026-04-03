@@ -58,6 +58,47 @@
     }
   }
 
+  function labelize(key: string): string {
+    return key
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function primitiveToText(value: unknown): string {
+    if (value === null || value === undefined) {
+      return '—';
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    if (Array.isArray(value)) {
+      const flattened = value
+        .map((item) => primitiveToText(item))
+        .filter((item) => item !== '—');
+      return flattened.length > 0 ? flattened.join(', ') : '—';
+    }
+    return formatValue(value);
+  }
+
+  function humanValueRows(value: unknown): Array<{ label: string; text: string }> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return [{ label: 'Value', text: primitiveToText(value) }];
+    }
+
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== null && entryValue !== undefined && entryValue !== '')
+      .map(([key, entryValue]) => ({
+        label: labelize(key),
+        text: primitiveToText(entryValue)
+      }));
+
+    if (entries.length === 0) {
+      return [{ label: 'Value', text: '—' }];
+    }
+
+    return entries;
+  }
+
   function competingCount(field: string): number {
     const count = rowsFor(field).length;
     return count > 1 ? count : 0;
@@ -273,7 +314,15 @@
                 {/if}
               </div>
 
-              <pre>{formatValue(assertion.value)}</pre>
+              <div class="value-block">
+                {#each humanValueRows(assertion.value) as row}
+                  <p><strong>{row.label}:</strong> {row.text}</p>
+                {/each}
+                <details>
+                  <summary>Raw JSON</summary>
+                  <pre>{formatValue(assertion.value)}</pre>
+                </details>
+              </div>
 
               <div class="citations">
                 {#if assertion.sources.length === 0}
@@ -542,15 +591,43 @@
 
   header h2 { margin: 0; flex: 1; }
 
-  pre {
-    margin: 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+  .value-block {
     background: #fff;
     border: 1px solid #e2e8f0;
     border-radius: 0.5rem;
     padding: 0.5rem;
-    font-size: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .value-block p {
+    margin: 0;
+    color: #1e293b;
+    font-size: 0.9rem;
+    line-height: 1.35;
+  }
+
+  .value-block details {
+    margin-top: 0.25rem;
+  }
+
+  .value-block summary {
+    cursor: pointer;
+    color: #475569;
+    font-size: 0.8rem;
+    user-select: none;
+  }
+
+  pre {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    font-size: 0.8rem;
   }
 
   .citations {
