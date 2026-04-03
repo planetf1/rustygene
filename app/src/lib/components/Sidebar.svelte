@@ -141,7 +141,7 @@
     margin: 0;
     font-size: 1.26rem;
     letter-spacing: 0.01em;
-    color: #5b3ec9;
+    color: #4529a8;
   }
 
   header p {
@@ -159,7 +159,7 @@
   .section h2 {
     margin: 0.45rem 0 0.25rem;
     font-size: 0.75rem;
-    color: var(--rg-muted, #64748b);
+    color: var(--rg-muted, #5e557e);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -190,7 +190,7 @@
   a.selected {
     background: linear-gradient(90deg, rgb(155 123 255 / 18%), rgb(255 159 207 / 16%));
     border-color: rgb(155 123 255 / 30%);
-    color: #4b2db8;
+    color: #3f249d;
     font-weight: 600;
   }
 
@@ -215,7 +215,7 @@
     border-radius: 0.68rem;
     padding: 0.5rem 0.68rem;
     text-align: left;
-    color: #513488;
+    color: #402772;
     font-weight: 550;
   }
 

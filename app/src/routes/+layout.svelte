@@ -82,7 +82,7 @@
     --rg-surface: #ffffff;
     --rg-surface-soft: #fff9ff;
     --rg-text: #2a2342;
-    --rg-muted: #756f95;
+    --rg-muted: #5e557e;
     --rg-border: #e8def8;
     --rg-primary: #9b7bff;
     --rg-primary-strong: #7d5df2;
@@ -116,7 +116,7 @@
   :global(.content h1),
   :global(.content h2),
   :global(.content h3) {
-    color: #4f3a9f;
+    color: #3f2e86;
     letter-spacing: 0.01em;
   }
 
@@ -169,7 +169,7 @@
 
   :global(.content thead th) {
     background: linear-gradient(180deg, #f9f2ff 0%, #fff0f8 100%);
-    color: #55389a;
+    color: #412a89;
     border-bottom: 1px solid var(--rg-border);
   }
 

@@ -94,9 +94,9 @@
 
   .sandbox-badge {
     background: linear-gradient(90deg, #fff2cc 0%, #ffd8e8 100%);
-    color: #7a2f62;
+    color: #5f214a;
     border-radius: 999px;
-    border: 1px solid #f8c6dc;
+    border: 1px solid #eeaeca;
     padding: 0.28rem 0.66rem;
     font-size: 0.8rem;
     font-weight: 650;
