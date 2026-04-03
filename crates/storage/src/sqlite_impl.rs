@@ -352,6 +352,59 @@ impl SqliteBackend {
         })
     }
 
+    /// Helper to append an audit log entry using a direct connection.
+    /// Used internally by insert_sync, update_sync, and delete_sync.
+    fn append_audit_log_entry_tx(
+        conn: &rusqlite::Connection,
+        table: &str,
+        entity_id: EntityId,
+        action: &str,
+        old_value_json: Option<&Value>,
+        new_value_json: Option<&Value>,
+    ) -> Result<(), StorageError> {
+        let entity_type = match table {
+            "persons" => "Person",
+            "families" => "Family",
+            "relationships" => "Relationship",
+            "events" => "Event",
+            "places" => "Place",
+            "sources" => "Source",
+            "citations" => "Citation",
+            "repositories" => "Repository",
+            "media" => "Media",
+            "notes" => "Note",
+            "lds_ordinances" => "LdsOrdinance",
+            "assertions" => "Assertion",
+            _ => "Unknown",
+        };
+
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let actor = "system".to_string();
+
+        let old_value_str = old_value_json.map(|v| v.to_string());
+        let new_value_str = new_value_json.map(|v| v.to_string());
+
+        conn.execute(
+            "INSERT INTO audit_log (timestamp, actor, entity_id, entity_type, action, old_value, new_value)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                &timestamp,
+                &actor,
+                entity_id.to_string(),
+                entity_type,
+                action,
+                old_value_str,
+                new_value_str,
+            ],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Audit log insert failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
     fn insert_sync(&self, table: &str, id: EntityId, data: &Value) -> Result<(), StorageError> {
         let conn = self.connection.lock().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
@@ -375,6 +428,9 @@ impl SqliteBackend {
             code: StorageErrorCode::Backend,
             message: format!("Insert failed: {}", e),
         })?;
+
+        // Wire audit log: log the create action with new_value_json
+        Self::append_audit_log_entry_tx(&conn, table, id, "create", None, Some(data))?;
 
         Ok(())
     }
@@ -422,26 +478,33 @@ impl SqliteBackend {
             message: format!("Mutex lock failed: {}", e),
         })?;
 
-        // Get version first
-        let version: u32 = {
+        // Get version AND current data first (for audit log)
+        let (version, old_data_str) = {
             let mut stmt = conn
-                .prepare(&format!("SELECT version FROM {} WHERE id = ?", table))
+                .prepare(&format!("SELECT version, data FROM {} WHERE id = ?", table))
                 .map_err(|e| StorageError {
                     code: StorageErrorCode::Backend,
                     message: format!("Prepare failed: {}", e),
                 })?;
 
-            stmt.query_row(rusqlite::params![id.to_string()], |row| row.get(0))
-                .optional()
-                .map_err(|e| StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: format!("Query failed: {}", e),
-                })?
-                .ok_or(StorageError {
-                    code: StorageErrorCode::NotFound,
-                    message: format!("{} not found with id {}", table, id),
-                })?
+            stmt.query_row(rusqlite::params![id.to_string()], |row| {
+                Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+            })
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Query failed: {}", e),
+            })?
+            .ok_or(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("{} not found with id {}", table, id),
+            })?
         };
+
+        let old_data_value: Value = serde_json::from_str(&old_data_str).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("JSON parse failed: {}", e),
+        })?;
 
         let now = chrono::Utc::now().to_rfc3339();
         let rows = conn
@@ -469,6 +532,9 @@ impl SqliteBackend {
             });
         }
 
+        // Wire audit log: log the update action with both old and new values
+        Self::append_audit_log_entry_tx(&conn, table, id, "update", Some(&old_data_value), Some(data))?;
+
         Ok(())
     }
 
@@ -476,6 +542,32 @@ impl SqliteBackend {
         let conn = self.connection.lock().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
             message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        // Get current data first (for audit log)
+        let old_data_str: String = {
+            let mut stmt = conn
+                .prepare(&format!("SELECT data FROM {} WHERE id = ?", table))
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Prepare failed: {}", e),
+                })?;
+
+            stmt.query_row(rusqlite::params![id.to_string()], |row| row.get(0))
+                .optional()
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Query failed: {}", e),
+                })?
+                .ok_or(StorageError {
+                    code: StorageErrorCode::NotFound,
+                    message: format!("{} not found with id {}", table, id),
+                })?
+        };
+
+        let old_data_value: Value = serde_json::from_str(&old_data_str).map_err(|e| StorageError {
+            code: StorageErrorCode::Serialization,
+            message: format!("JSON parse failed: {}", e),
         })?;
 
         conn.execute(
@@ -486,6 +578,9 @@ impl SqliteBackend {
             code: StorageErrorCode::Backend,
             message: format!("Delete failed: {}", e),
         })?;
+
+        // Wire audit log: log the delete action with old_value_json, new_value_json = None
+        Self::append_audit_log_entry_tx(&conn, table, id, "delete", Some(&old_data_value), None)?;
 
         Ok(())
     }
@@ -5494,5 +5589,130 @@ mod tests {
             "expected surname sort to use idx_persons_primary_surname, got {:?}",
             surname_plan_rows
         );
+    }
+
+    #[tokio::test]
+    async fn audit_log_records_entity_create_update_delete() {
+        let backend = create_test_backend();
+        let person = Person {
+            id: EntityId::new(),
+            names: vec![],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: true,
+            private: false,
+            original_xref: None,
+            _raw_gedcom: Default::default(),
+        };
+
+        // Step 1: Create person and verify audit log
+        backend.create_person(&person).await.expect("create person");
+        {
+            let conn = backend.connection.lock().expect("lock connection");
+            
+            let mut stmt = conn
+                .prepare("SELECT COUNT(*) FROM audit_log")
+                .expect("prepare count");
+            let count: usize = stmt
+                .query_row([], |row| row.get(0))
+                .expect("query count");
+            assert_eq!(count, 1, "expected 1 audit log entry after create");
+
+            let mut stmt = conn
+                .prepare(
+                    "SELECT action, entity_type, old_value, new_value FROM audit_log WHERE action = 'create' ORDER BY id LIMIT 1"
+                )
+                .expect("prepare select");
+            stmt.query_row([], |row| {
+                let action: String = row.get(0)?;
+                let entity_type: String = row.get(1)?;
+                let old_value: Option<String> = row.get(2)?;
+                let new_value: Option<String> = row.get(3)?;
+                
+                assert_eq!(action, "create", "expected action=create");
+                assert_eq!(entity_type, "Person", "expected entity_type=Person");
+                assert!(old_value.is_none(), "expected old_value to be None on create");
+                assert!(new_value.is_some(), "expected new_value to be Some on create");
+                Ok(())
+            })
+            .expect("verify create audit entry");
+        }
+
+        // Step 2: Update person and verify audit log
+        let person_updated = Person {
+            id: person.id,
+            names: vec![],
+            gender: rustygene_core::types::Gender::Male,
+            living: false,
+            private: true,
+            original_xref: None,
+            _raw_gedcom: Default::default(),
+        };
+        backend
+            .update_person(&person_updated)
+            .await
+            .expect("update person");
+
+        {
+            let conn = backend.connection.lock().expect("lock connection");
+            let mut stmt = conn
+                .prepare("SELECT COUNT(*) FROM audit_log")
+                .expect("prepare count");
+            let count: usize = stmt
+                .query_row([], |row| row.get(0))
+                .expect("query count");
+            assert_eq!(count, 2, "expected 2 audit log entries after update");
+
+            let mut stmt = conn
+                .prepare(
+                    "SELECT action, entity_type, old_value, new_value FROM audit_log WHERE action = 'update' ORDER BY id LIMIT 1"
+                )
+                .expect("prepare select");
+            stmt.query_row([], |row| {
+                let action: String = row.get(0)?;
+                let entity_type: String = row.get(1)?;
+                let old_value: Option<String> = row.get(2)?;
+                let new_value: Option<String> = row.get(3)?;
+                
+                assert_eq!(action, "update", "expected action=update");
+                assert_eq!(entity_type, "Person", "expected entity_type=Person");
+                assert!(old_value.is_some(), "expected old_value to be Some on update");
+                assert!(new_value.is_some(), "expected new_value to be Some on update");
+                Ok(())
+            })
+            .expect("verify update audit entry");
+        }
+
+        // Step 3: Delete person and verify audit log
+        backend.delete_person(person.id).await.expect("delete person");
+
+        {
+            let conn = backend.connection.lock().expect("lock connection");
+            let mut stmt = conn
+                .prepare("SELECT COUNT(*) FROM audit_log")
+                .expect("prepare count");
+            let count: usize = stmt
+                .query_row([], |row| row.get(0))
+                .expect("query count");
+            assert_eq!(count, 3, "expected 3 audit log entries after delete");
+
+            let mut stmt = conn
+                .prepare(
+                    "SELECT action, entity_type, old_value, new_value FROM audit_log WHERE action = 'delete' ORDER BY id LIMIT 1"
+                )
+                .expect("prepare select");
+            stmt.query_row([], |row| {
+                let action: String = row.get(0)?;
+                let entity_type: String = row.get(1)?;
+                let old_value: Option<String> = row.get(2)?;
+                let new_value: Option<String> = row.get(3)?;
+                
+                assert_eq!(action, "delete", "expected action=delete");
+                assert_eq!(entity_type, "Person", "expected entity_type=Person");
+                assert!(old_value.is_some(), "expected old_value to be Some on delete");
+                assert!(new_value.is_none(), "expected new_value to be None on delete");
+                Ok(())
+            })
+            .expect("verify delete audit entry");
+        }
     }
 }
