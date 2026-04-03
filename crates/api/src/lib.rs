@@ -1,16 +1,24 @@
 pub mod errors;
 pub mod models;
+pub mod openapi;
 pub mod routes;
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Instant;
 
+use axum::extract::MatchedPath;
 use axum::extract::State;
 use axum::http::header::{HeaderName, HeaderValue};
 use axum::http::Method;
+use axum::http::Request;
+use axum::middleware::{self, Next};
 use axum::response::Json;
+use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use serde::Serialize;
@@ -38,6 +46,28 @@ const DEFAULT_CORS_ORIGINS: [&str; 3] = [
 
 pub const EVENT_BUS_CAPACITY: usize = 1024;
 pub const SLOW_CONSUMER_DROP_THRESHOLD: u64 = 1000;
+pub const DEBUG_LOG_CAPACITY: usize = 1000;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteMetric {
+    pub route: String,
+    pub request_count: u64,
+    pub average_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RequestMetrics {
+    pub entries: HashMap<String, (u64, f64)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DebugLogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub target: String,
+    pub message: String,
+    pub fields: serde_json::Value,
+}
 
 #[derive(Debug, Clone)]
 pub enum DomainEvent {
@@ -149,10 +179,13 @@ pub struct AppState {
     pub sqlite_backend: Option<Arc<SqliteBackend>>,
     pub port: u16,
     pub cors_origins: Vec<String>,
+    pub debug_enabled: bool,
     pub import_jobs: Arc<RwLock<HashMap<Uuid, routes::import_export::ImportJobStatus>>>,
     pub event_bus: broadcast::Sender<DomainEvent>,
     pub sse_connections: Arc<AtomicUsize>,
     pub slow_consumer_drop_threshold: u64,
+    pub request_metrics: Arc<Mutex<RequestMetrics>>,
+    pub debug_logs: Arc<Mutex<VecDeque<DebugLogEntry>>>,
 }
 
 impl AppState {
@@ -197,10 +230,13 @@ impl AppState {
             sqlite_backend,
             port,
             cors_origins,
+            debug_enabled: debug_endpoints_enabled(),
             import_jobs: Arc::new(RwLock::new(HashMap::new())),
             event_bus: broadcast::channel(event_bus_capacity).0,
             sse_connections: Arc::new(AtomicUsize::new(0)),
             slow_consumer_drop_threshold,
+            request_metrics: Arc::new(Mutex::new(RequestMetrics::default())),
+            debug_logs: Arc::new(Mutex::new(VecDeque::with_capacity(DEBUG_LOG_CAPACITY))),
         })
     }
 
@@ -236,9 +272,80 @@ impl AppState {
     }
 
     fn publish_event(&self, event: DomainEvent) {
+        self.push_debug_log(
+            "INFO",
+            "event_bus",
+            format!("published {}", event.event_name()),
+            event.payload(),
+        );
         let _ = self.event_bus.send(event);
     }
 
+    pub fn push_debug_log(
+        &self,
+        level: &str,
+        target: &str,
+        message: String,
+        fields: serde_json::Value,
+    ) {
+        let mut logs = self
+            .debug_logs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if logs.len() >= DEBUG_LOG_CAPACITY {
+            logs.pop_front();
+        }
+        logs.push_back(DebugLogEntry {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            level: level.to_string(),
+            target: target.to_string(),
+            message,
+            fields,
+        });
+    }
+
+    pub fn record_request_metric(&self, route: &str, latency_ms: f64) {
+        let mut metrics = self
+            .request_metrics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = metrics.entries.entry(route.to_string()).or_insert((0, 0.0));
+        entry.0 += 1;
+        entry.1 += latency_ms;
+    }
+
+    pub fn debug_route_available(&self) -> bool {
+        self.debug_enabled
+    }
+}
+
+fn debug_endpoints_enabled() -> bool {
+    match std::env::var("RUSTYGENE_ENABLE_DEBUG_ENDPOINTS") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => cfg!(debug_assertions),
+    }
+}
+
+async fn metrics_middleware(
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let started_at = Instant::now();
+    let route = request.extensions().get::<MatchedPath>().map_or_else(
+        || request.uri().path().to_string(),
+        |matched| matched.as_str().to_string(),
+    );
+
+    let response = next.run(request).await;
+    state.record_request_metric(&route, started_at.elapsed().as_secs_f64() * 1000.0);
+    response
+}
+
+impl AppState {
     pub fn publish_entity_created(&self, entity_type: &str, entity_id: EntityId, actor: &str) {
         self.publish_event(DomainEvent::EntityCreated {
             entity_type: entity_type.to_string(),
@@ -318,6 +425,7 @@ impl ServerHandle {
 }
 
 pub fn build_router(state: AppState) -> Router {
+    let router_state = state.clone();
     let allowed_origins = state
         .cors_origins
         .iter()
@@ -359,6 +467,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/v1/entities", routes::media::entity_router())
         .nest("/api/v1/assertions", routes::assertions::router())
         .nest("/api/v1/staging", routes::staging::router())
+        .nest("/api/v1/debug", routes::debug::router())
+        .merge(openapi::router())
         .nest("/api/v1", routes::import_export::router())
         .nest(
             "/api/v1/import-export",
@@ -381,6 +491,10 @@ pub fn build_router(state: AppState) -> Router {
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("referrer-policy"),
             HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(middleware::from_fn_with_state(
+            router_state,
+            metrics_middleware,
         ))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .layer(cors_layer)

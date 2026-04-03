@@ -1,0 +1,8 @@
+apis:
+  rustygene:
+    root: spec/openapi.json
+
+rules:
+  no-empty-servers: off
+  operation-summary: off
+  path-parameters-defined: off

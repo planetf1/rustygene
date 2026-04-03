@@ -1,5 +1,6 @@
 pub mod assertions;
 pub mod citations;
+pub mod debug;
 pub mod events;
 pub mod events_sse;
 pub mod families;
