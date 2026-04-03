@@ -1,27 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { api } from '$lib/api';
-  import CitationPicker, { type CitationDraft } from '$lib/components/CitationPicker.svelte';
-
-  type NameType = 'Birth' | 'Married' | 'Aka' | 'Nickname' | 'Other';
-  type Gender = 'Male' | 'Female' | 'Other' | 'Unknown';
-  type SurnameOrigin = 'Patronymic' | 'Matronymic' | 'Toponymic' | 'Occupational' | 'Unknown';
-
-  export type PersonDraft = {
-    id?: string;
-    givenNames: string[];
-    surnames: { value: string; originType: SurnameOrigin; connector: string }[];
-    nameType: NameType;
-    sortAs: string;
-    callName: string;
-    gender: Gender;
-    birthDate: string;
-    birthPlace: string;
-    deathDate: string;
-    deathPlace: string;
-    notes: string;
-    citations: CitationDraft[];
-  };
+  import CitationPicker from '$lib/components/CitationPicker.svelte';
+  import type { CitationDraft, PersonDraft } from '$lib/components/formTypes';
 
   export let mode: 'create' | 'edit' = 'create';
   export let initial: PersonDraft | null = null;

@@ -10,10 +10,12 @@
     note_type: NoteType;
     linked_entity_id?: string | null;
     linked_entity_type?: string | null;
+    position_x_pct?: number | null;
+    position_y_pct?: number | null;
   };
 
   export let entityId: string;
-  export let entityType: 'person' | 'event' | 'source' | 'repository' | 'family' = 'person';
+  export let entityType: 'person' | 'event' | 'source' | 'repository' | 'family' | 'media' = 'person';
 
   let notes: NoteItem[] = [];
   let loading = false;

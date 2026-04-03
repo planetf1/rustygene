@@ -1,23 +1,13 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import { api } from '$lib/api';
+  import type { CitationDraft } from '$lib/components/formTypes';
 
   type SourceRef = {
     id: string;
     title: string;
     author?: string | null;
     publication_info?: string | null;
-  };
-
-  export type CitationDraft = {
-    sourceId: string;
-    volume: string;
-    page: string;
-    folio: string;
-    entry: string;
-    confidenceLevel: number | null;
-    transcription: string;
-    citationNote: string;
   };
 
   export let value: CitationDraft[] = [];

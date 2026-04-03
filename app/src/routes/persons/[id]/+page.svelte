@@ -4,7 +4,8 @@
   import { page } from '$app/stores';
   import { addRecentItem } from '$lib/state.svelte';
   import { api } from '$lib/api';
-  import PersonForm, { type PersonDraft } from '$lib/components/PersonForm.svelte';
+  import PersonForm from '$lib/components/PersonForm.svelte';
+  import type { PersonDraft } from '$lib/components/formTypes';
   import AssertionList from '$lib/components/AssertionList.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
 
@@ -58,7 +59,8 @@
     }[]
   >;
 
-  $: id = $page.params.id;
+  let id = '';
+  $: id = $page.params.id ?? '';
 
   let detail: PersonDetail | null = null;
   let assertionGroup: AssertionGroup = {};

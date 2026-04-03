@@ -30,7 +30,8 @@
     name: string;
   };
 
-  $: id = $page.params.id;
+  let id = '';
+  $: id = $page.params.id ?? '';
 
   let loading = false;
   let saving = false;

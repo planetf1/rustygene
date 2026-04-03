@@ -13,7 +13,8 @@
     { href: '/repositories', label: 'Repositories' },
     { href: '/staging', label: 'Review Queue' },
     { href: '/research-log', label: 'Research Log' },
-    { href: '/search', label: 'Search' }
+    { href: '/search', label: 'Search' },
+    { href: '/debug', label: 'Debug' }
   ];
 
   const chartItems = [

@@ -1,23 +1,11 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import { api } from '$lib/api';
-
-  type PartnerLink = 'Married' | 'Unmarried' | 'Unknown';
+  import type { FamilyDraft } from '$lib/components/formTypes';
 
   type PersonOption = {
     id: string;
     display_name: string;
-  };
-
-  export type FamilyDraft = {
-    id?: string;
-    partner1Id: string;
-    partner2Id: string;
-    childIds: string[];
-    partnerLink: PartnerLink;
-    marriageDate: string;
-    marriagePlace: string;
-    notes: string;
   };
 
   export let mode: 'create' | 'edit' = 'create';

@@ -345,7 +345,7 @@
 
       const count = data.personId ? personCounts.get(data.personId) ?? 1 : 1;
       const y = node.depth * (nodeWidth + colGap) + 70;
-      const x = node.x + height / 2;
+      const x = (node.x ?? 0) + height / 2;
 
       const renderNode: RenderNode = {
         id: `${data.personId ?? 'unknown'}-${index}`,
@@ -412,13 +412,13 @@
       .attr('stroke', '#334155')
       .attr('stroke-width', 1.6)
       .attr('stroke-dasharray', (link) => {
-        const targetNode = renderedNodes.find((node) => node.x === link.target.x + height / 2 && node.y === link.target.depth * (nodeWidth + colGap) + 70);
+        const targetNode = renderedNodes.find((node) => node.x === (link.target.x ?? 0) + height / 2 && node.y === link.target.depth * (nodeWidth + colGap) + 70);
         return targetNode ? edgeStrokeDash(targetNode) : 'none';
       })
       .attr('d', (link) => {
-        const sx = link.source.x + height / 2;
+        const sx = (link.source.x ?? 0) + height / 2;
         const sy = link.source.depth * (nodeWidth + colGap) + 70 + nodeWidth / 2;
-        const tx = link.target.x + height / 2;
+        const tx = (link.target.x ?? 0) + height / 2;
         const ty = link.target.depth * (nodeWidth + colGap) + 70 - nodeWidth / 2;
         return `M ${sy} ${sx} H ${sy + 24} V ${tx} H ${ty}`;
       });

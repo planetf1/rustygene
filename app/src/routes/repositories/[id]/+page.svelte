@@ -19,7 +19,8 @@
     repository_refs: Array<{ repository_id: string; call_number?: string | null; media_type?: string | null }>;
   };
 
-  $: id = $page.params.id;
+  let id = '';
+  $: id = $page.params.id ?? '';
 
   let detail: Repository | null = null;
   let allSources: Source[] = [];

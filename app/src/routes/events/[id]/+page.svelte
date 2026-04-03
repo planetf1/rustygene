@@ -4,7 +4,8 @@
   import { page } from '$app/stores';
   import { addRecentItem } from '$lib/state.svelte';
   import { api } from '$lib/api';
-  import EventForm, { type EventDraft } from '$lib/components/EventForm.svelte';
+  import EventForm from '$lib/components/EventForm.svelte';
+  import type { EventDraft } from '$lib/components/formTypes';
   import AssertionList from '$lib/components/AssertionList.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
 
@@ -34,7 +35,8 @@
     }[]
   >;
 
-  $: id = $page.params.id;
+  let id = '';
+  $: id = $page.params.id ?? '';
 
   let detail: EventDetail | null = null;
   let assertionGroup: AssertionGroup = {};

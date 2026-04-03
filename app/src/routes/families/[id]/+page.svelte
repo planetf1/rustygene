@@ -4,7 +4,8 @@
   import { page } from '$app/stores';
   import { addRecentItem } from '$lib/state.svelte';
   import { api } from '$lib/api';
-  import FamilyForm, { type FamilyDraft } from '$lib/components/FamilyForm.svelte';
+  import FamilyForm from '$lib/components/FamilyForm.svelte';
+  import type { FamilyDraft } from '$lib/components/formTypes';
   import AssertionList from '$lib/components/AssertionList.svelte';
 
   type FamilyDetail = {
@@ -33,7 +34,8 @@
     }[]
   >;
 
-  $: id = $page.params.id;
+  let id = '';
+  $: id = $page.params.id ?? '';
 
   let detail: FamilyDetail | null = null;
   let assertionGroup: AssertionGroup = {};
@@ -202,10 +204,10 @@
       <h2>Partners</h2>
       <ul class="list">
         {#if detail.partner1}
-          <li><button type="button" class="linkish" on:click={() => goto(`/persons/${detail.partner1?.id}`)}>{detail.partner1.display_name}</button> (partner)</li>
+          <li><button type="button" class="linkish" on:click={() => goto(`/persons/${detail?.partner1?.id ?? ''}`)}>{detail?.partner1?.display_name}</button> (partner)</li>
         {/if}
         {#if detail.partner2}
-          <li><button type="button" class="linkish" on:click={() => goto(`/persons/${detail.partner2?.id}`)}>{detail.partner2.display_name}</button> (partner)</li>
+          <li><button type="button" class="linkish" on:click={() => goto(`/persons/${detail?.partner2?.id ?? ''}`)}>{detail?.partner2?.display_name}</button> (partner)</li>
         {/if}
         {#if !detail.partner1 && !detail.partner2}
           <li>No partners linked.</li>

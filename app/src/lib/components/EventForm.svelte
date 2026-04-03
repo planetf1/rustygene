@@ -1,26 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import { api } from '$lib/api';
-  import CitationPicker, { type CitationDraft } from '$lib/components/CitationPicker.svelte';
+  import CitationPicker from '$lib/components/CitationPicker.svelte';
+  import type { CitationDraft, EventDraft } from '$lib/components/formTypes';
 
   type PersonOption = {
     id: string;
     display_name: string;
-  };
-
-  type ParticipantDraft = {
-    personId: string;
-    role: string;
-  };
-
-  export type EventDraft = {
-    id?: string;
-    eventType: string;
-    date: string;
-    placeId: string;
-    description: string;
-    participants: ParticipantDraft[];
-    citations: CitationDraft[];
   };
 
   export let mode: 'create' | 'edit' = 'create';

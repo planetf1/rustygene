@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { api } from '$lib/api';
 
   type MediaItem = {
@@ -43,6 +44,12 @@
   let albums: AlbumItem[] = [];
   let persons: PersonOption[] = [];
   let selected = new Set<string>();
+
+  let personOptions: PersonOption[] = [];
+  let albumOptions: AlbumItem[] = [];
+
+  $: personOptions = persons;
+  $: albumOptions = albums;
 
   function mediaFileName(item: MediaItem): string {
     const parts = item.file_path.split('/');
@@ -261,7 +268,7 @@
       Linked entity (person)
       <select bind:value={selectedEntityId} on:change={() => void loadGallery()}>
         <option value="">All</option>
-        {#each persons as person}
+        {#each personOptions as person}
           <option value={person.id}>{person.display_name}</option>
         {/each}
       </select>
@@ -271,7 +278,7 @@
       Album
       <select bind:value={selectedAlbum} on:change={() => void loadGallery()}>
         <option value="">All</option>
-        {#each albums as album}
+        {#each albumOptions as album}
           <option value={album.name}>{album.name}</option>
         {/each}
       </select>
@@ -294,7 +301,7 @@
     tabindex="0"
     on:dragover|preventDefault
     on:drop={onDrop}
-    on:keydown={(event) => {
+    on:keydown={(event: KeyboardEvent) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
       }
@@ -352,6 +359,7 @@
           </div>
 
           <button type="button" class="secondary" on:click={() => void addTag(item)}>Add tag</button>
+          <button type="button" on:click={() => goto(`/media/${item.id}/view`)}>Open viewer</button>
         </article>
       {/each}
     </section>
@@ -378,7 +386,12 @@
               <td>{item.link_count}</td>
               <td>{item.albums.join(', ') || '—'}</td>
               <td>{item.tags.join(', ') || '—'}</td>
-              <td><button type="button" class="secondary" on:click={() => void addTag(item)}>Add tag</button></td>
+              <td>
+                <div class="row-actions">
+                  <button type="button" class="secondary" on:click={() => void addTag(item)}>Add tag</button>
+                  <button type="button" on:click={() => goto(`/media/${item.id}/view`)}>Open viewer</button>
+                </div>
+              </td>
             </tr>
           {/each}
         </tbody>
@@ -556,6 +569,12 @@
 
   .list-wrap {
     overflow-x: auto;
+  }
+
+  .row-actions {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
   }
 
   table {
