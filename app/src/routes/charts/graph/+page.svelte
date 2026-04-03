@@ -195,7 +195,9 @@
           animate: false,
           fit: false,
           randomize: false,
-          padding: 20
+          padding: 8,
+          nodeSpacing: 10,
+          edgeElasticity: 0.5
         };
       case 'cola':
         return {
@@ -203,9 +205,9 @@
           animate: false,
           fit: false,
           randomize: false,
-          padding: 20,
+          padding: 8,
           infinite: false,
-          nodeSpacing: 20
+          nodeSpacing: 8
         };
       case 'breadthfirst':
         return {
@@ -213,16 +215,16 @@
           animate: false,
           fit: false,
           directed: true,
-          spacingFactor: 1.0,
-          padding: 20
+          spacingFactor: 0.75,
+          padding: 8
         };
       case 'circle':
         return {
           name: 'circle',
           animate: false,
           fit: false,
-          spacingFactor: 0.9,
-          padding: 20
+          spacingFactor: 0.7,
+          padding: 8
         };
     }
   }
@@ -307,7 +309,7 @@
       } finally {
         isApplyingLayout = false;
       }
-    }, 100);
+    }, 280);
   }
 
   function styleForNode(): string {
@@ -337,18 +339,19 @@
             label: 'data(label)',
             'background-color': styleForNode(),
             shape: 'ellipse',
-            width: 75,
-            height: 75,
+            width: 105,
+            height: 105,
             color: '#0f172a',
-            'font-size': 14,
-            'font-weight': 500,
+            'font-size': 17,
+            'font-weight': 600,
             'text-wrap': 'wrap',
-            'text-max-width': 140,
+            'text-max-width': 160,
             'text-valign': 'center',
             'text-halign': 'center',
             'text-margin-y': 0,
             'border-color': '#0f172a',
-            'border-width': 'mapData(merged, 0, 1, 1, 4)'
+            'border-width': 'mapData(merged, 0, 1, 1, 4)',
+            'line-height': 1.2
           }
         },
         {
@@ -383,17 +386,18 @@
         {
           selector: 'edge',
           style: {
-            width: 1.5,
+            width: 1.2,
             label: 'data(label)',
-            'font-size': 11,
+            'font-size': 12,
             color: '#334155',
             'text-background-color': '#ffffff',
             'text-background-opacity': 1,
             'text-background-padding': 2,
-            'curve-style': 'bezier',
+            'curve-style': 'straight',
             'target-arrow-shape': 'none',
             'line-color': '#94a3b8',
-            'target-arrow-color': '#334155'
+            'target-arrow-color': '#334155',
+            'control-point-step-size': 40
           }
         },
         {
@@ -539,7 +543,7 @@
       }
       viewportDebounce = setTimeout(() => {
         void expandViewportBoundary();
-      }, 600);
+      }, 1000);
     });
   }
 
@@ -767,7 +771,7 @@
     }
 
     const ext = cy.extent();
-    const margin = Math.min(ext.w, ext.h) * 0.18;
+    const margin = Math.min(ext.w, ext.h) * 0.25;
 
     const nearBoundary = cy
       .nodes()
@@ -783,7 +787,7 @@
       .filter((entry) => entry.isNear && entry.type === 'person')
       .map((entry) => entry.id)
       .filter((id) => !expandedNodeIds.has(id) && !loadingNodeIds.has(id))
-      .slice(0, 3);
+      .slice(0, 1);
 
     for (const nodeId of nearBoundary) {
       await expandFromNode(nodeId, false);
