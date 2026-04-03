@@ -19,14 +19,24 @@ struct ImportAcceptedResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct ImportWarningDetailResponse {
+    code: String,
+    title: String,
+    counts: std::collections::BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct ImportJobStatusResponse {
     job_id: String,
     status: String,
     progress_pct: u8,
     entities_imported: Option<usize>,
+    entities_imported_by_type: Option<std::collections::BTreeMap<String, usize>>,
     errors: Vec<String>,
     warnings: Vec<String>,
+    warning_details: Vec<ImportWarningDetailResponse>,
+    log_messages: Vec<String>,
     completed_at: Option<String>,
 }
 
@@ -93,6 +103,18 @@ async fn import_kennedy_gedcom_completes_and_reports_entities() {
         status.errors
     );
     assert!(status.entities_imported.unwrap_or(0) > 0);
+    let counts = status
+        .entities_imported_by_type
+        .expect("completed import should include entity counts by type");
+    assert!(counts.get("person").copied().unwrap_or(0) > 0);
+    assert!(counts.get("family").copied().unwrap_or(0) > 0);
+    assert!(
+        status
+            .log_messages
+            .iter()
+            .any(|message| message.contains("Import completed")),
+        "completed import should include final log message"
+    );
 
     server.shutdown().await.expect("shutdown server");
 }
@@ -147,6 +169,85 @@ async fn invalid_gedcom_import_fails_as_job_not_http_500() {
     assert!(
         !status.errors.is_empty(),
         "failed job should expose at least one error"
+    );
+    assert!(
+        status
+            .log_messages
+            .iter()
+            .any(|message| message.contains("Import failed")),
+        "failed import should include failure log message"
+    );
+
+    server.shutdown().await.expect("shutdown server");
+}
+
+#[tokio::test]
+async fn import_status_surfaces_warning_details_for_unhandled_tags() {
+    let backend = in_memory_backend();
+    let state = AppState::with_default_cors_sqlite(backend, 0).expect("build app state");
+
+    let server = start_server(state, 0).await.expect("start server");
+
+    let content = "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Test /Person/\n1 SEX M\n1 _CUSTOM should-survive\n0 TRLR\n";
+    let part = reqwest::multipart::Part::text(content.to_string()).file_name("warning.ged");
+    let form = reqwest::multipart::Form::new()
+        .text("format", "gedcom")
+        .part("file", part);
+
+    let client = reqwest::Client::new();
+    let accepted = client
+        .post(format!("http://{}/api/v1/import", server.local_addr))
+        .multipart(form)
+        .send()
+        .await
+        .expect("post import request");
+
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let body: ImportAcceptedResponse = accepted.json().await.expect("parse accepted body");
+
+    let mut completed: Option<ImportJobStatusResponse> = None;
+    for _ in 0..300 {
+        let response = client
+            .get(format!(
+                "http://{}/api/v1/import/{}",
+                server.local_addr, body.job_id
+            ))
+            .send()
+            .await
+            .expect("poll import status");
+        assert_eq!(response.status(), StatusCode::OK);
+        let status: ImportJobStatusResponse = response.json().await.expect("parse status body");
+
+        if status.status == "completed" || status.status == "failed" {
+            completed = Some(status);
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let status = completed.expect("import job should complete or fail within poll budget");
+    assert_eq!(
+        status.status, "completed",
+        "job errors: {:?}",
+        status.errors
+    );
+    assert!(
+        status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Unhandled custom GEDCOM tags")),
+        "warnings should mention custom GEDCOM tags"
+    );
+    let custom_detail = status
+        .warning_details
+        .iter()
+        .find(|detail| detail.code == "unhandled_custom_tags")
+        .expect("warning details should include custom tag counts");
+    assert_eq!(custom_detail.title, "Unhandled custom GEDCOM tags");
+    assert!(
+        custom_detail.counts.get("_CUSTOM").copied().unwrap_or(0) >= 1,
+        "custom tag should be counted in warning details"
     );
 
     server.shutdown().await.expect("shutdown server");

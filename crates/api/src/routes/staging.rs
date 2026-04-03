@@ -21,6 +21,10 @@ struct StagingListQuery {
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
+    entity_id: Option<String>,
+    #[serde(default)]
+    entity_type: Option<String>,
+    #[serde(default)]
     limit: Option<u32>,
     #[serde(default)]
     offset: Option<u32>,
@@ -90,8 +94,16 @@ async fn list_staging(
     Query(query): Query<StagingListQuery>,
 ) -> Result<Json<Vec<StagingProposalResponse>>, ApiError> {
     let filter = StagingProposalFilter {
-        entity_id: None,
-        entity_type: None,
+        entity_id: query
+            .entity_id
+            .as_deref()
+            .map(parse_entity_id)
+            .transpose()?,
+        entity_type: query
+            .entity_type
+            .as_deref()
+            .map(parse_entity_type)
+            .transpose()?,
         status: parse_staging_status(query.status.as_deref())?,
     };
 

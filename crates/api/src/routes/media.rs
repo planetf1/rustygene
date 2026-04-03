@@ -1,18 +1,21 @@
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Multipart, Path as AxumPath, Query, State};
 use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use image::ImageFormat;
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
+use rustygene_core::event::Event;
 use rustygene_core::evidence::{DimensionsPx, Media};
+use rustygene_core::person::Person;
 use rustygene_core::types::{ActorRef, EntityId};
 use rustygene_storage::{EntityType, JsonAssertion, Pagination};
 use serde::Deserialize;
@@ -89,17 +92,31 @@ struct EntityPath {
     entity_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct UpdateMediaTextRequest {
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MediaLinkResponse {
+    entity_id: EntityId,
+    entity_type: String,
+    display_name: String,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_media).post(upload_media))
         .route("/albums", get(list_albums).post(create_album))
         .route("/albums/:album_id/items", post(add_album_items))
         .route("/:id", get(get_media).delete(delete_media_record))
+        .route("/:id/links", get(get_media_links))
+        .route("/:id/text", put(update_media_text))
         .route("/:id/tags", post(add_media_tag))
         .route("/:id/tags/:tag", axum::routing::delete(remove_media_tag))
         .route("/:id/file", get(download_media_file))
         .route("/:id/thumbnail", get(get_thumbnail))
-        .route("/:id/extract", get(trigger_extract))
+        .route("/:id/extract", get(trigger_extract).post(trigger_extract))
 }
 
 pub fn entity_router() -> Router<AppState> {
@@ -433,6 +450,40 @@ async fn get_media(
     Ok(Json(media))
 }
 
+async fn get_media_links(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Vec<MediaLinkResponse>>, ApiError> {
+    let media_id = parse_entity_id(&id)?;
+    let _ = state.storage.get_media(media_id).await?;
+    Ok(Json(load_media_links(&state, media_id).await?))
+}
+
+async fn update_media_text(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<UpdateMediaTextRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let media_id = parse_entity_id(&id)?;
+    let mut media = state.storage.get_media(media_id).await?;
+    let text = request.text.trim();
+
+    if text.is_empty() {
+        return Err(ApiError::BadRequest(
+            "OCR text must not be empty".to_string(),
+        ));
+    }
+
+    media.ocr_text = Some(text.to_string());
+    state.storage.update_media(&media).await?;
+    state.publish_entity_updated("media", media_id, "user:api");
+
+    Ok(Json(json!({
+        "id": media_id,
+        "ocr_text": media.ocr_text
+    })))
+}
+
 async fn download_media_file(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
@@ -476,9 +527,24 @@ async fn get_thumbnail(
     stream_file(temp_path, "image/jpeg", &format!("thumb-{}.jpg", media.id)).await
 }
 
-async fn trigger_extract(AxumPath(id): AxumPath<String>) -> Result<impl IntoResponse, ApiError> {
+async fn trigger_extract(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<impl IntoResponse, ApiError> {
     let media_id = parse_entity_id(&id)?;
+    let _ = state.storage.get_media(media_id).await?;
     let job_id = EntityId::new();
+
+    let state_for_task = state.clone();
+    tokio::spawn(async move {
+        if let Err(err) = complete_extract_job(state_for_task, media_id).await {
+            tracing::warn!(
+                "media extract job failed for {}: {}",
+                media_id,
+                err.message()
+            );
+        }
+    });
 
     Ok((
         StatusCode::ACCEPTED,
@@ -488,6 +554,27 @@ async fn trigger_extract(AxumPath(id): AxumPath<String>) -> Result<impl IntoResp
             "status": "queued"
         })),
     ))
+}
+
+async fn complete_extract_job(state: AppState, media_id: EntityId) -> Result<(), ApiError> {
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut media = state.storage.get_media(media_id).await?;
+    let generated_text = generate_ocr_text(&media);
+    if media
+        .ocr_text
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        media.ocr_text = Some(generated_text);
+        state.storage.update_media(&media).await?;
+    }
+
+    create_suggested_link_proposals(&state, &media).await?;
+    state.publish_entity_updated("media", media_id, "agent:ocr");
+    Ok(())
 }
 
 async fn delete_media_record(
@@ -626,6 +713,171 @@ async fn list_linked_media_ids(
     Ok(linked_ids)
 }
 
+async fn load_media_links(
+    state: &AppState,
+    media_id: EntityId,
+) -> Result<Vec<MediaLinkResponse>, ApiError> {
+    let Some(backend) = state.sqlite_backend.clone() else {
+        return Ok(Vec::new());
+    };
+
+    let raw_links = backend
+        .with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT entity_id, entity_type
+                     FROM assertions
+                     WHERE field = 'media_ref'
+                       AND status = 'confirmed'
+                       AND sandbox_id IS NULL
+                       AND json_extract(value, '$.media_id') = ?",
+                )
+                .map_err(|e| rustygene_storage::StorageError {
+                    code: rustygene_storage::StorageErrorCode::Backend,
+                    message: format!("prepare media links query failed: {e}"),
+                })?;
+
+            let rows = stmt
+                .query_map(rusqlite::params![media_id.to_string()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| rustygene_storage::StorageError {
+                    code: rustygene_storage::StorageErrorCode::Backend,
+                    message: format!("query media links failed: {e}"),
+                })?;
+
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| rustygene_storage::StorageError {
+                    code: rustygene_storage::StorageErrorCode::Backend,
+                    message: format!("collect media links failed: {e}"),
+                })
+        })
+        .map_err(ApiError::from)?;
+
+    let mut resolved = Vec::new();
+    for (entity_id_raw, entity_type_raw) in raw_links {
+        let entity_id = parse_entity_id(&entity_id_raw)?;
+        let entity_type = entity_type_raw.to_ascii_lowercase();
+        let display_name = display_name_for_entity(state, entity_id, &entity_type).await?;
+        resolved.push(MediaLinkResponse {
+            entity_id,
+            entity_type,
+            display_name,
+        });
+    }
+
+    Ok(resolved)
+}
+
+async fn create_suggested_link_proposals(state: &AppState, media: &Media) -> Result<(), ApiError> {
+    let linked = load_media_links(state, media.id).await?;
+    let mut suggestions = Vec::<MediaLinkResponse>::new();
+    let mut seen = std::collections::BTreeSet::<String>::new();
+
+    for link in linked {
+        let dedupe = format!("{}:{}", link.entity_type, link.entity_id);
+        if seen.insert(dedupe) {
+            suggestions.push(link);
+        }
+    }
+
+    let event_links = suggestions
+        .iter()
+        .filter(|link| link.entity_type == "event")
+        .map(|link| link.entity_id)
+        .collect::<Vec<_>>();
+    for event_id in event_links {
+        if let Ok(event) = state.storage.get_event(event_id).await {
+            for participant in event.participants {
+                if let Ok(person) = state.storage.get_person(participant.person_id).await {
+                    let display_name = person_display_name(&person);
+                    let key = format!("person:{}", participant.person_id);
+                    if seen.insert(key) {
+                        suggestions.push(MediaLinkResponse {
+                            entity_id: participant.person_id,
+                            entity_type: "person".to_string(),
+                            display_name,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if suggestions.is_empty() {
+        let caption = media
+            .caption
+            .clone()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let tokens = caption
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .filter(|token| token.len() >= 3)
+            .collect::<Vec<_>>();
+        if !tokens.is_empty() {
+            for person in state
+                .storage
+                .list_persons(Pagination {
+                    limit: 100,
+                    offset: 0,
+                })
+                .await?
+            {
+                let display_name = person_display_name(&person);
+                let display_lower = display_name.to_ascii_lowercase();
+                if tokens.iter().any(|token| display_lower.contains(token)) {
+                    let key = format!("person:{}", person.id);
+                    if seen.insert(key) {
+                        suggestions.push(MediaLinkResponse {
+                            entity_id: person.id,
+                            entity_type: "person".to_string(),
+                            display_name,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    for suggestion in suggestions.into_iter().take(8) {
+        let confidence = match suggestion.entity_type.as_str() {
+            "event" => 0.9,
+            "family" => 0.82,
+            _ => 0.78,
+        };
+        let assertion = JsonAssertion {
+            id: EntityId::new(),
+            value: json!({
+                "entity_id": suggestion.entity_id,
+                "entity_type": suggestion.entity_type,
+                "display_name": suggestion.display_name,
+                "confidence": confidence,
+            }),
+            confidence,
+            status: AssertionStatus::Proposed,
+            evidence_type: EvidenceType::Direct,
+            source_citations: Vec::new(),
+            proposed_by: ActorRef::Agent("ocr".to_string()),
+            created_at: Utc::now(),
+            reviewed_at: None,
+            reviewed_by: None,
+        };
+
+        let _ = state
+            .storage
+            .submit_staging_proposal(
+                media.id,
+                EntityType::Media,
+                "suggested_link",
+                &assertion,
+                "agent:ocr",
+            )
+            .await?;
+    }
+
+    Ok(())
+}
+
 async fn resolve_entity_type(
     state: &AppState,
     entity_id: EntityId,
@@ -662,6 +914,59 @@ async fn resolve_entity_type(
     }
 
     Err(ApiError::NotFound(format!("entity not found: {entity_id}")))
+}
+
+async fn display_name_for_entity(
+    state: &AppState,
+    entity_id: EntityId,
+    entity_type: &str,
+) -> Result<String, ApiError> {
+    match entity_type {
+        "person" => Ok(person_display_name(
+            &state.storage.get_person(entity_id).await?,
+        )),
+        "family" => Ok(format!("Family {entity_id}")),
+        "event" => Ok(display_name_for_event(
+            &state.storage.get_event(entity_id).await?,
+        )),
+        "source" => Ok(state.storage.get_source(entity_id).await?.title),
+        "repository" => Ok(state.storage.get_repository(entity_id).await?.name),
+        "note" => Ok(format!("Note {entity_id}")),
+        _ => Ok(format!("{} {}", entity_type, entity_id)),
+    }
+}
+
+fn person_display_name(person: &Person) -> String {
+    let primary = person.primary_name();
+    let surname = primary
+        .surnames
+        .first()
+        .map(|value| value.value.as_str())
+        .unwrap_or("Unknown");
+    format!("{} {}", primary.given_names, surname)
+        .trim()
+        .to_string()
+}
+
+fn display_name_for_event(event: &Event) -> String {
+    format!("{:?} {}", event.event_type, event.id)
+}
+
+fn generate_ocr_text(media: &Media) -> String {
+    let label = media
+        .caption
+        .clone()
+        .unwrap_or_else(|| format!("media {}", media.id));
+    let dimensions = media
+        .dimensions_px
+        .as_ref()
+        .map(|value| format!("{}×{} px", value.width, value.height))
+        .unwrap_or_else(|| "dimensions unavailable".to_string());
+
+    format!(
+        "Extracted text preview for {label}.\n\nType: {}\nDimensions: {dimensions}\n\nThis OCR draft was generated by the local document viewer workflow. Review and correct it before linking assertions.",
+        media.mime_type,
+    )
 }
 
 async fn find_media_by_hash(

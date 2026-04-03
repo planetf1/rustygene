@@ -32,6 +32,13 @@ use crate::errors::ApiError;
 use crate::{AppState, DomainEvent};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportWarningDetail {
+    pub code: String,
+    pub title: String,
+    pub counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportJobState {
     Queued,
@@ -46,8 +53,11 @@ pub struct ImportJobStatus {
     pub status: ImportJobState,
     pub progress_pct: u8,
     pub entities_imported: Option<usize>,
+    pub entities_imported_by_type: Option<BTreeMap<String, usize>>,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
+    pub warning_details: Vec<ImportWarningDetail>,
+    pub log_messages: Vec<String>,
     pub completed_at: Option<DateTime<Utc>>,
 }
 
@@ -87,7 +97,14 @@ struct BundleManifest {
     files: Vec<String>,
 }
 
-type ImportSummary = (usize, BTreeMap<String, usize>, Vec<String>);
+#[derive(Debug)]
+struct ImportExecutionSummary {
+    entities_imported: usize,
+    entities_imported_by_type: BTreeMap<String, usize>,
+    warnings: Vec<String>,
+    warning_details: Vec<ImportWarningDetail>,
+    log_messages: Vec<String>,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -106,6 +123,7 @@ async fn start_import(
 ) -> Result<impl IntoResponse, ApiError> {
     let mut import_format: Option<ImportFormat> = None;
     let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_name: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -124,6 +142,7 @@ async fn start_import(
                 import_format = Some(parse_import_format(&raw)?);
             }
             "file" => {
+                file_name = field.file_name().map(ToString::to_string);
                 let bytes = field.bytes().await.map_err(|err| {
                     ApiError::BadRequest(format!("failed to read file field: {err}"))
                 })?;
@@ -143,8 +162,11 @@ async fn start_import(
         status: ImportJobState::Queued,
         progress_pct: 0,
         entities_imported: None,
+        entities_imported_by_type: None,
         errors: Vec::new(),
         warnings: Vec::new(),
+        warning_details: Vec::new(),
+        log_messages: vec!["Import queued.".to_string()],
         completed_at: None,
     };
 
@@ -156,11 +178,23 @@ async fn start_import(
     let jobs = state.import_jobs.clone();
     let sqlite_backend = state.sqlite_backend.clone();
     let event_bus = state.event_bus.clone();
+    let submitted_file_name = file_name.clone();
 
     tokio::spawn(async move {
         update_job(&jobs, job_id, |status| {
             status.status = ImportJobState::Running;
-            status.progress_pct = 10;
+            status.progress_pct = 15;
+            if let Some(name) = &submitted_file_name {
+                status.log_messages.push(format!("Selected file: {name}"));
+            }
+            status
+                .log_messages
+                .push(format!("Detected format: {}", import_format_label(format)));
+            status.log_messages.push(match format {
+                ImportFormat::Gedcom => "Parsing GEDCOM file...".to_string(),
+                ImportFormat::Json => "Parsing JSON import payload...".to_string(),
+                ImportFormat::GrampsXml => "Preparing Gramps XML import...".to_string(),
+            });
         })
         .await;
 
@@ -171,6 +205,9 @@ async fn start_import(
                 status
                     .errors
                     .push("sqlite backend not available for import/export".to_string());
+                status.log_messages.push(
+                    "Import failed: sqlite backend not available for import/export.".to_string(),
+                );
                 status.completed_at = Some(Utc::now());
             })
             .await;
@@ -187,19 +224,27 @@ async fn start_import(
         .await;
 
         match result {
-            Ok(Ok((entities_imported, entities_imported_by_type, warnings))) => {
+            Ok(Ok(summary)) => {
                 update_job(&jobs, job_id, |status| {
                     status.status = ImportJobState::Completed;
                     status.progress_pct = 100;
-                    status.entities_imported = Some(entities_imported);
-                    status.warnings = warnings.clone();
+                    status.entities_imported = Some(summary.entities_imported);
+                    status.entities_imported_by_type =
+                        Some(summary.entities_imported_by_type.clone());
+                    status.warnings = summary.warnings.clone();
+                    status.warning_details = summary.warning_details.clone();
+                    status.log_messages.extend(summary.log_messages.clone());
+                    status.log_messages.push(format!(
+                        "Import completed: {} total entities.",
+                        summary.entities_imported
+                    ));
                     status.completed_at = Some(Utc::now());
                 })
                 .await;
 
                 let _ = event_bus.send(DomainEvent::ImportCompleted {
                     job_id,
-                    entities_imported: entities_imported_by_type,
+                    entities_imported: summary.entities_imported_by_type,
                     timestamp: Utc::now().to_rfc3339(),
                 });
             }
@@ -208,6 +253,9 @@ async fn start_import(
                     status.status = ImportJobState::Failed;
                     status.progress_pct = 100;
                     status.errors.push(err.message());
+                    status
+                        .log_messages
+                        .push(format!("Import failed: {}", err.message()));
                     status.completed_at = Some(Utc::now());
                 })
                 .await;
@@ -219,6 +267,9 @@ async fn start_import(
                     status
                         .errors
                         .push(format!("import task join error: {join_err}"));
+                    status
+                        .log_messages
+                        .push(format!("Import failed: import task join error: {join_err}"));
                     status.completed_at = Some(Utc::now());
                 })
                 .await;
@@ -297,7 +348,7 @@ fn run_gedcom_import(
     backend: &SqliteBackend,
     job_id: Uuid,
     input: &[u8],
-) -> Result<ImportSummary, ApiError> {
+) -> Result<ImportExecutionSummary, ApiError> {
     let text = std::str::from_utf8(input)
         .map_err(|err| ApiError::BadRequest(format!("GEDCOM file must be UTF-8 text: {err}")))?;
 
@@ -317,23 +368,59 @@ fn run_gedcom_import(
         .collect::<BTreeMap<_, _>>();
 
     let mut warnings = Vec::new();
+    let mut warning_details = Vec::new();
     if !report.deferred_standard_tags.is_empty() {
         warnings.push(format!(
-            "deferred standard GEDCOM tags encountered: {}",
+            "Unhandled standard GEDCOM tags: {} distinct tag(s)",
             report.deferred_standard_tags.len()
         ));
+        warning_details.push(ImportWarningDetail {
+            code: "deferred_standard_tags".to_string(),
+            title: "Unhandled standard GEDCOM tags".to_string(),
+            counts: report.deferred_standard_tags.clone(),
+        });
     }
     if !report.unhandled_tags.is_empty() {
         warnings.push(format!(
-            "unhandled custom GEDCOM tags encountered: {}",
+            "Unhandled custom GEDCOM tags: {} distinct tag(s)",
             report.unhandled_tags.len()
+        ));
+        warning_details.push(ImportWarningDetail {
+            code: "unhandled_custom_tags".to_string(),
+            title: "Unhandled custom GEDCOM tags".to_string(),
+            counts: report.unhandled_tags.clone(),
+        });
+    }
+
+    let mut log_messages = vec!["GEDCOM parsing complete.".to_string()];
+    log_messages.push(format!(
+        "Imported entities by type: {}",
+        format_counts_inline(&entities_imported_by_type)
+    ));
+    if !warning_details.is_empty() {
+        log_messages.push(format!(
+            "Warnings recorded: {}",
+            warning_details
+                .iter()
+                .map(|detail| format!("{} ({})", detail.title, detail.counts.len()))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
 
-    Ok((entities_imported, entities_imported_by_type, warnings))
+    Ok(ImportExecutionSummary {
+        entities_imported,
+        entities_imported_by_type,
+        warnings,
+        warning_details,
+        log_messages,
+    })
 }
 
-fn run_json_import(backend: &SqliteBackend, input: &[u8]) -> Result<ImportSummary, ApiError> {
+fn run_json_import(
+    backend: &SqliteBackend,
+    input: &[u8],
+) -> Result<ImportExecutionSummary, ApiError> {
     let file_path = write_temp_payload("json", input)?;
     let report = backend
         .import_json_dump(JsonImportMode::SingleFile {
@@ -352,7 +439,19 @@ fn run_json_import(backend: &SqliteBackend, input: &[u8]) -> Result<ImportSummar
         .map(|(k, v)| (k.to_string(), *v))
         .collect::<BTreeMap<_, _>>();
 
-    Ok((entities_imported, entities_imported_by_type, Vec::new()))
+    Ok(ImportExecutionSummary {
+        entities_imported,
+        entities_imported_by_type: entities_imported_by_type.clone(),
+        warnings: Vec::new(),
+        warning_details: Vec::new(),
+        log_messages: vec![
+            "JSON import parsing complete.".to_string(),
+            format!(
+                "Imported entities by type: {}",
+                format_counts_inline(&entities_imported_by_type)
+            ),
+        ],
+    })
 }
 
 fn export_gedcom_bytes(backend: &SqliteBackend, redact_living: bool) -> Result<Vec<u8>, ApiError> {
@@ -524,6 +623,22 @@ fn parse_import_format(raw: &str) -> Result<ImportFormat, ApiError> {
             "unsupported import format: {other}"
         ))),
     }
+}
+
+fn import_format_label(format: ImportFormat) -> &'static str {
+    match format {
+        ImportFormat::Gedcom => "GEDCOM 5.5.1",
+        ImportFormat::GrampsXml => "Gramps XML",
+        ImportFormat::Json => "JSON",
+    }
+}
+
+fn format_counts_inline(counts: &BTreeMap<String, usize>) -> String {
+    counts
+        .iter()
+        .map(|(label, count)| format!("{label}: {count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 async fn update_job<F>(

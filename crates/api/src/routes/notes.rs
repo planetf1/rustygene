@@ -34,6 +34,10 @@ struct UpsertNoteRequest {
     linked_entity_id: Option<EntityId>,
     #[serde(default)]
     linked_entity_type: Option<String>,
+    #[serde(default)]
+    position_x_pct: Option<u8>,
+    #[serde(default)]
+    position_y_pct: Option<u8>,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +47,8 @@ struct NoteDetailResponse {
     note_type: NoteType,
     linked_entity_id: Option<EntityId>,
     linked_entity_type: Option<String>,
+    position_x_pct: Option<u8>,
+    position_y_pct: Option<u8>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -136,6 +142,8 @@ async fn create_note(
             entity_type_to_str(entity_type).to_string(),
         );
     }
+
+    apply_optional_annotation_position(&mut note, request.position_x_pct, request.position_y_pct)?;
 
     state.storage.create_note(&note).await?;
 
@@ -233,6 +241,8 @@ async fn update_note(
             .await?;
     }
 
+    apply_optional_annotation_position(&mut note, request.position_x_pct, request.position_y_pct)?;
+
     state.storage.update_note(&note).await?;
 
     Ok(Json(serde_json::json!({ "id": note_id })))
@@ -266,6 +276,14 @@ fn note_to_detail_response(note: Note) -> NoteDetailResponse {
         .and_then(|value| Uuid::parse_str(value).ok())
         .map(EntityId);
     let linked_entity_type = note._raw_gedcom.get("linked_entity_type").cloned();
+    let position_x_pct = note
+        ._raw_gedcom
+        .get("position_x_pct")
+        .and_then(|value| value.parse::<u8>().ok());
+    let position_y_pct = note
+        ._raw_gedcom
+        .get("position_y_pct")
+        .and_then(|value| value.parse::<u8>().ok());
 
     NoteDetailResponse {
         id: note.id,
@@ -273,6 +291,32 @@ fn note_to_detail_response(note: Note) -> NoteDetailResponse {
         note_type: note.note_type,
         linked_entity_id,
         linked_entity_type,
+        position_x_pct,
+        position_y_pct,
+    }
+}
+
+fn apply_optional_annotation_position(
+    note: &mut Note,
+    position_x_pct: Option<u8>,
+    position_y_pct: Option<u8>,
+) -> Result<(), ApiError> {
+    match (position_x_pct, position_y_pct) {
+        (None, None) => {
+            note._raw_gedcom.remove("position_x_pct");
+            note._raw_gedcom.remove("position_y_pct");
+            Ok(())
+        }
+        (Some(x), Some(y)) => {
+            note._raw_gedcom
+                .insert("position_x_pct".to_string(), x.to_string());
+            note._raw_gedcom
+                .insert("position_y_pct".to_string(), y.to_string());
+            Ok(())
+        }
+        _ => Err(ApiError::BadRequest(
+            "position_x_pct and position_y_pct must be provided together".to_string(),
+        )),
     }
 }
 
