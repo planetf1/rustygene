@@ -1,6 +1,6 @@
 <script lang="ts">
   import { appState, setSandboxMode } from '$lib/state.svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
 
   let recentOpen = true;
 
@@ -73,21 +73,21 @@
 
   <nav class="section" aria-label="Main navigation">
     {#each navItems as item}
-      <a class:selected={$page.url.pathname.startsWith(item.href)} href={item.href}>{item.label}</a>
+      <a class:selected={page.url.pathname.startsWith(item.href)} href={item.href}>{item.label}</a>
     {/each}
   </nav>
 
   <div class="section">
     <h2>Charts</h2>
     {#each chartItems as item}
-      <a class:selected={$page.url.pathname.startsWith(item.href)} href={item.href}>{item.label}</a>
+      <a class:selected={page.url.pathname.startsWith(item.href)} href={item.href}>{item.label}</a>
     {/each}
   </div>
 
   <div class="section" aria-label="Data transfer">
     <h2>Data Transfer</h2>
     {#each transferItems as item}
-      <a class:selected={$page.url.pathname.startsWith(item.href)} href={item.href}>{item.label}</a>
+      <a class:selected={page.url.pathname.startsWith(item.href)} href={item.href}>{item.label}</a>
     {/each}
   </div>
 

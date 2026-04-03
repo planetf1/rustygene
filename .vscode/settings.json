@@ -1,0 +1,6 @@
+{
+  "typescript.tsdk": "app/node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "svelte.enable-ts-plugin": true,
+  "svelte.plugin.typescript.enable": true
+}

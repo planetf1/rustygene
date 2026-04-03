@@ -3,7 +3,6 @@
   import Toolbar from '$lib/components/Toolbar.svelte';
   import { appState, restoreRecentItems, restoreSandboxState, setCurrentView } from '$lib/state.svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
   import { afterNavigate } from '$app/navigation';
   import { onMount } from 'svelte';
   import { initializeApiClient } from '$lib/api';
