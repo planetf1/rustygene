@@ -1,10 +1,12 @@
 # RustyGene Architecture
 
 This document describes the actual crate structure, module boundaries, and
-dependency relationships as built through Phase 1A.
+dependency relationships as built through Phase 1A and Phase 2.
 
 For the authoritative design intent, see `docs/INITIAL_SPEC.md`.
 For architectural decision records, see `docs/DECISIONS.md`.
+For historical Phase 1A review, see `docs/PHASE_1A_REVIEW.md`.
+For historical Phase 2 review, see `docs/PHASE_2_REVIEW.md`.
 
 ---
 
@@ -16,7 +18,13 @@ rustygene/
 │   ├── core/          Pure domain model (no IO)
 │   ├── storage/       SQLite persistence layer
 │   ├── gedcom/        GEDCOM 5.5.1 import/export
+│   ├── api/           Axum REST API + OpenAPI spec (utoipa)
 │   └── cli/           Command-line binary
+├── app/
+│   ├── src/           Svelte 5 frontend
+│   └── src-tauri/     Tauri desktop shell (embedded Axum server)
+├── spec/
+│   └── openapi.json   Generated OpenAPI specification
 └── testdata/
     └── gedcom/        Reference GEDCOM 5.5.1 files
 ```
@@ -24,19 +32,27 @@ rustygene/
 ### Dependency DAG
 
 ```
-cli  ─────────────────────────────┐
-     depends on                   │
-     ├─ gedcom                    │
-     │   depends on               │
-     │   ├─ storage               │
-     │   │   depends on           │
-     │   │   └─ core              │
-     │   └─ core                  │
-     └─ storage                   │
-         depends on               │
-         └─ core                  │
-                                  │
-core (no project deps)  ◄─────────┘
+app/src-tauri ─────────────────────┐
+     depends on                    │
+     ├─ api                        │
+     │   depends on                │
+     │   ├─ storage                │
+     │   │   depends on            │
+     │   │   └─ core               │
+     │   └─ core                   │
+     └─ storage                    │
+                                   │
+cli  ──────────────────────────────┤
+     depends on                    │
+     ├─ gedcom                     │
+     │   depends on                │
+     │   ├─ storage                │
+     │   │   depends on            │
+     │   │   └─ core               │
+     │   └─ core                   │
+     └─ storage                    │
+                                   │
+core (no project deps)  ◄──────────┘
 ```
 
 Dependency direction is strictly downward. `core` has zero internal project
@@ -169,12 +185,79 @@ The `rustygene` command-line binary. All commands are implemented in
 | `show person <id>` | Show person detail with assertions |
 | `show family <id>` | Show family detail |
 | `show event <id>` | Show event detail |
+| `show source <id>` | Show source detail |
+| `show citation <id>` | Show citation detail |
+| `show repository <id>` | Show repository detail |
+| `show note <id>` | Show note detail |
+| `show media <id>` | Show media detail |
 | `research-log add ...` | Add a research log entry |
 | `research-log list` | List research log entries |
+| `sandbox create ...` | Create a research sandbox |
+| `sandbox list` | List sandboxes |
+| `sandbox compare ...` | Compare sandbox vs trunk |
+| `staging list` | List staging queue proposals |
+| `staging accept <id>` | Accept a staging proposal |
+| `staging reject <id>` | Reject a staging proposal |
 | `rebuild-snapshots` | Rebuild all entity snapshots from the assertion table |
 
 **Dependencies:** `core`, `storage`, `gedcom`, `clap`, `rusqlite`, `uuid`,
 `tokio`
+
+### `crates/api`
+
+Axum REST API with OpenAPI spec auto-generation via `utoipa`.
+
+**Route modules:**
+| Module | Endpoints |
+|---|---|
+| `persons` | Full CRUD, assertions, timeline, families |
+| `families` | Full CRUD, assertions |
+| `events` | Full CRUD, assertions, participant management |
+| `sources` | Full CRUD |
+| `citations` | Full CRUD |
+| `repositories` | Full CRUD |
+| `media` | Full CRUD, albums, tags, OCR trigger, upload |
+| `notes` | Full CRUD |
+| `staging` | Proposal CRUD, approve/reject, bulk operations |
+| `research_log` | CRUD, filtering by person/result/date |
+| `search` | Multi-strategy (exact/FTS/phonetic/combined) |
+| `graph` | Ancestors, descendants, pedigree, path, network |
+| `import_export` | Multipart import, export (GEDCOM/JSON/Bundle) |
+| `events_sse` | Server-sent events for real-time updates |
+| `assertions` | CRUD for assertions |
+| `debug` | Health, metrics, logs, diagnostics bundle |
+
+**Infrastructure:**
+- OpenAPI spec at `GET /api/v1/openapi.json` (committed to `spec/openapi.json`)
+- CORS configured for Tauri origins
+- Request body size limits
+- Event bus (broadcast channel) for real-time updates
+- Domain event types: `EntityCreated`, `EntityUpdated`, etc.
+
+**Dependencies:** `core`, `storage`, `axum`, `utoipa`, `tower-http`,
+`serde_json`, `tokio`
+
+### `app/src-tauri`
+
+Tauri 2.x desktop shell. Starts the embedded Axum API server on app launch
+and communicates the API port to the Svelte frontend.
+
+**Tauri commands:**
+- `get_api_port` — returns the running API server port
+- `open_file_dialog` / `save_file_dialog` — native file dialogs
+- `read_binary_file` / `write_binary_file` — filesystem operations
+- `create_database_backup` / `restore_database_backup` — backup/restore
+
+### `app/src` (Svelte 5 Frontend)
+
+SvelteKit application with runes-based state management.
+
+**Key routes:** persons, families, events, sources, repositories, media,
+import, export, search, charts (pedigree/fan/graph), staging, research-log,
+debug.
+
+**Components:** PersonForm, FamilyForm, EventForm, CitationDetail,
+CitationPicker, AssertionList, NoteList, Sidebar, Toolbar.
 
 ---
 
@@ -222,15 +305,43 @@ Running all tests: `cargo test --workspace`
 
 ---
 
-## Remaining Phase 1A Work
+## Phase Status
 
-No open Phase 1A blockers remain.
+### Phase 1A (Core + GEDCOM + CLI) — COMPLETE
 
-## Phase 2+ Roadmap
+All spec sub-steps (§16.1) delivered. Gate test passes with full
+assertion-graph comparison. 212 Rust tests + 8 frontend tests passing.
+No open blockers.
 
-The following items are deferred beyond Phase 1A:
-- Full GEDCOM tag coverage: NOTE, REPO, OBJE, ASSO, CHAN
-- xref alias table for preserving original GEDCOM IDs
+### Phase 1B (GEDCOM Hardening) — PARTIALLY COMPLETE
+
+Corpus testing against 5 vendor GEDCOM files is in place. Remaining items:
+- NOTE records as typed entities (currently via `_raw_gedcom`)
+- Inline OBJE MediaRef linking
+- ASSO association records
+- Full-text search with phonetic/fuzzy matching (infrastructure exists but
+  not query-exposed in Phase 1A CLI)
 - Gramps XML import
-- Full-text search (FTS5) with phonetic/fuzzy matching
-- REST API layer
+- GEDCOM merge import (deterministic matching engine)
+
+### Phase 2 (Desktop App + REST API) — COMPLETE
+
+API backend with 16 route modules, OpenAPI spec, Tauri desktop shell,
+Svelte 5 frontend with import/export wizard, entity list/detail views,
+search, staging queue, and chart route skeletons. See `docs/PHASE_2_REVIEW.md`
+for delivery evidence.
+
+### Phase 3 (Sandboxes + Event Bus + Agent Infrastructure) — NOT STARTED
+
+Per `INITIAL_SPEC.md §16`:
+- Research sandbox UI (create/switch/compare/promote/discard)
+- Event bus (internal channels + SSE/polling) — SSE infrastructure exists
+- Staging queue review dashboard — basic implementation exists
+- Agent registry and management
+- Sandbox comparison + validator scoring
+- Negative evidence prompt workflow
+
+### Future Phases
+
+- **Phase 4:** FamilySearch/Discovery connectors, document processor agent, validator agent
+- **Phase 5:** Multi-user collaboration, PostgreSQL + S3, DNA integration
