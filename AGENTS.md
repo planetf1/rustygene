@@ -69,6 +69,8 @@ These rules exist because previous sessions closed beads with work incomplete. A
 
 Large beads SHOULD be split into smaller, independently deliverable pieces. This is encouraged — not a sign of failure. Smaller beads are easier to verify, harder to cheat, and produce cleaner commits.
 
+> **Junior agent tip:** If a bead description says "consider splitting" or spans API + frontend + storage, you SHOULD split it before writing any code. Create child beads with `bd create --parent <bead-id>` — one per layer (e.g., "storage + API" and "frontend UI"). Each child must pass `cargo test` / `npm run check` independently. This keeps your PRs reviewable and lets you close work incrementally instead of risking a monolithic failure.
+
 **When to split:**
 - A bead touches more than 2 crates or more than ~300 lines of new code.
 - A bead has acceptance criteria spanning multiple independent concerns (e.g., "fix import AND export AND gate test").
