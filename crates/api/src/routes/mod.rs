@@ -13,6 +13,7 @@ pub mod persons;
 pub mod places;
 pub mod repositories;
 pub mod research_log;
+pub mod sandboxes;
 pub mod search;
 pub mod sources;
 pub mod staging;

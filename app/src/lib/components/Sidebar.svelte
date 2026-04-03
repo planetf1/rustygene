@@ -13,6 +13,8 @@
     { href: '/repositories', label: 'Repositories' },
     { href: '/staging', label: 'Review Queue' },
     { href: '/research-log', label: 'Research Log' },
+    { href: '/sandboxes', label: 'Sandboxes' },
+    { href: '/backup', label: 'Backup' },
     { href: '/search', label: 'Search' },
     { href: '/debug', label: 'Debug' }
   ];
