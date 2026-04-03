@@ -8,6 +8,8 @@ use axum::{Json, Router};
 use chrono::Utc;
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
+use rustygene_core::evidence::CitationRef;
+use rustygene_core::types::{Calendar, DateValue, FuzzyDate};
 use rustygene_core::types::ActorRef;
 use rustygene_core::types::EntityId;
 use rustygene_storage::{EntityType, JsonAssertion, Pagination};
@@ -77,17 +79,19 @@ async fn list_events(
             .map(|a| a.assertion.confidence)
             .unwrap_or(0.8);
 
+        let citations = collect_event_citations(&assertions);
+
         response.push(EventDetailResponse {
             id: event.id,
             event_type: format!("{:?}", event.event_type),
-            date: event.date.as_ref().map(|d| format!("{:?}", d)),
+            date: event.date.as_ref().map(format_date_value),
             place_id: event.place_ref,
             participants: event
                 .participants
                 .iter()
                 .map(EventParticipantResponse::from)
                 .collect(),
-            citations: Vec::new(), // TODO: fetch from storage
+            citations,
             confidence,
         });
     }
@@ -106,7 +110,7 @@ async fn create_event(
     let event = Event {
         id: event_id,
         event_type,
-        date: None, // TODO: parse date
+        date: request.date.as_deref().map(parse_date_value),
         place_ref: request.place_id,
         participants: Vec::new(),
         description: request.description,
@@ -139,17 +143,19 @@ async fn get_event(
         .map(|a| a.assertion.confidence)
         .unwrap_or(0.8);
 
+    let citations = collect_event_citations(&assertions);
+
     Ok(Json(EventDetailResponse {
         id: event.id,
         event_type: format!("{:?}", event.event_type),
-        date: event.date.as_ref().map(|d| format!("{:?}", d)),
+        date: event.date.as_ref().map(format_date_value),
         place_id: event.place_ref,
         participants: event
             .participants
             .iter()
             .map(EventParticipantResponse::from)
             .collect(),
-        citations: Vec::new(), // TODO: fetch from storage
+        citations,
         confidence,
     }))
 }
@@ -171,6 +177,9 @@ async fn update_event(
     }
     if let Some(place_id) = request.place_id {
         event.place_ref = Some(place_id);
+    }
+    if let Some(date_str) = request.date {
+        event.date = Some(parse_date_value(&date_str));
     }
 
     state.storage.update_event(&event).await?;
@@ -359,4 +368,83 @@ fn parse_event_role(role_str: &str) -> Result<EventRole, ApiError> {
         "boarder" => Ok(EventRole::Boarder),
         custom => Ok(EventRole::Custom(custom.to_string())),
     }
+}
+
+fn parse_date_value(input: &str) -> DateValue {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return DateValue::Textual {
+            value: String::new(),
+        };
+    }
+
+    if let Some((year, month, day)) = parse_iso_parts(trimmed) {
+        return DateValue::Exact {
+            date: FuzzyDate::new(year, month, day),
+            calendar: Calendar::Gregorian,
+        };
+    }
+
+    DateValue::Textual {
+        value: trimmed.to_string(),
+    }
+}
+
+fn parse_iso_parts(value: &str) -> Option<(i32, Option<u8>, Option<u8>)> {
+    let segments: Vec<&str> = value.split('-').collect();
+    match segments.as_slice() {
+        [year] => Some((year.parse::<i32>().ok()?, None, None)),
+        [year, month] => Some((
+            year.parse::<i32>().ok()?,
+            Some(month.parse::<u8>().ok()?),
+            None,
+        )),
+        [year, month, day] => Some((
+            year.parse::<i32>().ok()?,
+            Some(month.parse::<u8>().ok()?),
+            Some(day.parse::<u8>().ok()?),
+        )),
+        _ => None,
+    }
+}
+
+fn format_date_value(date: &DateValue) -> String {
+    match date {
+        DateValue::Exact { date, .. }
+        | DateValue::Before { date, .. }
+        | DateValue::After { date, .. }
+        | DateValue::About { date, .. }
+        | DateValue::Tolerance { date, .. } => {
+            match (date.month, date.day) {
+                (Some(month), Some(day)) => format!("{:04}-{:02}-{:02}", date.year, month, day),
+                (Some(month), None) => format!("{:04}-{:02}", date.year, month),
+                (None, _) => format!("{:04}", date.year),
+            }
+        }
+        DateValue::Range { from, to, .. } => format!(
+            "{:04}-{:02}-{:02}/{:04}-{:02}-{:02}",
+            from.year,
+            from.month.unwrap_or(1),
+            from.day.unwrap_or(1),
+            to.year,
+            to.month.unwrap_or(12),
+            to.day.unwrap_or(31)
+        ),
+        DateValue::Quarter { year, quarter } => format!("Q{} {}", quarter, year),
+        DateValue::Textual { value } => value.clone(),
+    }
+}
+
+fn collect_event_citations(
+    assertions: &[rustygene_storage::FieldAssertion],
+) -> Vec<CitationRef> {
+    let mut citations: Vec<CitationRef> = Vec::new();
+    for record in assertions {
+        for citation in &record.assertion.source_citations {
+            if !citations.iter().any(|existing| existing == citation) {
+                citations.push(citation.clone());
+            }
+        }
+    }
+    citations
 }

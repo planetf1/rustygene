@@ -338,6 +338,20 @@
     void goto(`/persons/${rootPersonId}`);
   }
 
+  function onRootCircleKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onRootCircleClick();
+    }
+  }
+
+  function onArcKeydown(event: KeyboardEvent, node: ArcDatum): void {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onArcClick(node);
+    }
+  }
+
   function onArcHover(event: MouseEvent, node: ArcDatum): void {
     if (hideTooltipTimer) {
       clearTimeout(hideTooltipTimer);
@@ -500,7 +514,11 @@
           stroke="#1e3a8a"
           stroke-width="2"
           class="clickable"
+          role="button"
+          tabindex="0"
+          aria-label="Open root person"
           on:click={onRootCircleClick}
+          on:keydown={onRootCircleKeydown}
         />
         <text x="0" y="-4" text-anchor="middle" class="root-text">{rootPersonName || '?'}</text>
         <text x="0" y="14" text-anchor="middle" class="root-subtext">click centre</text>
@@ -514,10 +532,14 @@
             stroke-width="1.2"
             stroke-dasharray={arc.isPlaceholder ? '5 4' : 'none'}
             class={arc.personId ? 'clickable' : ''}
+            role="button"
+            tabindex={arc.personId ? 0 : -1}
+            aria-label={arc.personId ? `Open ${arc.displayName}` : `Placeholder ancestor slot ${arc.generation}-${arc.slot}`}
             on:mouseenter={(event) => onArcHover(event, arc)}
             on:mousemove={(event) => onArcHover(event, arc)}
             on:mouseleave={onArcLeave}
             on:click={() => onArcClick(arc)}
+            on:keydown={(event) => onArcKeydown(event, arc)}
           />
 
           {#if !arc.isPlaceholder}
@@ -538,6 +560,7 @@
     {#if tooltipOpen && tooltipNode}
       <div
         class="tooltip"
+        role="tooltip"
         style={`left:${tooltipX + 10}px;top:${tooltipY + 10}px;`}
         on:mouseenter={keepTooltipOpen}
         on:mouseleave={closeTooltipSoon}

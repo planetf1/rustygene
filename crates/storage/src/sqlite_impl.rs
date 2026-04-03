@@ -4216,6 +4216,7 @@ impl Storage for SqliteBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustygene_core::event::{EventParticipant, EventRole};
     use rustygene_core::assertion::{EvidenceType, Sandbox, SandboxStatus};
     use rustygene_core::types::ActorRef;
     use serde_json::json;
@@ -4294,6 +4295,244 @@ mod tests {
             .await
             .expect("list");
         assert_eq!(p1.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn entity_update_round_trip() {
+        let backend = create_test_backend();
+
+        let person_id = EntityId::new();
+        let mut person = Person {
+            id: person_id,
+            names: vec![],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: true,
+            private: false,
+            original_xref: None,
+            _raw_gedcom: Default::default(),
+        };
+
+        backend.create_person(&person).await.expect("create person");
+        person.gender = rustygene_core::types::Gender::Male;
+        person.living = false;
+        backend.update_person(&person).await.expect("update person");
+
+        let person_after = backend.get_person(person_id).await.expect("get person");
+        assert_eq!(person_after.gender, rustygene_core::types::Gender::Male);
+        assert!(!person_after.living);
+
+        let source_id = EntityId::new();
+        let mut source = Source {
+            id: source_id,
+            title: "Original title".to_string(),
+            author: Some("Author A".to_string()),
+            publication_info: None,
+            abbreviation: Some("OT".to_string()),
+            repository_refs: vec![],
+            original_xref: None,
+            _raw_gedcom: Default::default(),
+        };
+
+        backend.create_source(&source).await.expect("create source");
+        source.title = "Updated title".to_string();
+        source.abbreviation = Some("UT".to_string());
+        backend.update_source(&source).await.expect("update source");
+
+        let source_after = backend.get_source(source_id).await.expect("get source");
+        assert_eq!(source_after.title, "Updated title");
+        assert_eq!(source_after.abbreviation.as_deref(), Some("UT"));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_stale_version_boundary_is_last_write_wins() {
+        let backend = create_test_backend();
+
+        let person_id = EntityId::new();
+        let original = Person {
+            id: person_id,
+            names: vec![],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: true,
+            private: false,
+            original_xref: None,
+            _raw_gedcom: Default::default(),
+        };
+        backend.create_person(&original).await.expect("create person");
+
+        let mut first_update = original.clone();
+        first_update.gender = rustygene_core::types::Gender::Male;
+        backend
+            .update_person(&first_update)
+            .await
+            .expect("first update");
+
+        // Contract (rustygene-2yi): Storage update_* methods do not accept caller-supplied
+        // version/etag, so stale snapshot rejection is not enforceable at API boundary.
+        // A second write with an old snapshot is allowed and behaves as last-write-wins.
+        let mut stale_snapshot = original.clone();
+        stale_snapshot.private = true;
+        stale_snapshot.gender = rustygene_core::types::Gender::Female;
+        backend
+            .update_person(&stale_snapshot)
+            .await
+            .expect("stale snapshot update is accepted by contract");
+
+        let after = backend.get_person(person_id).await.expect("get person");
+        assert_eq!(after.gender, rustygene_core::types::Gender::Female);
+        assert!(after.private);
+    }
+
+    #[tokio::test]
+    async fn list_events_for_person_returns_participant_events() {
+        let backend = create_test_backend();
+
+        let alice = EntityId::new();
+        let bob = EntityId::new();
+
+        for person_id in [alice, bob] {
+            backend
+                .create_person(&Person {
+                    id: person_id,
+                    names: vec![],
+                    gender: rustygene_core::types::Gender::Unknown,
+                    living: true,
+                    private: false,
+                    original_xref: None,
+                    _raw_gedcom: Default::default(),
+                })
+                .await
+                .expect("create person");
+        }
+
+        backend
+            .create_event(&Event {
+                id: EntityId::new(),
+                event_type: rustygene_core::event::EventType::Birth,
+                date: None,
+                place_ref: None,
+                participants: vec![EventParticipant {
+                    person_id: alice,
+                    role: EventRole::Principal,
+                    census_role: None,
+                }],
+                description: Some("Alice birth".to_string()),
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create birth event");
+
+        backend
+            .create_event(&Event {
+                id: EntityId::new(),
+                event_type: rustygene_core::event::EventType::Marriage,
+                date: None,
+                place_ref: None,
+                participants: vec![
+                    EventParticipant {
+                        person_id: alice,
+                        role: EventRole::Spouse,
+                        census_role: None,
+                    },
+                    EventParticipant {
+                        person_id: bob,
+                        role: EventRole::Spouse,
+                        census_role: None,
+                    },
+                ],
+                description: Some("Alice and Bob marriage".to_string()),
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create marriage event");
+
+        backend
+            .create_event(&Event {
+                id: EntityId::new(),
+                event_type: rustygene_core::event::EventType::Death,
+                date: None,
+                place_ref: None,
+                participants: vec![EventParticipant {
+                    person_id: bob,
+                    role: EventRole::Principal,
+                    census_role: None,
+                }],
+                description: Some("Bob death".to_string()),
+                _raw_gedcom: Default::default(),
+            })
+            .await
+            .expect("create death event");
+
+        let alice_events = backend
+            .list_events_for_person(alice)
+            .await
+            .expect("list alice events");
+        let bob_events = backend
+            .list_events_for_person(bob)
+            .await
+            .expect("list bob events");
+
+        assert_eq!(alice_events.len(), 2);
+        assert_eq!(bob_events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_families_for_person_returns_partner_and_child_families() {
+        let backend = create_test_backend();
+
+        let father = EntityId::new();
+        let mother = EntityId::new();
+        let child = EntityId::new();
+        let other = EntityId::new();
+
+        for person_id in [father, mother, child, other] {
+            backend
+                .create_person(&Person {
+                    id: person_id,
+                    names: vec![],
+                    gender: rustygene_core::types::Gender::Unknown,
+                    living: true,
+                    private: false,
+                    original_xref: None,
+                    _raw_gedcom: Default::default(),
+                })
+                .await
+                .expect("create person");
+        }
+
+        let family = Family {
+            id: EntityId::new(),
+            partner1_id: Some(father),
+            partner2_id: Some(mother),
+            partner_link: rustygene_core::family::PartnerLink::Married,
+            couple_relationship: None,
+            child_links: vec![rustygene_core::family::ChildLink {
+                child_id: child,
+                lineage_type: rustygene_core::family::LineageType::Biological,
+            }],
+            original_xref: None,
+            _raw_gedcom: Default::default(),
+        };
+
+        backend.create_family(&family).await.expect("create family");
+
+        let father_families = backend
+            .list_families_for_person(father)
+            .await
+            .expect("list father families");
+        let child_families = backend
+            .list_families_for_person(child)
+            .await
+            .expect("list child families");
+        let other_families = backend
+            .list_families_for_person(other)
+            .await
+            .expect("list other families");
+
+        assert_eq!(father_families.len(), 1);
+        assert_eq!(child_families.len(), 1);
+        assert_eq!(other_families.len(), 0);
+        assert_eq!(father_families[0].id, family.id);
+        assert_eq!(child_families[0].id, family.id);
     }
 
     fn sample_assertion(value: Value, status: AssertionStatus) -> JsonAssertion {

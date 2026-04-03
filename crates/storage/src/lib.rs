@@ -219,6 +219,13 @@ pub struct FieldAssertion {
 /// Storage abstraction used by the core and API layers.
 ///
 /// Concrete backends (SQLite now, PostgreSQL later) implement this trait.
+///
+/// Concurrency contract:
+/// - `update_*` methods do not accept a caller-supplied version token / etag.
+/// - At this boundary, updates therefore behave as last-write-wins.
+/// - Backend implementations may still use internal row-version checks to keep
+///   single-statement writes consistent, but stale snapshot rejection is not an
+///   externally enforceable guarantee unless version parameters are added.
 #[async_trait::async_trait]
 pub trait Storage {
     async fn create_person(&self, person: &Person) -> Result<(), StorageError>;

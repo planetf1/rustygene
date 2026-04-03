@@ -133,6 +133,7 @@ async fn crud_roundtrip_for_person_family_event_source_repository_note_media() {
         .post(format!("{base}/api/v1/events"))
         .json(&serde_json::json!({
             "event_type": "Birth",
+            "date": "1901-02-03",
             "description": "Roundtrip event"
         }))
         .send()
@@ -152,12 +153,58 @@ async fn crud_roundtrip_for_person_family_event_source_repository_note_media() {
         .put(format!("{base}/api/v1/events/{event_id}"))
         .json(&serde_json::json!({
             "event_type": "Death",
+            "date": "1902-04",
             "description": "Updated roundtrip event"
         }))
         .send()
         .await
         .expect("update event");
     assert_eq!(event_update.status(), StatusCode::OK);
+
+    let citation_id = uuid::Uuid::new_v4().to_string();
+    let assertion_create = client
+        .post(format!("{base}/api/v1/events/{event_id}/assertions"))
+        .json(&serde_json::json!({
+            "field": "description",
+            "value": "Updated roundtrip event",
+            "source_citations": [
+                {
+                    "citation_id": citation_id,
+                    "note": "event source"
+                }
+            ]
+        }))
+        .send()
+        .await
+        .expect("create event assertion with citation");
+    assert_eq!(assertion_create.status(), StatusCode::CREATED);
+
+    let event_detail = client
+        .get(format!("{base}/api/v1/events/{event_id}"))
+        .send()
+        .await
+        .expect("get event detail");
+    assert_eq!(event_detail.status(), StatusCode::OK);
+    let event_detail_body: Value = event_detail.json().await.expect("event detail body");
+    assert_eq!(
+        event_detail_body
+            .get("date")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "1902-04"
+    );
+    let citations = event_detail_body
+        .get("citations")
+        .and_then(Value::as_array)
+        .expect("citations array");
+    assert!(
+        citations.iter().any(|row| {
+            row.get("citation_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id == citation_id)
+        }),
+        "event detail should include citation from assertions"
+    );
 
     // Family
     let partner2_id = create_person(client, base, "Partner", "Two").await;

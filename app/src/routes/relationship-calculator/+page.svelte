@@ -169,6 +169,7 @@
               <div
                 class="dropdown-item"
                 role="option"
+                aria-selected={result.entity_id === person1Id}
                 on:click={() => selectPerson1(result)}
                 on:keydown={(e) => e.key === 'Enter' && selectPerson1(result)}
                 tabindex="0"
@@ -207,6 +208,7 @@
               <div
                 class="dropdown-item"
                 role="option"
+                aria-selected={result.entity_id === person2Id}
                 on:click={() => selectPerson2(result)}
                 on:keydown={(e) => e.key === 'Enter' && selectPerson2(result)}
                 tabindex="0"

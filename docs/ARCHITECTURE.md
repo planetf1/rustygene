@@ -280,6 +280,16 @@ Entity snapshot tables (`persons`, `families`, etc.) store the materialised
 view of confirmed+preferred assertions for each entity, rebuilt on demand via
 `rebuild_all_snapshots()`.
 
+### Update Concurrency Contract
+
+Storage `update_*` methods currently do **not** accept caller-provided version
+tokens (etag/expected-version). Therefore, at the `Storage` trait boundary,
+updates are treated as **last-write-wins**.
+
+SQLite implementation still uses internal row-version fields to keep
+single-statement writes consistent, but stale-snapshot rejection is not a
+public guarantee unless version tokens are added to method signatures.
+
 ### Family and Relationship Storage
 
 `Family` and `Relationship` are stored in separate tables:
