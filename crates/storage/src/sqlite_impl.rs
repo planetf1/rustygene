@@ -1575,11 +1575,6 @@ impl SqliteBackend {
                     message: "Invalid audit log entry structure".to_string(),
                 })?;
 
-                let id = entry_obj
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| Uuid::new_v4().to_string());
                 let actor = entry_obj
                     .get("actor")
                     .and_then(|v| v.as_str())
@@ -1604,9 +1599,9 @@ impl SqliteBackend {
                     .unwrap_or("1970-01-01T00:00:00Z");
 
                 tx.execute(
-                    "INSERT OR REPLACE INTO audit_log (id, actor, entity_id, entity_type, action, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO audit_log (timestamp, actor, entity_id, entity_type, action, old_value, new_value) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     rusqlite::params![
-                        id,
+                        timestamp,
                         actor,
                         entity_id,
                         entity_type,
@@ -1614,7 +1609,6 @@ impl SqliteBackend {
                         // Only convert to string if the value is not null
                         old_value.and_then(|v| if v.is_null() { None } else { Some(v.to_string()) }),
                         new_value.and_then(|v| if v.is_null() { None } else { Some(v.to_string()) }),
-                        timestamp,
                     ],
                 )
                 .map_err(|e| StorageError {
