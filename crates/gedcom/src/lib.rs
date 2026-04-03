@@ -27,6 +27,7 @@ use rustygene_storage::{EntityType, JsonAssertion, run_migrations};
 use serde_json::{Value, json, to_value};
 use uuid::Uuid;
 
+pub mod diff;
 pub mod gramps;
 pub mod matching;
 
