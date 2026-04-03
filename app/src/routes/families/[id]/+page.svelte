@@ -181,10 +181,10 @@
 </script>
 
 {#if loading}
-  <p>Loading family detail…</p>
+  <p>Loading family profile…</p>
 {:else if error}
   <main class="panel">
-    <h1>Family detail</h1>
+    <h1>🏡 Family profile</h1>
     <p class="error">{error}</p>
   </main>
 {:else if detail}
@@ -195,13 +195,13 @@
         <p>ID: <code>{id}</code></p>
       </div>
       <div class="actions">
-        <button type="button" on:click={() => (showEdit = true)}>Edit</button>
-        <button type="button" class="danger" on:click={deleteFamily}>Delete</button>
+        <button type="button" on:click={() => (showEdit = true)}>Edit family</button>
+        <button type="button" class="danger" on:click={deleteFamily}>Remove family</button>
       </div>
     </header>
 
     <section>
-      <h2>Partners</h2>
+      <h2>💞 Partners</h2>
       <ul class="list">
         {#if detail.partner1}
           <li><button type="button" class="linkish" on:click={() => goto(`/persons/${detail?.partner1?.id ?? ''}`)}>{detail?.partner1?.display_name}</button> (partner)</li>
@@ -210,32 +210,32 @@
           <li><button type="button" class="linkish" on:click={() => goto(`/persons/${detail?.partner2?.id ?? ''}`)}>{detail?.partner2?.display_name}</button> (partner)</li>
         {/if}
         {#if !detail.partner1 && !detail.partner2}
-          <li>No partners linked.</li>
+          <li>No partners linked yet.</li>
         {/if}
       </ul>
 
       <div class="inline-actions">
         <select bind:value={selectedPartner}>
-          <option value="">Select person to add partner</option>
+          <option value="">Choose person to add as partner</option>
           {#each people as person}
             <option value={person.id}>{person.display_name}</option>
           {/each}
         </select>
-        <button type="button" on:click={addPartner} disabled={!selectedPartner}>Add partner</button>
+        <button type="button" on:click={addPartner} disabled={!selectedPartner}>Add partner 💛</button>
       </div>
     </section>
 
     <section>
-      <h2>Children</h2>
+      <h2>🧒 Children</h2>
       <ul class="list">
         {#if detail.children.length === 0}
-          <li>No children linked.</li>
+          <li>No children linked yet.</li>
         {:else}
           {#each detail.children as child}
             <li>
               <button type="button" class="linkish" on:click={() => goto(`/persons/${child.id}`)}>{child.display_name}</button>
               <span class="muted">({child.lineage_type})</span>
-              <button type="button" class="small danger" on:click={() => removeChild(child.id)}>Remove</button>
+              <button type="button" class="small danger" on:click={() => removeChild(child.id)}>Remove link</button>
             </li>
           {/each}
         {/if}
@@ -243,19 +243,19 @@
 
       <div class="inline-actions">
         <select bind:value={selectedChild}>
-          <option value="">Select person to add child</option>
+          <option value="">Choose person to add as child</option>
           {#each people as person}
             <option value={person.id}>{person.display_name}</option>
           {/each}
         </select>
-        <button type="button" on:click={addChild} disabled={!selectedChild}>Add child</button>
+        <button type="button" on:click={addChild} disabled={!selectedChild}>Add child 🌱</button>
       </div>
     </section>
 
     <section>
-      <h2>Events</h2>
+      <h2>📆 Events</h2>
       {#if detail.events.length === 0}
-        <p>No family events linked yet.</p>
+        <p>No family events yet — add one to capture milestones.</p>
       {:else}
         <ul class="list">
           {#each detail.events as event}
@@ -274,7 +274,7 @@
     </section>
 
     <section>
-      <h2>Source citations</h2>
+      <h2>📚 Source citations</h2>
       <p>Assertion distribution: {Object.entries(detail.assertion_counts).map(([k, v]) => `${k}:${v}`).join(', ') || 'none'}.</p>
     </section>
   </main>

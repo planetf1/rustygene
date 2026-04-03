@@ -154,10 +154,10 @@
 </script>
 
 {#if loading}
-  <p>Loading source detail…</p>
+  <p>Loading source profile…</p>
 {:else if error}
   <main class="panel">
-    <h1>Source detail</h1>
+    <h1>📚 Source profile</h1>
     <p class="error">{error}</p>
   </main>
 {:else if detail}
@@ -168,8 +168,8 @@
         <p>ID: <code>{detail.id}</code></p>
       </div>
       <div class="actions">
-        <button type="button" class="secondary" on:click={() => (editing = !editing)}>{editing ? 'Cancel' : 'Edit'}</button>
-        <button type="button" class="danger" disabled={deleting} on:click={removeSource}>{deleting ? 'Deleting…' : 'Delete'}</button>
+        <button type="button" class="secondary" on:click={() => (editing = !editing)}>{editing ? 'Close editor' : 'Edit source'}</button>
+        <button type="button" class="danger" disabled={deleting} on:click={removeSource}>{deleting ? 'Removing…' : 'Remove source'}</button>
       </div>
     </header>
 
@@ -186,14 +186,14 @@
           {/each}
         </select>
         <input bind:value={callNumber} placeholder="Call number" />
-        <button type="button" on:click={save} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button>
+        <button type="button" on:click={save} disabled={saving}>{saving ? 'Saving…' : 'Save updates ✨'}</button>
       </section>
     {/if}
 
     <section>
-      <h2>Repository links</h2>
+      <h2>🏛️ Repository links</h2>
       {#if detail.repository_refs.length === 0}
-        <p>No repositories linked.</p>
+        <p>No repositories linked yet.</p>
       {:else}
         <ul class="list">
           {#each detail.repository_refs as repoRef}
@@ -209,9 +209,9 @@
     </section>
 
     <section>
-      <h2>Citations</h2>
+      <h2>🧾 Citations</h2>
       {#if detail.citations.length === 0}
-        <p>No citations found for this source.</p>
+        <p>No citations yet — add one to connect this source to evidence.</p>
       {:else}
         <ul class="list">
           {#each detail.citations as citation}
@@ -229,6 +229,7 @@
     </section>
 
     <section>
+      <h2>📝 Notes</h2>
       <NoteList entityId={id} entityType="source" />
     </section>
   </main>

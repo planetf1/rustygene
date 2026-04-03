@@ -186,10 +186,10 @@
 </script>
 
 {#if loading}
-  <p>Loading person detail…</p>
+  <p>Loading person profile…</p>
 {:else if error}
   <main class="panel">
-    <h1>Person detail</h1>
+    <h1>👤 Person profile</h1>
     <p class="error">{error}</p>
   </main>
 {:else if detail}
@@ -203,22 +203,22 @@
         <p>ID: <code>{id}</code></p>
       </div>
       <div class="actions">
-        <button type="button" on:click={() => (showEdit = true)}>Edit</button>
+        <button type="button" on:click={() => (showEdit = true)}>Edit profile</button>
         <button type="button" class="danger" on:click={removePerson} disabled={deleting}>
-          {deleting ? 'Deleting…' : 'Delete'}
+          {deleting ? 'Removing…' : 'Remove person'}
         </button>
       </div>
     </header>
 
     <section>
       <AssertionList entityId={id} entityType="persons" assertions={assertionGroup} on:updated={loadDetail} />
-      <button type="button" class="secondary" on:click={() => (showEdit = true)}>Edit assertions</button>
+      <button type="button" class="secondary" on:click={() => (showEdit = true)}>Tidy assertions ✨</button>
     </section>
 
     <section>
-      <h2>Timeline</h2>
+      <h2>🕰️ Timeline</h2>
       {#if detail.events.length === 0}
-        <p>No events found.</p>
+        <p>No life events yet — add one to bring this timeline to life.</p>
       {:else}
         <ul class="list">
           {#each detail.events as event}
@@ -233,15 +233,15 @@
     </section>
 
     <section>
-      <h2>Families</h2>
+      <h2>🏡 Families</h2>
       {#if detail.families.length === 0}
-        <p>No family links found.</p>
+        <p>No family links yet — you can connect relationships from a family page.</p>
       {:else}
         <ul class="list">
           {#each detail.families as family}
             <li>
               <button type="button" class="linkish" on:click={() => goto(`/families/${family.id}`)}>
-                Family {family.id} ({family.your_role ?? 'related'})
+                Open family {family.id} ({family.your_role ?? 'related'})
               </button>
             </li>
           {/each}
@@ -250,9 +250,9 @@
     </section>
 
     <section>
-      <h2>Sources / Citations</h2>
+      <h2>📚 Sources & citations</h2>
       {#if flattenCitations().length === 0}
-        <p>No citations linked yet.</p>
+        <p>No citations linked yet — add evidence to strengthen this profile.</p>
       {:else}
         <ul class="list">
           {#each flattenCitations() as citation}
@@ -263,13 +263,13 @@
     </section>
 
     <section>
-      <h2>Notes</h2>
+      <h2>📝 Notes</h2>
       <NoteList entityId={id} entityType="person" />
     </section>
 
     <section>
-      <h2>Media</h2>
-      <p>Media thumbnails endpoint is stubbed in API. Placeholder ready.</p>
+      <h2>🖼️ Media</h2>
+      <p>Media gallery support is on deck — this section is ready when the endpoint lands.</p>
     </section>
   </main>
 
