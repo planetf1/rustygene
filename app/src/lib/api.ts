@@ -83,6 +83,44 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await response.json()) as T;
 }
 
+async function upload<T>(path: string, formData: FormData): Promise<T> {
+  incrementPendingRequests();
+  const url = buildUrl(path);
+
+  let response: Response;
+
+  try {
+    response = await fetch(url.toString(), {
+      method: 'POST',
+      body: formData
+    });
+  } finally {
+    decrementPendingRequests();
+  }
+
+  if (!response.ok) {
+    let payload: { message?: string; code?: string } | null = null;
+
+    try {
+      payload = (await response.json()) as { message?: string; code?: string };
+    } catch {
+      payload = null;
+    }
+
+    throw new ApiError(
+      payload?.message ?? `POST ${path} failed`,
+      payload?.code ?? 'request_failed',
+      response.status
+    );
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return (await response.json()) as T;
+}
+
 async function download(path: string): Promise<{ blob: Blob; fileName: string | null }> {
   incrementPendingRequests();
   const url = buildUrl(path);
@@ -125,6 +163,7 @@ async function download(path: string): Promise<{ blob: Blob; fileName: string | 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
+  postFormData: <T>(path: string, formData: FormData) => upload<T>(path, formData),
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
   download,
