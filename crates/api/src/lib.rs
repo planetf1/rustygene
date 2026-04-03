@@ -461,6 +461,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/v1/sources", routes::sources::router())
         .nest("/api/v1/citations", routes::citations::router())
         .nest("/api/v1/repositories", routes::repositories::router())
+        .nest("/api/v1/places", routes::places::router())
         .nest("/api/v1/notes", routes::notes::router())
         .nest("/api/v1/research-log", routes::research_log::router())
         .nest("/api/v1/media", routes::media::router())

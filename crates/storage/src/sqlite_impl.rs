@@ -1501,23 +1501,24 @@ impl SqliteBackend {
                     .get("action")
                     .and_then(|v| v.as_str())
                     .unwrap_or("import");
-                let old_value = entry_obj.get("old_value_json");
-                let new_value = entry_obj.get("new_value_json");
+                let old_value = entry_obj.get("old_value");
+                let new_value = entry_obj.get("new_value");
                 let timestamp = entry_obj
-                    .get("timestamp_iso")
+                    .get("timestamp")
                     .and_then(|v| v.as_str())
                     .unwrap_or("1970-01-01T00:00:00Z");
 
                 tx.execute(
-                    "INSERT OR REPLACE INTO audit_log (id, actor, entity_id, entity_type, action, old_value_json, new_value_json, timestamp_iso) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO audit_log (id, actor, entity_id, entity_type, action, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     rusqlite::params![
                         id,
                         actor,
                         entity_id,
                         entity_type,
                         action,
-                        old_value.map(|v| v.to_string()),
-                        new_value.map(|v| v.to_string()),
+                        // Only convert to string if the value is not null
+                        old_value.and_then(|v| if v.is_null() { None } else { Some(v.to_string()) }),
+                        new_value.and_then(|v| if v.is_null() { None } else { Some(v.to_string()) }),
                         timestamp,
                     ],
                 )

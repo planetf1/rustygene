@@ -9,6 +9,7 @@ pub mod import_export;
 pub mod media;
 pub mod notes;
 pub mod persons;
+pub mod places;
 pub mod repositories;
 pub mod research_log;
 pub mod search;

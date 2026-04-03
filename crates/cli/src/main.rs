@@ -3,7 +3,6 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
-mod gramps;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::types::Value as SqlValue;
@@ -15,7 +14,7 @@ use rustygene_core::person::Person;
 use rustygene_core::research::{ResearchLogEntry, SearchResult};
 use rustygene_core::types::EntityId;
 use rustygene_gedcom::{
-    ExportPrivacyPolicy, family_to_fam_node, import_gedcom_to_sqlite, media_to_obje_node,
+    ExportPrivacyPolicy, family_to_fam_node, gramps, import_gedcom_to_sqlite, media_to_obje_node,
     note_to_note_node, person_to_indi_node_with_policy, render_gedcom_file,
     repository_to_repo_node, source_to_sour_node,
 };

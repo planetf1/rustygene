@@ -42,6 +42,8 @@ struct SubmitStagingProposalRequest {
     source: Option<String>,
     #[serde(default)]
     submitted_by: Option<String>,
+    #[serde(default)]
+    evidence_type: Option<EvidenceType>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,7 +147,7 @@ async fn submit_staging(
         value: request.proposed_value,
         confidence,
         status: AssertionStatus::Proposed,
-        evidence_type: EvidenceType::Direct,
+        evidence_type: request.evidence_type.unwrap_or(EvidenceType::Direct),
         source_citations: Vec::new(),
         proposed_by: ActorRef::User(source.clone()),
         created_at: Utc::now(),

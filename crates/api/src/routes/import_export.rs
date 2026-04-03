@@ -15,7 +15,7 @@ use rustygene_core::evidence::{Media, Note, Repository, Source};
 use rustygene_core::family::Family;
 use rustygene_core::person::Person;
 use rustygene_gedcom::{
-    family_to_fam_node, import_gedcom_to_sqlite, media_to_obje_node, note_to_note_node,
+    family_to_fam_node, gramps, import_gedcom_to_sqlite, media_to_obje_node, note_to_note_node,
     person_to_indi_node_with_policy, render_gedcom_file, repository_to_repo_node,
     source_to_sour_node, ExportPrivacyPolicy, GedcomImportError,
 };
@@ -217,9 +217,7 @@ async fn start_import(
         let result = tokio::task::spawn_blocking(move || match format {
             ImportFormat::Gedcom => run_gedcom_import(&backend, job_id, &input),
             ImportFormat::Json => run_json_import(&backend, &input),
-            ImportFormat::GrampsXml => Err(ApiError::BadRequest(
-                "gramps_xml import is not yet implemented in API".to_string(),
-            )),
+            ImportFormat::GrampsXml => run_gramps_import(&backend, job_id, &input),
         })
         .await;
 
@@ -413,6 +411,47 @@ fn run_gedcom_import(
         entities_imported_by_type,
         warnings,
         warning_details,
+        log_messages,
+    })
+}
+
+fn run_gramps_import(
+    backend: &SqliteBackend,
+    job_id: Uuid,
+    input: &[u8],
+) -> Result<ImportExecutionSummary, ApiError> {
+    let text = std::str::from_utf8(input)
+        .map_err(|err| ApiError::BadRequest(format!("Gramps XML file must be UTF-8 text: {err}")))?;
+
+    let report = gramps::import_gramps_xml_to_sqlite(backend, &job_id.to_string(), text)
+        .map_err(|err| ApiError::InternalError(format!("Gramps import failed: {err}")))?;
+
+    let entities_imported = report
+        .entities_created_by_type
+        .values()
+        .copied()
+        .sum::<usize>();
+    let entities_imported_by_type = report
+        .entities_created_by_type
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut log_messages = vec!["Gramps XML parsing complete.".to_string()];
+    log_messages.push(format!(
+        "Imported entities by type: {}",
+        format_counts_inline(&entities_imported_by_type)
+    ));
+    log_messages.push(format!(
+        "Assertions created: {}",
+        report.assertions_created
+    ));
+
+    Ok(ImportExecutionSummary {
+        entities_imported,
+        entities_imported_by_type,
+        warnings: Vec::new(),
+        warning_details: Vec::new(),
         log_messages,
     })
 }
