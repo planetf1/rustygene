@@ -8,7 +8,7 @@ import {
 } from '$lib/sourceDrivenWorkflow';
 
 function createMockClient(): ApiClient {
-  return {
+  const client = {
     get: vi.fn(async (path: string) => {
       if (path === '/api/v1/persons/person-created/assertions') {
         return {
@@ -17,7 +17,7 @@ function createMockClient(): ApiClient {
       }
       return {};
     }),
-    post: vi.fn(async (path: string) => {
+    post: vi.fn(async (path: string, _body: unknown) => {
       if (path === '/api/v1/persons') {
         return { id: 'person-created' };
       }
@@ -29,8 +29,10 @@ function createMockClient(): ApiClient {
       }
       return { id: 'ok' };
     }),
-    put: vi.fn(async () => ({ id: 'ok' }))
+    put: vi.fn(async (_path: string, _body: unknown) => ({ id: 'ok' }))
   };
+
+  return client as unknown as ApiClient;
 }
 
 const citation = {
