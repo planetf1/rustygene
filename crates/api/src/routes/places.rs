@@ -36,7 +36,10 @@ struct UpsertPlaceRequest {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_places).post(create_place))
-        .route("/:id", get(get_place).put(update_place).delete(delete_place))
+        .route(
+            "/:id",
+            get(get_place).put(update_place).delete(delete_place),
+        )
 }
 
 async fn list_places(

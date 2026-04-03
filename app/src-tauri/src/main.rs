@@ -45,7 +45,7 @@ pub(crate) async fn bootstrap_embedded_api() -> Result<ServerHandle, String> {
 
     run_migrations(&mut connection).map_err(|err| format!("migration failure: {err}"))?;
 
-    let backend = Arc::new(SqliteBackend::new(connection));
+    let backend = Arc::new(SqliteBackend::new_with_path(connection, db_path.clone()));
     let app_state = AppState::with_default_cors_sqlite(backend, 0)
         .map_err(|err| format!("failed to create API state: {}", err.message()))?;
 

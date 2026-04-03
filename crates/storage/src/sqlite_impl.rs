@@ -28,6 +28,8 @@ use uuid::Uuid;
 /// SQLite-backed implementation of the Storage trait.
 pub struct SqliteBackend {
     connection: Arc<Mutex<Connection>>,
+    /// Path to the backing `.db` file.  `None` for in-memory databases.
+    pub db_path: Option<std::path::PathBuf>,
 }
 
 struct AssertionRowData {
@@ -65,7 +67,27 @@ impl SqliteBackend {
         tracing::debug!("opened sqlite backend connection");
         Self {
             connection: Arc::new(Mutex::new(connection)),
+            db_path: None,
         }
+    }
+
+    /// Construct a backend that knows its on-disk file path.
+    /// The path is used to derive the backup directory (`<db_dir>/backups/`).
+    pub fn new_with_path(connection: Connection, path: std::path::PathBuf) -> Self {
+        tracing::debug!(db_path = %path.display(), "opened sqlite backend connection");
+        Self {
+            connection: Arc::new(Mutex::new(connection)),
+            db_path: Some(path),
+        }
+    }
+
+    /// Returns the backup directory: `<db_dir>/backups/`.
+    /// Returns `None` for in-memory databases (no file path set).
+    pub fn backup_dir(&self) -> Option<std::path::PathBuf> {
+        self.db_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|parent| parent.join("backups"))
     }
 
     pub fn with_connection<T, F>(&self, operation: F) -> Result<T, StorageError>
@@ -501,10 +523,11 @@ impl SqliteBackend {
             })?
         };
 
-        let old_data_value: Value = serde_json::from_str(&old_data_str).map_err(|e| StorageError {
-            code: StorageErrorCode::Serialization,
-            message: format!("JSON parse failed: {}", e),
-        })?;
+        let old_data_value: Value =
+            serde_json::from_str(&old_data_str).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("JSON parse failed: {}", e),
+            })?;
 
         let now = chrono::Utc::now().to_rfc3339();
         let rows = conn
@@ -533,7 +556,14 @@ impl SqliteBackend {
         }
 
         // Wire audit log: log the update action with both old and new values
-        Self::append_audit_log_entry_tx(&conn, table, id, "update", Some(&old_data_value), Some(data))?;
+        Self::append_audit_log_entry_tx(
+            &conn,
+            table,
+            id,
+            "update",
+            Some(&old_data_value),
+            Some(data),
+        )?;
 
         Ok(())
     }
@@ -565,10 +595,11 @@ impl SqliteBackend {
                 })?
         };
 
-        let old_data_value: Value = serde_json::from_str(&old_data_str).map_err(|e| StorageError {
-            code: StorageErrorCode::Serialization,
-            message: format!("JSON parse failed: {}", e),
-        })?;
+        let old_data_value: Value =
+            serde_json::from_str(&old_data_str).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("JSON parse failed: {}", e),
+            })?;
 
         conn.execute(
             &format!("DELETE FROM {} WHERE id = ?", table),
@@ -1684,6 +1715,96 @@ impl SqliteBackend {
             audit_log_entries_imported,
             research_log_entries_imported,
         })
+    }
+
+    /// Backup the current database to `dest_path` using `VACUUM INTO`.
+    /// Returns the size of the backup file in bytes.
+    pub fn backup_to_file(&self, dest_path: &Path) -> Result<u64, StorageError> {
+        let dest_str = dest_path
+            .to_str()
+            .ok_or_else(|| StorageError {
+                code: StorageErrorCode::Backend,
+                message: "backup destination path is not valid UTF-8".to_string(),
+            })?
+            .to_string();
+        self.with_connection(|conn| {
+            conn.execute(&format!("VACUUM INTO '{dest_str}'"), [])
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("VACUUM INTO failed: {e}"),
+                })?;
+            Ok(())
+        })?;
+        let size = std::fs::metadata(dest_path).map(|m| m.len()).unwrap_or(0);
+        Ok(size)
+    }
+
+    /// List backup `.db` files in `backup_dir`. Returns `(filename, size_bytes, modified_unix_secs)` sorted newest-first.
+    pub fn list_backups(backup_dir: &Path) -> Result<Vec<(String, u64, i64)>, StorageError> {
+        if !backup_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(backup_dir).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("read backup dir failed: {e}"),
+        })? {
+            let entry = entry.map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("read dir entry failed: {e}"),
+            })?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("db") {
+                continue;
+            }
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| {
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|d| d.as_secs() as i64)
+                })
+                .unwrap_or(0);
+            entries.push((name.to_string(), meta.len(), modified));
+        }
+        entries.sort_by(|a, b| b.2.cmp(&a.2));
+        Ok(entries)
+    }
+
+    /// Restore the database from `source_path` using the SQLite Online Backup API.
+    /// Overwrites all data in the current connection with data from the backup file.
+    pub fn restore_from_file(&self, source_path: &Path) -> Result<(), StorageError> {
+        use rusqlite::backup::{Backup, StepResult};
+        let src = Connection::open(source_path).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("open backup file failed: {e}"),
+        })?;
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+        let backup = Backup::new(&src, &mut conn).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("create backup object failed: {e}"),
+        })?;
+        loop {
+            match backup.step(100).map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("backup step failed: {e}"),
+            })? {
+                StepResult::Done => break,
+                StepResult::More | StepResult::Busy | StepResult::Locked => continue,
+                _ => continue,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -5602,13 +5723,11 @@ mod tests {
         backend.create_person(&person).await.expect("create person");
         {
             let conn = backend.connection.lock().expect("lock connection");
-            
+
             let mut stmt = conn
                 .prepare("SELECT COUNT(*) FROM audit_log")
                 .expect("prepare count");
-            let count: usize = stmt
-                .query_row([], |row| row.get(0))
-                .expect("query count");
+            let count: usize = stmt.query_row([], |row| row.get(0)).expect("query count");
             assert_eq!(count, 1, "expected 1 audit log entry after create");
 
             let mut stmt = conn
@@ -5621,11 +5740,17 @@ mod tests {
                 let entity_type: String = row.get(1)?;
                 let old_value: Option<String> = row.get(2)?;
                 let new_value: Option<String> = row.get(3)?;
-                
+
                 assert_eq!(action, "create", "expected action=create");
                 assert_eq!(entity_type, "Person", "expected entity_type=Person");
-                assert!(old_value.is_none(), "expected old_value to be None on create");
-                assert!(new_value.is_some(), "expected new_value to be Some on create");
+                assert!(
+                    old_value.is_none(),
+                    "expected old_value to be None on create"
+                );
+                assert!(
+                    new_value.is_some(),
+                    "expected new_value to be Some on create"
+                );
                 Ok(())
             })
             .expect("verify create audit entry");
@@ -5651,9 +5776,7 @@ mod tests {
             let mut stmt = conn
                 .prepare("SELECT COUNT(*) FROM audit_log")
                 .expect("prepare count");
-            let count: usize = stmt
-                .query_row([], |row| row.get(0))
-                .expect("query count");
+            let count: usize = stmt.query_row([], |row| row.get(0)).expect("query count");
             assert_eq!(count, 2, "expected 2 audit log entries after update");
 
             let mut stmt = conn
@@ -5666,27 +5789,34 @@ mod tests {
                 let entity_type: String = row.get(1)?;
                 let old_value: Option<String> = row.get(2)?;
                 let new_value: Option<String> = row.get(3)?;
-                
+
                 assert_eq!(action, "update", "expected action=update");
                 assert_eq!(entity_type, "Person", "expected entity_type=Person");
-                assert!(old_value.is_some(), "expected old_value to be Some on update");
-                assert!(new_value.is_some(), "expected new_value to be Some on update");
+                assert!(
+                    old_value.is_some(),
+                    "expected old_value to be Some on update"
+                );
+                assert!(
+                    new_value.is_some(),
+                    "expected new_value to be Some on update"
+                );
                 Ok(())
             })
             .expect("verify update audit entry");
         }
 
         // Step 3: Delete person and verify audit log
-        backend.delete_person(person.id).await.expect("delete person");
+        backend
+            .delete_person(person.id)
+            .await
+            .expect("delete person");
 
         {
             let conn = backend.connection.lock().expect("lock connection");
             let mut stmt = conn
                 .prepare("SELECT COUNT(*) FROM audit_log")
                 .expect("prepare count");
-            let count: usize = stmt
-                .query_row([], |row| row.get(0))
-                .expect("query count");
+            let count: usize = stmt.query_row([], |row| row.get(0)).expect("query count");
             assert_eq!(count, 3, "expected 3 audit log entries after delete");
 
             let mut stmt = conn
@@ -5699,11 +5829,17 @@ mod tests {
                 let entity_type: String = row.get(1)?;
                 let old_value: Option<String> = row.get(2)?;
                 let new_value: Option<String> = row.get(3)?;
-                
+
                 assert_eq!(action, "delete", "expected action=delete");
                 assert_eq!(entity_type, "Person", "expected entity_type=Person");
-                assert!(old_value.is_some(), "expected old_value to be Some on delete");
-                assert!(new_value.is_none(), "expected new_value to be None on delete");
+                assert!(
+                    old_value.is_some(),
+                    "expected old_value to be Some on delete"
+                );
+                assert!(
+                    new_value.is_none(),
+                    "expected new_value to be None on delete"
+                );
                 Ok(())
             })
             .expect("verify delete audit entry");

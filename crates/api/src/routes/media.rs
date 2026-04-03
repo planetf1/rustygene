@@ -353,7 +353,10 @@ async fn add_album_items(
             value: json!({ "name": album_name }),
             confidence: 1.0,
             status: AssertionStatus::Confirmed,
-            evidence_type: request.evidence_type.clone().unwrap_or(EvidenceType::Direct),
+            evidence_type: request
+                .evidence_type
+                .clone()
+                .unwrap_or(EvidenceType::Direct),
             source_citations: Vec::new(),
             proposed_by: ActorRef::User("api".to_string()),
             created_at: Utc::now(),
@@ -390,7 +393,10 @@ async fn add_media_tag(
         value: json!({ "name": tag }),
         confidence: 1.0,
         status: AssertionStatus::Confirmed,
-        evidence_type: request.evidence_type.clone().unwrap_or(EvidenceType::Direct),
+        evidence_type: request
+            .evidence_type
+            .clone()
+            .unwrap_or(EvidenceType::Direct),
         source_citations: Vec::new(),
         proposed_by: ActorRef::User("api".to_string()),
         created_at: Utc::now(),

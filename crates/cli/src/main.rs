@@ -347,7 +347,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let backend = SqliteBackend::new(connection);
+    let backend = SqliteBackend::new_with_path(connection, db_path.clone());
 
     match cli.command {
         Commands::RebuildSnapshots => match backend.rebuild_all_snapshots() {

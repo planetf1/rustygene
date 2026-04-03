@@ -468,6 +468,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/v1/entities", routes::media::entity_router())
         .nest("/api/v1/assertions", routes::assertions::router())
         .nest("/api/v1/staging", routes::staging::router())
+        .nest("/api/v1/backup", routes::backup::router())
         .nest("/api/v1/debug", routes::debug::router())
         .merge(openapi::router())
         .nest("/api/v1", routes::import_export::router())

@@ -312,9 +312,8 @@ fn corpus_roundtrip_simpsons_ged_diagnostic() {
     let db2 = temp_db_path("simpsons-db2");
 
     let mut conn1 = setup_db(&db1);
-    let _report1 =
-        import_gedcom_to_sqlite(&mut conn1, "corpus-import-simpsons", &input)
-            .expect("import simpsons fixture");
+    let _report1 = import_gedcom_to_sqlite(&mut conn1, "corpus-import-simpsons", &input)
+        .expect("import simpsons fixture");
 
     let table_counts_before = [
         ("persons", count_table_rows(&conn1, "persons")),
@@ -363,9 +362,8 @@ fn corpus_roundtrip_torture551_ged_diagnostic() {
     let db2 = temp_db_path("torture551-db2");
 
     let mut conn1 = setup_db(&db1);
-    let _report1 =
-        import_gedcom_to_sqlite(&mut conn1, "corpus-import-torture551", &input)
-            .expect("import torture551 fixture");
+    let _report1 = import_gedcom_to_sqlite(&mut conn1, "corpus-import-torture551", &input)
+        .expect("import torture551 fixture");
 
     let table_counts_before = [
         ("persons", count_table_rows(&conn1, "persons")),

@@ -358,7 +358,10 @@ async fn graph_descendants_and_path_work_for_cousins() {
         .get("kinship_name")
         .and_then(serde_json::Value::as_str)
         .expect("kinship_name string");
-    assert!(!kinship_name.is_empty(), "expected kinship_name in response");
+    assert!(
+        !kinship_name.is_empty(),
+        "expected kinship_name in response"
+    );
 
     server.shutdown().await.expect("shutdown server");
 }

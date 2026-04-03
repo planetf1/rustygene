@@ -420,8 +420,9 @@ fn run_gramps_import(
     job_id: Uuid,
     input: &[u8],
 ) -> Result<ImportExecutionSummary, ApiError> {
-    let text = std::str::from_utf8(input)
-        .map_err(|err| ApiError::BadRequest(format!("Gramps XML file must be UTF-8 text: {err}")))?;
+    let text = std::str::from_utf8(input).map_err(|err| {
+        ApiError::BadRequest(format!("Gramps XML file must be UTF-8 text: {err}"))
+    })?;
 
     let report = gramps::import_gramps_xml_to_sqlite(backend, &job_id.to_string(), text)
         .map_err(|err| ApiError::InternalError(format!("Gramps import failed: {err}")))?;
@@ -442,10 +443,7 @@ fn run_gramps_import(
         "Imported entities by type: {}",
         format_counts_inline(&entities_imported_by_type)
     ));
-    log_messages.push(format!(
-        "Assertions created: {}",
-        report.assertions_created
-    ));
+    log_messages.push(format!("Assertions created: {}", report.assertions_created));
 
     Ok(ImportExecutionSummary {
         entities_imported,

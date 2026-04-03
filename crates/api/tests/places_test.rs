@@ -96,7 +96,10 @@ async fn places_crud_lifecycle() {
         updated["names"][0]["name"].as_str(),
         Some("Springfield (updated)")
     );
-    assert_eq!(updated["external_ids"][0]["system"].as_str(), Some("geonames"));
+    assert_eq!(
+        updated["external_ids"][0]["system"].as_str(),
+        Some("geonames")
+    );
 
     // DELETE the place
     let delete_resp = client
