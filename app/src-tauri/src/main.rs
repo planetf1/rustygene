@@ -81,6 +81,7 @@ fn main() {
             commands::get_api_port,
             commands::open_file_dialog,
             commands::save_file_dialog,
+            commands::read_binary_file,
             commands::write_binary_file,
             commands::create_database_backup,
             commands::restore_database_backup

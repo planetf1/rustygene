@@ -9,6 +9,11 @@ pub fn write_binary_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|err| format!("failed to read file '{}': {err}", path))
+}
+
+#[tauri::command]
 pub fn create_database_backup(destination_path: String) -> Result<(), String> {
     let data_dir = resolve_data_dir();
     let db_path = data_dir.join("rustygene.db");
