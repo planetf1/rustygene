@@ -137,6 +137,8 @@
 
   let viewportDebounce: ReturnType<typeof setTimeout> | null = null;
   let clickDebounce: ReturnType<typeof setTimeout> | null = null;
+  let layoutDebounce: ReturnType<typeof setTimeout> | null = null;
+  let isApplyingLayout = false;
   let lastTapNodeId = '';
   let lastTapAt = 0;
 
@@ -193,7 +195,7 @@
           animate: false,
           fit: false,
           randomize: false,
-          padding: 40
+          padding: 20
         };
       case 'cola':
         return {
@@ -201,9 +203,9 @@
           animate: false,
           fit: false,
           randomize: false,
-          padding: 40,
+          padding: 20,
           infinite: false,
-          nodeSpacing: 35
+          nodeSpacing: 20
         };
       case 'breadthfirst':
         return {
@@ -211,16 +213,16 @@
           animate: false,
           fit: false,
           directed: true,
-          spacingFactor: 1.15,
-          padding: 40
+          spacingFactor: 1.0,
+          padding: 20
         };
       case 'circle':
         return {
           name: 'circle',
           animate: false,
           fit: false,
-          spacingFactor: 1.1,
-          padding: 40
+          spacingFactor: 0.9,
+          padding: 20
         };
     }
   }
@@ -272,24 +274,40 @@
   }
 
   function applyLayout(newNodeIds: Set<string>): void {
-    if (!cy) {
+    if (!cy || isApplyingLayout) {
       return;
     }
 
-    const layout = buildLayoutConfig(layoutMode);
-    const existing = cy.nodes().filter((node) => !newNodeIds.has(node.id()));
-    const newcomers = cy.nodes().filter((node) => newNodeIds.has(node.id()));
+    if (layoutDebounce) {
+      clearTimeout(layoutDebounce);
+    }
 
-    existing.lock();
-    newcomers.unlock();
+    // Debounce layout to prevent excessive re-renders
+    layoutDebounce = setTimeout(() => {
+      if (!cy) {
+        return;
+      }
 
-    cy.layout(layout).run();
+      isApplyingLayout = true;
+      try {
+        const layout = buildLayoutConfig(layoutMode);
+        const existing = cy.nodes().filter((node) => !newNodeIds.has(node.id()));
+        const newcomers = cy.nodes().filter((node) => newNodeIds.has(node.id()));
 
-    existing.unlock();
-    nodesWithManualPlacement.clear();
-    cy.nodes().forEach((node) => {
-      nodesWithManualPlacement.add(node.id());
-    });
+        existing.lock();
+        newcomers.unlock();
+
+        cy.layout(layout).run();
+
+        existing.unlock();
+        nodesWithManualPlacement.clear();
+        cy.nodes().forEach((node) => {
+          nodesWithManualPlacement.add(node.id());
+        });
+      } finally {
+        isApplyingLayout = false;
+      }
+    }, 100);
   }
 
   function styleForNode(): string {
@@ -319,14 +337,16 @@
             label: 'data(label)',
             'background-color': styleForNode(),
             shape: 'ellipse',
-            width: 58,
-            height: 58,
+            width: 75,
+            height: 75,
             color: '#0f172a',
-            'font-size': 11,
+            'font-size': 14,
+            'font-weight': 500,
             'text-wrap': 'wrap',
-            'text-max-width': 130,
-            'text-valign': 'bottom',
-            'text-margin-y': 10,
+            'text-max-width': 140,
+            'text-valign': 'center',
+            'text-halign': 'center',
+            'text-margin-y': 0,
             'border-color': '#0f172a',
             'border-width': 'mapData(merged, 0, 1, 1, 4)'
           }
@@ -363,9 +383,9 @@
         {
           selector: 'edge',
           style: {
-            width: 2,
+            width: 1.5,
             label: 'data(label)',
-            'font-size': 10,
+            'font-size': 11,
             color: '#334155',
             'text-background-color': '#ffffff',
             'text-background-opacity': 1,
@@ -519,7 +539,7 @@
       }
       viewportDebounce = setTimeout(() => {
         void expandViewportBoundary();
-      }, 450);
+      }, 600);
     });
   }
 
@@ -843,6 +863,9 @@
     }
     if (clickDebounce) {
       clearTimeout(clickDebounce);
+    }
+    if (layoutDebounce) {
+      clearTimeout(layoutDebounce);
     }
 
     if (cy) {
