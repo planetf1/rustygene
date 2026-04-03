@@ -28,6 +28,7 @@ use serde_json::{Value, json, to_value};
 use uuid::Uuid;
 
 pub mod gramps;
+pub mod matching;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GedcomLine {
