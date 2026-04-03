@@ -95,11 +95,7 @@ pub fn compute_kinship(path: &[PathStep]) -> KinshipResult {
                     "aunt_or_uncle".to_string()
                 }
             } else if times_removed > 1 {
-                let greats = if up_count < down_count {
-                    "great-".repeat(times_removed.saturating_sub(1))
-                } else {
-                    "great-".repeat(times_removed.saturating_sub(1))
-                };
+                let greats = "great-".repeat(times_removed.saturating_sub(1));
                 if up_count < down_count {
                     format!("{}niece_or_nephew", greats)
                 } else {
