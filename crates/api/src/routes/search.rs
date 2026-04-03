@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
+use rustygene_core::assertion::EvidenceType;
 use rustygene_core::event::{Event, EventType};
 use rustygene_core::person::Person;
 use rustygene_core::types::{DateValue, EntityId};
@@ -27,6 +28,8 @@ struct SearchQuery {
     date_to: Option<String>,
     #[serde(default)]
     place: Option<String>,
+    #[serde(default)]
+    evidence_type: Option<String>,
     #[serde(default)]
     limit: Option<u32>,
     #[serde(default)]
@@ -155,6 +158,13 @@ async fn search(
         .filter(|value| !value.is_empty())
         .map(str::to_ascii_lowercase);
 
+    let evidence_type_filter: Option<EvidenceType> = query
+        .evidence_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|raw| serde_json::from_value(serde_json::Value::String(raw.to_string())).ok());
+
     let date_from_year = query.date_from.as_deref().map(parse_year).transpose()?;
     let date_to_year = query.date_to.as_deref().map(parse_year).transpose()?;
 
@@ -213,6 +223,7 @@ async fn search(
             place_filter.as_deref(),
             date_from_year,
             date_to_year,
+            evidence_type_filter.as_ref(),
         )
         .await?
         {
@@ -489,6 +500,7 @@ async fn passes_post_filters(
     place_filter: Option<&str>,
     date_from_year: Option<i32>,
     date_to_year: Option<i32>,
+    evidence_type: Option<&EvidenceType>,
 ) -> Result<bool, ApiError> {
     if let Some(place_query) = place_filter {
         if !matches_place_filter(state, entity_id, entity_type, place_query).await? {
@@ -505,7 +517,28 @@ async fn passes_post_filters(
         }
     }
 
+    if let Some(ev_type) = evidence_type {
+        if !matches_evidence_type_filter(state, entity_id, ev_type).await? {
+            return Ok(false);
+        }
+    }
+
     Ok(true)
+}
+
+async fn matches_evidence_type_filter(
+    state: &AppState,
+    entity_id: EntityId,
+    evidence_type: &EvidenceType,
+) -> Result<bool, ApiError> {
+    let records = state
+        .storage
+        .list_assertion_records_for_entity(entity_id)
+        .await
+        .unwrap_or_default();
+    Ok(records
+        .iter()
+        .any(|r| &r.assertion.evidence_type == evidence_type))
 }
 
 async fn matches_place_filter(

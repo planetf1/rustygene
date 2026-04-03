@@ -135,6 +135,7 @@ pub struct AssertionValueResponse {
     pub value: Value,
     pub status: AssertionStatus,
     pub confidence: f64,
+    pub evidence_type: EvidenceType,
     pub sources: Vec<CitationRef>,
 }
 

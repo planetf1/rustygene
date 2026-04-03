@@ -316,10 +316,11 @@ async fn get_family_assertions(
             .push(AssertionValueResponse {
                 assertion_id: record.assertion.id,
                 field: record.field,
-                value: record.assertion.value,
-                status: record.assertion.status,
+                value: record.assertion.value.clone(),
+                status: record.assertion.status.clone(),
                 confidence: record.assertion.confidence,
-                sources: record.assertion.source_citations,
+                evidence_type: record.assertion.evidence_type.clone(),
+                sources: record.assertion.source_citations.clone(),
             });
     }
 

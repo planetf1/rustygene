@@ -29,6 +29,7 @@
   let dateFrom = '';
   let dateTo = '';
   let place = '';
+  let evidenceType = '';
 
   let loading = false;
   let error = '';
@@ -73,6 +74,7 @@
     dateFrom = params.get('date_from') ?? '';
     dateTo = params.get('date_to') ?? '';
     place = params.get('place') ?? '';
+    evidenceType = params.get('evidence_type') ?? '';
   }
 
   function buildFilterParams(nextOffset = 0): URLSearchParams {
@@ -96,6 +98,9 @@
     }
     if (place.trim()) {
       params.set('place', place.trim());
+    }
+    if (evidenceType.trim()) {
+      params.set('evidence_type', evidenceType.trim());
     }
 
     params.set('limit', String(pageSize));
@@ -312,6 +317,15 @@
       Place
       <input type="text" bind:value={place} placeholder="Boston" on:change={() => void syncUrlAndSearch(true)} />
     </label>
+    <label>
+      Evidence type
+      <select bind:value={evidenceType} on:change={() => void syncUrlAndSearch(true)}>
+        <option value="">All</option>
+        <option value="direct">Direct only</option>
+        <option value="indirect">Indirect only</option>
+        <option value="negative">Negative evidence</option>
+      </select>
+    </label>
   </section>
 
   {#if !q.trim()}
@@ -414,7 +428,7 @@
 
   .filters {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.55rem;
   }
 

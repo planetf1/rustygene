@@ -9,6 +9,7 @@
     assertion_id: string;
     status: string;
     confidence: number;
+    evidence_type?: string;
     sources: CitationRef[];
     value: unknown;
     created_at?: string;
@@ -28,6 +29,14 @@
   let activeCitationNote = '';
   let busyAssertionId = '';
   let error = '';
+
+  // New observation form
+  let showAddForm = false;
+  let newField = '';
+  let newValue = '';
+  let newEvidenceType: 'direct' | 'indirect' | 'negative' = 'direct';
+  let addingObservation = false;
+  let addError = '';
 
   function rowsFor(field: string): AssertionItem[] {
     return [...(assertions[field] ?? [])].sort((a, b) => b.confidence - a.confidence);
@@ -159,13 +168,79 @@
     activeCitationId = citationId;
     activeCitationNote = citationNote ?? '';
   }
+
+  function evidenceBadgeClass(evidenceType: string | undefined): string {
+    switch (evidenceType) {
+      case 'negative': return 'evidence-negative';
+      case 'indirect': return 'evidence-indirect';
+      default: return 'evidence-direct';
+    }
+  }
+
+  async function addObservation(): Promise<void> {
+    if (!newField.trim()) {
+      addError = 'Field name is required';
+      return;
+    }
+    addingObservation = true;
+    addError = '';
+    try {
+      const endpoint = `/api/v1/${entityType}/${entityId}/assertions`;
+      await api.post(endpoint, {
+        field: newField.trim(),
+        value: newValue.trim() || null,
+        evidence_type: newEvidenceType,
+        status: 'proposed'
+      });
+      newField = '';
+      newValue = '';
+      newEvidenceType = 'direct';
+      showAddForm = false;
+      dispatch('updated');
+    } catch (err) {
+      addError = err instanceof Error ? err.message : 'Failed to add observation';
+    } finally {
+      addingObservation = false;
+    }
+  }
 </script>
 
 <section class="assertions">
   <header>
     <h2>Assertions</h2>
     <p>Preferred assertion is listed first for each field.</p>
+    <button type="button" class="secondary" on:click={() => (showAddForm = !showAddForm)}>
+      {showAddForm ? 'Cancel' : '+ Add observation'}
+    </button>
   </header>
+
+  {#if showAddForm}
+    <form class="add-form" on:submit|preventDefault={addObservation}>
+      <label>
+        Field
+        <input type="text" bind:value={newField} placeholder="e.g. occupation, note" />
+      </label>
+      <label>
+        Value
+        <input type="text" bind:value={newValue} placeholder="e.g. Carpenter (or blank for Negative)" />
+      </label>
+      <label>
+        Evidence type
+        <select bind:value={newEvidenceType}>
+          <option value="direct">Direct</option>
+          <option value="indirect">Indirect</option>
+          <option value="negative">Negative (searched and did NOT find)</option>
+        </select>
+      </label>
+      {#if newEvidenceType === 'negative'}
+        <p class="negative-hint">Describe in the value what you searched and did not find.</p>
+      {/if}
+      {#if addError}
+        <p class="error">{addError}</p>
+      {/if}
+      <button type="submit" disabled={addingObservation}>{addingObservation ? 'Saving…' : 'Save observation'}</button>
+    </form>
+  {/if}
 
   {#if error}
     <p class="error">{error}</p>
@@ -192,6 +267,7 @@
               <div class="meta">
                 <span class={`status ${statusTone(assertion.status)}`}>{assertion.status}</span>
                 <span class="confidence">{assertion.confidence.toFixed(2)}</span>
+                <span class={`evidence-badge ${evidenceBadgeClass(assertion.evidence_type)}`}>{assertion.evidence_type ?? 'direct'}</span>
                 {#if idx === 0}
                   <span class="badge">Preferred</span>
                 {/if}
@@ -421,6 +497,50 @@
     border-radius: 999px;
     padding: 0.1rem 0.45rem;
   }
+
+  .evidence-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 0.1rem 0.45rem;
+  }
+
+  .evidence-direct { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  .evidence-indirect { background: #fef9c3; color: #713f12; border: 1px solid #fde68a; }
+  .evidence-negative { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; text-decoration: line-through; }
+
+  .add-form {
+    border: 1px dashed #2563eb;
+    border-radius: 0.65rem;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    background: #eff6ff;
+  }
+
+  .negative-hint {
+    margin: 0;
+    color: #991b1b;
+    font-size: 0.8rem;
+    font-style: italic;
+  }
+
+  select {
+    border: 1px solid #cbd5e1;
+    border-radius: 0.35rem;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.85rem;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  header h2 { margin: 0; flex: 1; }
 
   pre {
     margin: 0;
