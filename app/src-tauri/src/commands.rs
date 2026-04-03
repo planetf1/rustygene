@@ -4,6 +4,11 @@ use rfd::FileDialog;
 use tauri::State;
 
 #[tauri::command]
+pub fn get_data_dir() -> String {
+    resolve_data_dir().to_string_lossy().to_string()
+}
+
+#[tauri::command]
 pub fn write_binary_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, bytes).map_err(|err| format!("failed to write file '{}': {err}", path))
 }

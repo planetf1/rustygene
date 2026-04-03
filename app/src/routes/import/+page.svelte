@@ -47,6 +47,9 @@
   let entityCounts = normalizeEntityCounts(null);
   let displayedProgress = 0;
   let sseConnected = false;
+  let desktopDataDir = '';
+  let diagnosticsBusy = false;
+  let pollFailureCount = 0;
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let progressTimer: ReturnType<typeof setInterval> | null = null;
@@ -60,6 +63,24 @@
     const { invoke } = await import('@tauri-apps/api/core');
     const tauriInvoke = invoke as TauriInvoke;
     return tauriInvoke<T>(command, args);
+  }
+
+  async function saveBlobWithDesktopDialog(blob: Blob, suggestedName: string): Promise<boolean> {
+    const destination = await invokeTauri<string | null>('save_file_dialog', {
+      title: 'Save diagnostics bundle',
+      defaultName: suggestedName
+    });
+
+    if (!destination) {
+      return false;
+    }
+
+    const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+    await invokeTauri<void>('write_binary_file', {
+      path: destination,
+      bytes
+    });
+    return true;
   }
 
   function resetTimers(): void {
@@ -200,6 +221,22 @@
     logMessages = mergeUniqueLogMessages(logMessages, nextMessages);
   }
 
+  function triggerBrowserDownload(blob: Blob, fileName: string): void {
+    const url = URL.createObjectURL(blob);
+
+    try {
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.style.display = 'none';
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
   function syncJobStatus(nextStatus: ImportJobStatus): void {
     jobStatus = nextStatus;
     appendLogs(nextStatus.log_messages ?? []);
@@ -229,11 +266,18 @@
 
     try {
       const nextStatus = await api.get<ImportJobStatus>(`/api/v1/import/${jobId}`);
+      pollFailureCount = 0;
       syncJobStatus(nextStatus);
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to poll import status';
-      busy = false;
-      resetTimers();
+      pollFailureCount += 1;
+      const message = err instanceof Error ? err.message : 'Failed to poll import status';
+      appendLogs([`Status poll retry ${pollFailureCount}: ${message}`]);
+
+      if (pollFailureCount >= 8) {
+        error = message;
+        busy = false;
+        resetTimers();
+      }
     }
   }
 
@@ -305,6 +349,7 @@
     logMessages = [`Preparing import for ${selectedFile.name}`];
     entityCounts = normalizeEntityCounts(null);
     displayedProgress = 4;
+    pollFailureCount = 0;
 
     try {
       const formData = new FormData();
@@ -368,18 +413,35 @@
     };
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+    triggerBrowserDownload(blob, `rustygene-import-${jobStatus.job_id}.json`);
+  }
+
+  async function downloadDiagnosticsBundle(): Promise<void> {
+    diagnosticsBusy = true;
+    error = '';
 
     try {
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `rustygene-import-${jobStatus.job_id}.json`;
-      anchor.style.display = 'none';
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
+      const artifact = await api.download('/api/v1/debug/bundle');
+      const fallbackName = `rustygene-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      const fileName = artifact.fileName ?? fallbackName;
+
+      if (inTauri()) {
+        const saved = await saveBlobWithDesktopDialog(artifact.blob, fileName);
+        if (!saved) {
+          appendLogs(['Diagnostics bundle save cancelled by user.']);
+          return;
+        }
+      } else {
+        triggerBrowserDownload(artifact.blob, fileName);
+      }
+
+      appendLogs(['Diagnostics bundle downloaded from /api/v1/debug/bundle']);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to download diagnostics bundle';
+      error = message;
+      appendLogs([`Diagnostics download failed: ${message}`]);
     } finally {
-      URL.revokeObjectURL(url);
+      diagnosticsBusy = false;
     }
   }
 
@@ -389,6 +451,19 @@
 
   onMount(() => {
     restoreWizardState();
+    if (inTauri()) {
+      void invokeTauri<string>('get_data_dir')
+        .then((path) => {
+          desktopDataDir = path;
+          appendLogs([
+            `Desktop diagnostics directory: ${path}`,
+            `Desktop runtime log file: ${path}/rustygene-desktop.log`
+          ]);
+        })
+        .catch(() => {
+          desktopDataDir = '';
+        });
+    }
   });
 
   // Auto-save wizard state when it changes
@@ -499,6 +574,16 @@
         {#if jobId}
           <span class="mono">{jobId}</span>
         {/if}
+      </div>
+
+      {#if desktopDataDir}
+        <p class="hint">Desktop diagnostics directory: <span class="mono">{desktopDataDir}</span></p>
+      {/if}
+
+      <div class="actions">
+        <button type="button" class="secondary" on:click={downloadDiagnosticsBundle} disabled={diagnosticsBusy}>
+          {diagnosticsBusy ? 'Preparing diagnostics…' : 'Download diagnostics bundle'}
+        </button>
       </div>
 
       {#if logMessages.length === 0}

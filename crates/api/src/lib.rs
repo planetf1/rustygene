@@ -38,10 +38,14 @@ use rustygene_storage::sqlite_impl::SqliteBackend;
 use rustygene_storage::Storage;
 use uuid::Uuid;
 
-const DEFAULT_CORS_ORIGINS: [&str; 3] = [
+const DEFAULT_CORS_ORIGINS: [&str; 7] = [
     "tauri://localhost",
     "https://tauri.localhost",
     "http://localhost",
+    "http://localhost:5173",
+    "http://127.0.0.1",
+    "http://127.0.0.1:5173",
+    "https://localhost",
 ];
 
 pub const EVENT_BUS_CAPACITY: usize = 1024;

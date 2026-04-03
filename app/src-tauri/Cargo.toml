@@ -16,3 +16,4 @@ tracing = "0.1"
 rustygene-api = { path = "../../crates/api" }
 rustygene-storage = { path = "../../crates/storage" }
 rustygene-core = { path = "../../crates/core" }
+chrono = "0.4"

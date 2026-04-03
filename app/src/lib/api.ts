@@ -42,6 +42,43 @@ function inTauriDesktop(): boolean {
   return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
 }
 
+function formatNetworkFailureMessage(method: string, url: string, error: unknown): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  const commonHint = inTauriDesktop()
+    ? 'Embedded API appears unreachable from the desktop webview. Restart the app and check desktop diagnostics in your RustyGene data directory.'
+    : 'API appears unreachable. Verify the API process is running and reachable from the current origin.';
+
+  return `Network request failed for ${method} ${url}: ${reason}. ${commonHint}`;
+}
+
+async function fetchWithDiagnostics(url: string, init: RequestInit & { method: string }): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (inTauriDesktop()) {
+      const refreshedPort = await resolveApiPortFromTauri();
+      if (refreshedPort !== null) {
+        const refreshedBase = `http://127.0.0.1:${refreshedPort}`;
+        const original = new URL(url);
+        const refreshedUrl = new URL(`${original.pathname}${original.search}`, refreshedBase).toString();
+
+        if (refreshedBase !== baseUrl) {
+          baseUrl = refreshedBase;
+        }
+
+        try {
+          await delay(120);
+          return await fetch(refreshedUrl, init);
+        } catch {
+          // Fall through to formatted error below.
+        }
+      }
+    }
+
+    throw new Error(formatNetworkFailureMessage(init.method, url, error));
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -83,7 +120,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   let response: Response;
 
   try {
-    response = await fetch(url.toString(), {
+    response = await fetchWithDiagnostics(url.toString(), {
       method,
       headers: {
         'content-type': 'application/json'
@@ -124,7 +161,7 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
   let response: Response;
 
   try {
-    response = await fetch(url.toString(), {
+    response = await fetchWithDiagnostics(url.toString(), {
       method: 'POST',
       body: formData
     });
@@ -161,7 +198,7 @@ async function download(path: string): Promise<{ blob: Blob; fileName: string | 
 
   let response: Response;
   try {
-    response = await fetch(url.toString(), {
+    response = await fetchWithDiagnostics(url.toString(), {
       method: 'GET'
     });
   } finally {

@@ -6,7 +6,9 @@ use rusqlite::Connection;
 use rustygene_api::{AppState, ServerHandle};
 use rustygene_storage::run_migrations;
 use rustygene_storage::sqlite_impl::SqliteBackend;
+use std::fs::OpenOptions;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
@@ -54,6 +56,22 @@ pub(crate) async fn bootstrap_embedded_api() -> Result<ServerHandle, String> {
         .map_err(|err| format!("failed to start embedded API: {}", err.message()))
 }
 
+fn append_desktop_log(message: &str) {
+    let data_dir = resolve_data_dir();
+    if fs::create_dir_all(&data_dir).is_err() {
+        return;
+    }
+
+    let log_path = data_dir.join("rustygene-desktop.log");
+    let mut file = match OpenOptions::new().create(true).append(true).open(&log_path) {
+        Ok(handle) => handle,
+        Err(_) => return,
+    };
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let _ = writeln!(file, "[{timestamp}] {message}");
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(RuntimeState::default())
@@ -68,8 +86,10 @@ fn main() {
                         let port = server.local_addr.port();
                         *api_port.write().await = Some(port);
                         *server_handle.lock().await = Some(server);
+                        append_desktop_log(&format!("embedded API ready on 127.0.0.1:{port}"));
                     }
                     Err(error) => {
+                        append_desktop_log(&format!("embedded API bootstrap failed: {error}"));
                         eprintln!("embedded API bootstrap failed: {error}");
                     }
                 }
@@ -79,6 +99,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_api_port,
+            commands::get_data_dir,
             commands::open_file_dialog,
             commands::save_file_dialog,
             commands::read_binary_file,

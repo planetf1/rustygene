@@ -58,6 +58,7 @@
   };
 
   const LEVELS = ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'] as const;
+  type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
   let loading = false;
   let error = '';
@@ -68,6 +69,34 @@
   let logs: DebugLogEntry[] = [];
   let levelFilter: (typeof LEVELS)[number] = 'INFO';
   let pollHandle: number | null = null;
+
+  function inTauri(): boolean {
+    return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
+  }
+
+  async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const tauriInvoke = invoke as TauriInvoke;
+    return tauriInvoke<T>(command, args);
+  }
+
+  async function saveBlobWithDesktopDialog(blob: Blob, suggestedName: string): Promise<boolean> {
+    const destination = await invokeTauri<string | null>('save_file_dialog', {
+      title: 'Save diagnostics bundle',
+      defaultName: suggestedName
+    });
+
+    if (!destination) {
+      return false;
+    }
+
+    const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+    await invokeTauri<void>('write_binary_file', {
+      path: destination,
+      bytes
+    });
+    return true;
+  }
 
   async function loadHealth(): Promise<void> {
     health = await api.get<DebugHealthDepsResponse>('/api/v1/debug/health/deps');
@@ -101,12 +130,23 @@
     message = '';
     try {
       const file = await api.download('/api/v1/debug/bundle');
-      const href = URL.createObjectURL(file.blob);
-      const anchor = document.createElement('a');
-      anchor.href = href;
-      anchor.download = file.fileName ?? 'rustygene-diagnostics.json';
-      anchor.click();
-      URL.revokeObjectURL(href);
+      const fileName = file.fileName ?? 'rustygene-diagnostics.json';
+
+      if (inTauri()) {
+        const saved = await saveBlobWithDesktopDialog(file.blob, fileName);
+        if (!saved) {
+          message = 'Diagnostics bundle save cancelled.';
+          return;
+        }
+      } else {
+        const href = URL.createObjectURL(file.blob);
+        const anchor = document.createElement('a');
+        anchor.href = href;
+        anchor.download = fileName;
+        anchor.click();
+        URL.revokeObjectURL(href);
+      }
+
       message = 'Diagnostics bundle downloaded.';
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to download diagnostics bundle';
