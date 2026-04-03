@@ -26,6 +26,7 @@
     { value: 'json', label: formatLabel('json') }
   ];
   const acceptedExtensions = '.ged,.gramps,.xml,.json';
+  const MAX_IMPORT_FILE_BYTES = 100 * 1024 * 1024;
 
   let fileInput: HTMLInputElement | null = null;
   let selectedFile: File | null = null;
@@ -287,6 +288,14 @@
       return;
     }
 
+    if (selectedFile.size > MAX_IMPORT_FILE_BYTES) {
+      const maxMb = Math.floor(MAX_IMPORT_FILE_BYTES / (1024 * 1024));
+      const currentMb = (selectedFile.size / (1024 * 1024)).toFixed(1);
+      error = `Selected file is ${currentMb} MB. Current import limit is ${maxMb} MB.`;
+      appendLogs([`Import blocked: file exceeds ${maxMb} MB limit.`]);
+      return;
+    }
+
     busy = true;
     error = '';
     info = '';
@@ -322,9 +331,10 @@
       }, 1000);
     } catch (err) {
       busy = false;
-      currentStep = 1;
+      currentStep = 2;
       resetTimers();
       error = err instanceof Error ? err.message : 'Failed to start import';
+      appendLogs([`Import start failed: ${error}`]);
     }
   }
 

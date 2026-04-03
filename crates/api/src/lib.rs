@@ -47,6 +47,7 @@ const DEFAULT_CORS_ORIGINS: [&str; 3] = [
 pub const EVENT_BUS_CAPACITY: usize = 1024;
 pub const SLOW_CONSUMER_DROP_THRESHOLD: u64 = 1000;
 pub const DEBUG_LOG_CAPACITY: usize = 1000;
+pub const REQUEST_BODY_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RouteMetric {
@@ -499,7 +500,7 @@ pub fn build_router(state: AppState) -> Router {
             router_state,
             metrics_middleware,
         ))
-        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
+        .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT_BYTES))
         .layer(cors_layer)
 }
 

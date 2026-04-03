@@ -21,6 +21,52 @@ cargo run -p rustygene-cli -- query person --name "Kennedy"
 cargo run -p rustygene-cli -- export --format gedcom --output out.ged
 ```
 
+## Run the Application (New User Guide)
+
+### Prerequisites
+
+- Rust toolchain (stable)
+- Node.js 20+ and npm
+- Tauri system prerequisites for your OS (WebKit tooling on macOS/Linux)
+
+### 1) Clone and install frontend dependencies
+
+```bash
+git clone https://github.com/planetf1/rustygene.git
+cd rustygene
+cd app
+npm install
+cd ..
+```
+
+### 2) Run the desktop UI (recommended)
+
+This starts the Svelte dev server and launches the Tauri desktop app. The embedded Rust API is started by the app.
+
+```bash
+cd app
+npm run tauri dev
+```
+
+### 3) Optional: run CLI-only workflows
+
+```bash
+# Import a GEDCOM file
+cargo run -p rustygene-cli -- import --format gedcom testdata/gedcom/kennedy.ged
+
+# Query persons
+cargo run -p rustygene-cli -- query person --name "Kennedy"
+
+# Export GEDCOM
+cargo run -p rustygene-cli -- export --format gedcom --output out.ged
+```
+
+### Troubleshooting
+
+- If `npm run tauri dev` fails with missing Tauri dependencies, install the OS prerequisites and retry.
+- If Rust compilation fails, run `cargo build --workspace` once to surface dependency/toolchain issues.
+- If UI dependencies are stale, run `cd app && npm install` again.
+
 ## Architecture
 
 ```

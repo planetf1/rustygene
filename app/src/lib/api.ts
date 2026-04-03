@@ -14,6 +14,9 @@ export class ApiError extends Error {
 
 let baseUrl = 'http://localhost:3000';
 
+const API_PORT_INIT_TIMEOUT_MS = 30_000;
+const API_PORT_INIT_RETRY_MS = 200;
+
 function buildUrl(path: string): URL {
   const url = new URL(`${baseUrl}${path}`);
   if (appState.sandboxMode) {
@@ -35,10 +38,41 @@ async function resolveApiPortFromTauri(): Promise<number | null> {
   }
 }
 
+function inTauriDesktop(): boolean {
+  return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function resolveApiPortWithRetry(): Promise<number | null> {
+  const deadline = Date.now() + API_PORT_INIT_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const port = await resolveApiPortFromTauri();
+    if (port !== null) {
+      return port;
+    }
+    await delay(API_PORT_INIT_RETRY_MS);
+  }
+
+  return null;
+}
+
 export async function initializeApiClient(): Promise<void> {
-  const port = await resolveApiPortFromTauri();
+  const port = await resolveApiPortWithRetry();
   if (port !== null) {
     baseUrl = `http://127.0.0.1:${port}`;
+    return;
+  }
+
+  if (inTauriDesktop()) {
+    throw new Error(
+      `Embedded API did not become ready within ${API_PORT_INIT_TIMEOUT_MS / 1000} seconds`
+    );
   }
 }
 
