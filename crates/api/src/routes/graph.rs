@@ -5,6 +5,7 @@ use axum::routing::get;
 use axum::Json;
 use axum::Router;
 use rustygene_core::event::{Event, EventType};
+use rustygene_core::kinship::{compute_kinship, PathStep as CorePathStep};
 use rustygene_core::person::Person;
 use rustygene_core::types::{DateValue, EntityId, Gender};
 use rustygene_storage::Pagination;
@@ -14,7 +15,7 @@ use uuid::Uuid;
 use crate::errors::ApiError;
 use crate::models::graph::{
     AncestorTreeNode, DescendantTreeNode, NetworkEdge, NetworkGraph, NetworkNode, PathStep,
-    PedigreeEdge, PedigreeGraph, PedigreeNode,
+    PathWithKinship, PedigreeEdge, PedigreeGraph, PedigreeNode,
 };
 use crate::AppState;
 
@@ -238,7 +239,7 @@ async fn get_pedigree(
 async fn get_path(
     State(state): State<AppState>,
     Path((id1, id2)): Path<(String, String)>,
-) -> Result<Json<Vec<PathStep>>, ApiError> {
+) -> Result<Json<PathWithKinship>, ApiError> {
     let from_id = parse_entity_id(&id1)?;
     let to_id = parse_entity_id(&id2)?;
 
@@ -246,11 +247,15 @@ async fn get_path(
     let _ = state.storage.get_person(to_id).await?;
 
     if from_id == to_id {
-        return Ok(Json(vec![PathStep {
-            person_id: from_id,
-            relationship_label: "self".to_string(),
-            direction: "none".to_string(),
-        }]));
+        let path_with_kinship = PathWithKinship {
+            path: vec![PathStep {
+                person_id: from_id,
+                relationship_label: "self".to_string(),
+                direction: "none".to_string(),
+            }],
+            kinship_name: "self".to_string(),
+        };
+        return Ok(Json(path_with_kinship));
     }
 
     let graph = load_family_graph(&state).await?;
@@ -260,7 +265,23 @@ async fn get_path(
         )));
     };
 
-    Ok(Json(path))
+    // Convert PathStep to kinship calculator format
+    let kinship_path: Vec<CorePathStep> = path
+        .iter()
+        .map(|step| CorePathStep {
+            direction: step.direction.clone(),
+            label: step.relationship_label.clone(),
+            person_id: step.person_id,
+        })
+        .collect();
+
+    let kinship_result = compute_kinship(&kinship_path);
+    let path_with_kinship = PathWithKinship {
+        path,
+        kinship_name: kinship_result.kinship_name,
+    };
+
+    Ok(Json(path_with_kinship))
 }
 
 async fn get_network(

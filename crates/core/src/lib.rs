@@ -2,6 +2,7 @@ pub mod assertion;
 pub mod event;
 pub mod evidence;
 pub mod family;
+pub mod kinship;
 pub mod lds;
 pub mod person;
 pub mod place;

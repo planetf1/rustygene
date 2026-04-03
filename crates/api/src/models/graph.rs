@@ -55,6 +55,12 @@ pub struct PathStep {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PathWithKinship {
+    pub path: Vec<PathStep>,
+    pub kinship_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct NetworkNode {
     pub id: EntityId,
     pub label: String,

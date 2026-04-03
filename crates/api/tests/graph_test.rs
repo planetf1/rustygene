@@ -346,11 +346,19 @@ async fn graph_descendants_and_path_work_for_cousins() {
         .expect("path request");
     assert_eq!(path.status(), StatusCode::OK);
     let path_body: serde_json::Value = path.json().await.expect("path json");
-    let steps = path_body.as_array().expect("path steps array");
+    let steps = path_body
+        .get("path")
+        .and_then(serde_json::Value::as_array)
+        .expect("path steps array");
     assert!(
         steps.len() >= 3,
         "expected multi-step cousin relationship path"
     );
+    let kinship_name = path_body
+        .get("kinship_name")
+        .and_then(serde_json::Value::as_str)
+        .expect("kinship_name string");
+    assert!(!kinship_name.is_empty(), "expected kinship_name in response");
 
     server.shutdown().await.expect("shutdown server");
 }
