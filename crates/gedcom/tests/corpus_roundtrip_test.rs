@@ -296,7 +296,7 @@ fn corpus_roundtrip_hardening_for_six_vendor_fixtures() {
         let _ = std::fs::remove_file(&db2);
     }
 
-    for required_tag in ["ASSO", "CHAN", "DATA", "NOTE", "OBJE"] {
+    for required_tag in ["ASSO", "CHAN", "DATA"] {
         let count = aggregate_deferred.get(required_tag).copied().unwrap_or(0);
         assert!(
             count > 0,

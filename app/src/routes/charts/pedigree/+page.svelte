@@ -81,6 +81,8 @@
 
   let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null;
   let zoomState = d3.zoomIdentity;
+  let pedigreeGroup: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
+  let suppressZoomExpand = false;
 
   const nodeWidth = 168;
   const nodeHeight = 54;
@@ -239,6 +241,33 @@
     void loadRoot(result.entity_id, result.display_name, generations);
   }
 
+  function openPersonDetailFromPedigree(personId: string): void {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(
+        'person_nav_context',
+        JSON.stringify({ from: 'Pedigree', href: '/charts/pedigree', personId: rootPersonId })
+      );
+    }
+    void goto(`/persons/${personId}`);
+  }
+
+  function openRootInGraph(): void {
+    if (!rootPersonId) {
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('graph_center_person_id', rootPersonId);
+      localStorage.setItem('graph_center_person_name', rootPersonName);
+      localStorage.setItem(
+        'person_nav_context',
+        JSON.stringify({ from: 'Pedigree', href: '/charts/pedigree', personId: rootPersonId })
+      );
+    }
+
+    void goto('/charts/graph');
+  }
+
   function toPedigreeDatum(
     node: AncestorApiNode,
     depth: number,
@@ -295,7 +324,8 @@
 
   function calculateViewport(): { width: number; height: number } {
     const width = Math.max(980, Math.floor(chartContainer?.clientWidth ?? 980));
-    const height = 680;
+    const containerHeight = Math.floor(chartContainer?.clientHeight ?? 0);
+    const height = Math.max(680, containerHeight || 680);
     return { width, height };
   }
 
@@ -387,7 +417,11 @@
         .scaleExtent([0.4, 2.5])
         .on('zoom', (event) => {
           zoomState = event.transform;
-          g.attr('transform', zoomState.toString());
+          pedigreeGroup?.attr('transform', zoomState.toString());
+
+          if (suppressZoomExpand) {
+            return;
+          }
 
           if (viewportExpandDebounce) {
             clearTimeout(viewportExpandDebounce);
@@ -399,11 +433,12 @@
       selection.call(zoomBehavior);
     }
 
-    const g = selection.append('g').attr('class', 'pedigree-root');
-    g.attr('transform', zoomState.toString());
+    pedigreeGroup = selection.append('g').attr('class', 'pedigree-root');
+    pedigreeGroup.attr('transform', zoomState.toString());
 
     const links = hierarchyRoot.links();
-    g.append('g')
+    pedigreeGroup
+      .append('g')
       .attr('class', 'edges')
       .selectAll('path')
       .data(links)
@@ -423,7 +458,7 @@
         return `M ${sy} ${sx} H ${sy + 24} V ${tx} H ${ty}`;
       });
 
-    const nodeGroups = g
+    const nodeGroups = pedigreeGroup
       .append('g')
       .attr('class', 'nodes')
       .selectAll('g')
@@ -460,7 +495,7 @@
         }
 
         if (node.personId) {
-          void goto(`/persons/${node.personId}`);
+          openPersonDetailFromPedigree(node.personId);
         }
       });
 
@@ -479,7 +514,7 @@
       .append('text')
       .attr('x', 10)
       .attr('y', 20)
-      .attr('font-size', 12)
+      .attr('font-size', 14)
       .attr('font-weight', 600)
       .attr('fill', '#0f172a')
       .text((node) => truncateLabel(node.displayName));
@@ -488,7 +523,7 @@
       .append('text')
       .attr('x', 10)
       .attr('y', 38)
-      .attr('font-size', 11)
+      .attr('font-size', 12)
       .attr('fill', '#475569')
       .text((node) => lifeLine(node));
 
@@ -503,7 +538,11 @@
       .text((node) => `appears ${node.appearsCount}x`);
 
     if (zoomBehavior) {
+      suppressZoomExpand = true;
       selection.call(zoomBehavior.transform, zoomState);
+      requestAnimationFrame(() => {
+        suppressZoomExpand = false;
+      });
     }
   }
 
@@ -685,6 +724,7 @@
       <button type="button" on:click={zoomIn}>Zoom in</button>
       <button type="button" on:click={zoomOut}>Zoom out</button>
       <button type="button" class="ghost" on:click={resetZoom}>Reset</button>
+      <button type="button" class="ghost" on:click={openRootInGraph} disabled={!rootPersonId}>Open in relationship graph</button>
     </div>
   </section>
 

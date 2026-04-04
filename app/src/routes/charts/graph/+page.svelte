@@ -554,6 +554,16 @@
     contextMenu = { open: false, nodeId: '', x: 0, y: 0 };
   }
 
+  function openPersonDetailFromGraph(personId: string): void {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(
+        'person_nav_context',
+        JSON.stringify({ from: 'Relationship Graph', href: '/charts/graph', personId: selectedCenterId })
+      );
+    }
+    void goto(`/persons/${personId}`);
+  }
+
   async function searchPeople(): Promise<void> {
     const query = searchInput.trim();
     if (query.length < 2) {
@@ -980,7 +990,7 @@
 
     {#if contextMenu.open}
       <div class="context-menu" style={`left:${contextMenu.x}px;top:${contextMenu.y}px;`}>
-        <button type="button" on:click={() => goto(`/persons/${contextMenu.nodeId}`)}>
+        <button type="button" on:click={() => openPersonDetailFromGraph(contextMenu.nodeId)}>
           Navigate to detail
         </button>
         <button
@@ -1025,7 +1035,7 @@
     <p><strong>Node type:</strong> {selectedNodeSummary.type}</p>
     <p><strong>Node id:</strong> <code>{selectedNodeSummary.id}</code></p>
     <div class="panel-actions">
-      <button type="button" on:click={() => goto(`/persons/${selectedNodeSummary?.id}`)}>
+      <button type="button" on:click={() => selectedNodeSummary && openPersonDetailFromGraph(selectedNodeSummary.id)}>
         Open person detail
       </button>
       <button type="button" class="ghost" on:click={() => selectedNodeSummary && expandFromNode(selectedNodeSummary.id, true)}>

@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use rustygene_core::assertion::AssertionStatus;
 use rustygene_core::evidence::{Media, Note, Repository, Source};
 use rustygene_core::family::Family;
 use rustygene_core::person::Person;
@@ -18,16 +19,18 @@ use rustygene_core::types::{ActorRef, EntityId};
 use rustygene_gedcom::{
     build_gedcom_tree,
     diff::generate_person_import_diff,
-    family_to_fam_node, gramps, import_gedcom_to_sqlite, media_to_obje_node, note_to_note_node,
-    matching::{match_persons, MatchConfidence},
-    map_indi_nodes_to_events,
+    family_to_fam_node, gramps, import_gedcom_to_sqlite, map_indi_nodes_to_events,
     map_indi_nodes_to_persons,
-    person_to_indi_node_with_policy, render_gedcom_file, repository_to_repo_node,
-    source_to_sour_node, tokenize_gedcom, ExportPrivacyPolicy, GedcomImportError,
+    matching::{match_persons, MatchConfidence},
+    media_to_obje_node, note_to_note_node, person_to_indi_node_with_policy, render_gedcom_file,
+    repository_to_repo_node, source_to_sour_node, tokenize_gedcom, ExportPrivacyPolicy,
+    GedcomImportError,
 };
-use rustygene_core::assertion::AssertionStatus;
 use rustygene_storage::sqlite_impl::SqliteBackend;
-use rustygene_storage::{EntityType, JsonAssertion, JsonExportMode, JsonImportMode, Pagination, StorageError, StorageErrorCode};
+use rustygene_storage::{
+    EntityType, JsonAssertion, JsonExportMode, JsonImportMode, Pagination, StorageError,
+    StorageErrorCode,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::fs as tokio_fs;
@@ -165,8 +168,8 @@ struct ImportExecutionSummary {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/import", post(start_import))
-    .route("/import/diff", post(import_diff))
-    .route("/import/merge", post(import_merge))
+        .route("/import/diff", post(import_diff))
+        .route("/import/merge", post(import_merge))
         .route("/import/:job_id", get(get_import_job_status))
         .route("/export", get(export_data))
 }

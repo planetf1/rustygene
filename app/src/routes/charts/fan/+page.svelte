@@ -155,6 +155,10 @@
     return angleDeg > 0 ? 'start' : 'end';
   }
 
+  function canRenderArcLabel(arc: ArcDatum): boolean {
+    return arc.endAngle - arc.startAngle > 0.12;
+  }
+
   function nodeAtPath(root: AncestorApiNode | null, pathBits: number[]): AncestorApiNode | null {
     let cursor = root;
     for (const bit of pathBits) {
@@ -325,9 +329,19 @@
     void loadRoot(result.entity_id, result.display_name, generations, false);
   }
 
+  function openPersonDetailFromFan(personId: string): void {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(
+        'person_nav_context',
+        JSON.stringify({ from: 'Fan', href: '/charts/fan', personId: rootPersonId })
+      );
+    }
+    void goto(`/persons/${personId}`);
+  }
+
   function onArcClick(node: ArcDatum): void {
     if (node.personId) {
-      void goto(`/persons/${node.personId}`);
+      openPersonDetailFromFan(node.personId);
     }
   }
 
@@ -335,7 +349,7 @@
     if (!rootPersonId) {
       return;
     }
-    void goto(`/persons/${rootPersonId}`);
+    openPersonDetailFromFan(rootPersonId);
   }
 
   function onRootCircleKeydown(event: KeyboardEvent): void {
@@ -406,10 +420,28 @@
     zoomScale = 1;
   }
 
+  function openRootInGraph(): void {
+    if (!rootPersonId) {
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('graph_center_person_id', rootPersonId);
+      localStorage.setItem('graph_center_person_name', rootPersonName);
+      localStorage.setItem(
+        'person_nav_context',
+        JSON.stringify({ from: 'Fan', href: '/charts/fan', personId: rootPersonId })
+      );
+    }
+
+    void goto('/charts/graph');
+  }
+
   $: chartWidth = Math.max(960, Math.floor(chartContainer?.clientWidth ?? 980));
-  $: chartHeight = 760;
-  $: centerX = chartWidth * 0.13;
-  $: centerY = chartHeight / 2;
+  $: maxRadius = rootRadius + ringWidth * generations + 8;
+  $: chartHeight = Math.max(760, Math.ceil(maxRadius + 24 + 24));
+  $: centerX = chartWidth / 2;
+  $: centerY = Math.ceil(maxRadius + 24);
 
   onMount(async () => {
     await ensureDefaultRoot();
@@ -474,6 +506,7 @@
       <button type="button" on:click={zoomOut}>-</button>
       <button type="button" on:click={zoomIn}>+</button>
       <button type="button" class="ghost" on:click={resetZoom}>Reset zoom</button>
+      <button type="button" class="ghost" on:click={openRootInGraph} disabled={!rootPersonId}>Open in relationship graph</button>
     </div>
   </section>
 
@@ -542,13 +575,13 @@
             on:keydown={(event) => onArcKeydown(event, arc)}
           />
 
-          {#if !arc.isPlaceholder}
-            {@const point = centroid(arc, 0.54)}
+          {#if !arc.isPlaceholder && canRenderArcLabel(arc)}
+            {@const point = centroid(arc, 0.5)}
             {@const split = surnameAndGiven(arc.displayName)}
             <g transform={`translate(${point.x}, ${point.y}) rotate(${labelRotation(arc)})`}>
-              <text text-anchor={labelAnchor(arc)} class="arc-label surname">{split.surname}</text>
-              <text text-anchor={labelAnchor(arc)} dy="12" class="arc-label">{truncateGiven(split.given)}</text>
-              <text text-anchor={labelAnchor(arc)} dy="24" class="arc-label year">
+              <text text-anchor={labelAnchor(arc)} dominant-baseline="middle" class="arc-label surname">{split.surname}</text>
+              <text text-anchor={labelAnchor(arc)} dominant-baseline="middle" dy="12" class="arc-label">{truncateGiven(split.given)}</text>
+              <text text-anchor={labelAnchor(arc)} dominant-baseline="middle" dy="24" class="arc-label year">
                 {arc.birthYear === null ? '?' : arc.birthYear}
               </text>
             </g>
@@ -569,7 +602,7 @@
         <p>Dates: {fullLifeLabel(tooltipNode)}</p>
         {#if tooltipNode.personId}
           <div class="tooltip-actions">
-            <button type="button" on:click={() => goto(`/persons/${tooltipNode?.personId}`)}>Open</button>
+            <button type="button" on:click={() => tooltipNode?.personId && openPersonDetailFromFan(tooltipNode.personId)}>Open</button>
             <button type="button" class="ghost" on:click={setTooltipNodeAsRoot}>Set as root</button>
           </div>
         {/if}

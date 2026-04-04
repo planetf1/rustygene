@@ -9,9 +9,9 @@ use chrono::Utc;
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
 use rustygene_core::evidence::CitationRef;
-use rustygene_core::types::{Calendar, DateValue, FuzzyDate};
 use rustygene_core::types::ActorRef;
 use rustygene_core::types::EntityId;
+use rustygene_core::types::{Calendar, DateValue, FuzzyDate};
 use rustygene_storage::{EntityType, JsonAssertion, Pagination};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -414,13 +414,11 @@ fn format_date_value(date: &DateValue) -> String {
         | DateValue::Before { date, .. }
         | DateValue::After { date, .. }
         | DateValue::About { date, .. }
-        | DateValue::Tolerance { date, .. } => {
-            match (date.month, date.day) {
-                (Some(month), Some(day)) => format!("{:04}-{:02}-{:02}", date.year, month, day),
-                (Some(month), None) => format!("{:04}-{:02}", date.year, month),
-                (None, _) => format!("{:04}", date.year),
-            }
-        }
+        | DateValue::Tolerance { date, .. } => match (date.month, date.day) {
+            (Some(month), Some(day)) => format!("{:04}-{:02}-{:02}", date.year, month, day),
+            (Some(month), None) => format!("{:04}-{:02}", date.year, month),
+            (None, _) => format!("{:04}", date.year),
+        },
         DateValue::Range { from, to, .. } => format!(
             "{:04}-{:02}-{:02}/{:04}-{:02}-{:02}",
             from.year,
@@ -435,9 +433,7 @@ fn format_date_value(date: &DateValue) -> String {
     }
 }
 
-fn collect_event_citations(
-    assertions: &[rustygene_storage::FieldAssertion],
-) -> Vec<CitationRef> {
+fn collect_event_citations(assertions: &[rustygene_storage::FieldAssertion]) -> Vec<CitationRef> {
     let mut citations: Vec<CitationRef> = Vec::new();
     for record in assertions {
         for citation in &record.assertion.source_citations {

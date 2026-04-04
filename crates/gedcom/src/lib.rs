@@ -372,9 +372,49 @@ fn is_standard_gedcom_tag(tag: &str) -> bool {
     )
 }
 
+fn is_known_custom_vendor_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "_APID"
+            | "_ATL"
+            | "_CLON"
+            | "_CREA"
+            | "_CROP"
+            | "_DATE"
+            | "_DSCR"
+            | "_ENCR"
+            | "_FSID"
+            | "_HGHT"
+            | "_HPID"
+            | "_LEFT"
+            | "_LKID"
+            | "_META"
+            | "_MREL"
+            | "_MSER"
+            | "_MTYPE"
+            | "_OID"
+            | "_ORIG"
+            | "_PID"
+            | "_PRIM"
+            | "_SIZE"
+            | "_STYPE"
+            | "_TID"
+            | "_TOP"
+            | "_TYPE"
+            | "_USER"
+            | "_WDTH"
+            | "_WPID"
+    )
+}
+
 fn record_unhandled_tag(report: &mut GedcomTagHandlingReport, tag: &str) {
     if is_standard_gedcom_tag(tag) {
         record_deferred_standard_tag(report, tag);
+        return;
+    }
+
+    if tag.starts_with('_') && is_known_custom_vendor_tag(tag) {
+        tracing::debug!(tag, "known GEDCOM custom vendor tag preserved");
         return;
     }
 
@@ -606,6 +646,7 @@ pub fn map_family_nodes_with_report(
         let mut partner2_id: Option<EntityId> = None;
         let mut child_links: Vec<ChildLink> = Vec::new();
         let mut chan_subtrees: Vec<String> = Vec::new();
+        let mut family_note_subtrees: Vec<String> = Vec::new();
 
         for child in &fam.children {
             match child.tag.as_str() {
@@ -643,8 +684,14 @@ pub fn map_family_nodes_with_report(
                     // Family event tags are mapped in `map_family_events`.
                 }
                 tag if tag.starts_with('_') => record_unhandled_tag(report, tag),
-                "NCHI" | "SUBM" | "SLGS" | "NOTE" | "SOUR" | "REFN" | "RIN" => {
+                "NCHI" | "SUBM" | "SLGS" | "REFN" | "RIN" => {
                     record_deferred_standard_tag(report, child.tag.as_str())
+                }
+                "NOTE" => {
+                    family_note_subtrees.push(serialize_subtree(child));
+                }
+                "SOUR" => {
+                    // Citation mapping is handled by collect_citations_from_owner.
                 }
                 "CHAN" => {
                     record_deferred_standard_tag(report, child.tag.as_str());
@@ -676,13 +723,10 @@ pub fn map_family_nodes_with_report(
         };
 
         let couple_relationship = if let (Some(p1), Some(p2)) = (partner1_id, partner2_id) {
-            let relationship_seed = fam
-                .xref
-                .as_ref()
-                .map_or_else(
-                    || format!("{}:{}", p1.0, p2.0),
-                    |xref| format!("{xref}:couple"),
-                );
+            let relationship_seed = fam.xref.as_ref().map_or_else(
+                || format!("{}:{}", p1.0, p2.0),
+                |xref| format!("{xref}:couple"),
+            );
             let relationship = Relationship {
                 id: entity_id_from_seed("FAM_REL", &relationship_seed),
                 person1_id: p1,
@@ -698,10 +742,7 @@ pub fn map_family_nodes_with_report(
             None
         };
 
-        let family_seed = fam
-            .xref
-            .clone()
-            .unwrap_or_else(|| serialize_subtree(fam));
+        let family_seed = fam.xref.clone().unwrap_or_else(|| serialize_subtree(fam));
         let mut family = Family {
             id: entity_id_from_seed("FAM", &family_seed),
             partner1_id,
@@ -723,6 +764,12 @@ pub fn map_family_nodes_with_report(
                 .insert(format!("CUSTOM_STD_CHAN_{idx}"), subtree);
         }
 
+        for (idx, subtree) in family_note_subtrees.into_iter().enumerate() {
+            family
+                ._raw_gedcom
+                .insert(format!("STANDARD_NOTE_{idx}"), subtree);
+        }
+
         for child in &fam.children {
             if child.tag.starts_with('_') {
                 family
@@ -731,7 +778,6 @@ pub fn map_family_nodes_with_report(
             }
 
             if child.tag == "OBJE" {
-                record_deferred_standard_tag(report, child.tag.as_str());
                 let next_idx = family
                     ._raw_gedcom
                     .keys()
@@ -804,7 +850,14 @@ fn map_family_events(
             }
             "HUSB" | "WIFE" | "CHIL" | "NCHI" | "SUBM" | "SLGS" | "NOTE" | "SOUR" | "OBJE"
             | "REFN" | "RIN" | "CHAN" => {
-                record_deferred_standard_tag(report, child.tag.as_str());
+                if matches!(
+                    child.tag.as_str(),
+                    "HUSB" | "WIFE" | "CHIL" | "SOUR" | "NOTE" | "OBJE"
+                ) {
+                    // Already handled by map_family_nodes_with_report; do not count as deferred.
+                } else {
+                    record_deferred_standard_tag(report, child.tag.as_str());
+                }
                 None
             }
             _ => {
@@ -878,10 +931,33 @@ fn map_family_events(
                         .insert(format!("CUSTOM_{tag}"), serialize_subtree(nested));
                 }
                 "NOTE" | "AGNC" | "RELI" | "CAUS" => {
-                    record_deferred_standard_tag(report, nested.tag.as_str());
+                    if nested.tag == "NOTE" {
+                        let next_idx = event
+                            ._raw_gedcom
+                            .keys()
+                            .filter(|key| key.starts_with("STANDARD_NOTE_"))
+                            .count();
+                        event._raw_gedcom.insert(
+                            format!("STANDARD_NOTE_{next_idx}"),
+                            serialize_subtree(nested),
+                        );
+                    } else {
+                        record_deferred_standard_tag(report, nested.tag.as_str());
+                    }
                 }
                 "TYPE" => {
-                    record_deferred_standard_tag(report, nested.tag.as_str());
+                    capture_standard_subtree(&mut event._raw_gedcom, "TYPE", nested);
+                }
+                "OBJE" => {
+                    let next_idx = event
+                        ._raw_gedcom
+                        .keys()
+                        .filter(|key| key.starts_with("STANDARD_OBJE_"))
+                        .count();
+                    event._raw_gedcom.insert(
+                        format!("STANDARD_OBJE_{next_idx}"),
+                        serialize_subtree(nested),
+                    );
                 }
                 "CHAN" => {
                     record_deferred_standard_tag(report, nested.tag.as_str());
@@ -944,13 +1020,36 @@ fn map_obje_node(node: &GedcomNode, report: &mut GedcomTagHandlingReport) -> Med
                 };
             }
             "TITL" => media.caption = child.value.clone(),
+            "DATE" | "PLAC" => {
+                let next_idx = media
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_"))
+                    .count();
+                media._raw_gedcom.insert(
+                    format!("STANDARD_{}_{}", child.tag, next_idx),
+                    serialize_subtree(child),
+                );
+            }
             tag if tag.starts_with('_') => {
                 media
                     ._raw_gedcom
                     .insert(format!("CUSTOM_{tag}"), serialize_subtree(child));
             }
             "BLOB" | "REFN" | "RIN" | "NOTE" | "SOUR" => {
-                record_deferred_standard_tag(report, child.tag.as_str());
+                if matches!(child.tag.as_str(), "NOTE" | "SOUR") {
+                    let next_idx = media
+                        ._raw_gedcom
+                        .keys()
+                        .filter(|key| key.starts_with("STANDARD_"))
+                        .count();
+                    media._raw_gedcom.insert(
+                        format!("STANDARD_{}_{}", child.tag, next_idx),
+                        serialize_subtree(child),
+                    );
+                } else {
+                    record_deferred_standard_tag(report, child.tag.as_str());
+                }
             }
             "CHAN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
@@ -1062,7 +1161,15 @@ fn map_lds_ordinance_node(
                     .insert(format!("CUSTOM_{tag}"), serialize_subtree(child));
             }
             "PLAC" | "FAMC" => {
-                record_deferred_standard_tag(report, child.tag.as_str());
+                let next_idx = ordinance
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_"))
+                    .count();
+                ordinance._raw_gedcom.insert(
+                    format!("STANDARD_{}_{}", child.tag, next_idx),
+                    serialize_subtree(child),
+                );
             }
             _ => record_unhandled_tag(report, child.tag.as_str()),
         }
@@ -1141,6 +1248,17 @@ fn map_repository_node(node: &GedcomNode, report: &mut GedcomTagHandlingReport) 
                     repository.urls.push(url.clone());
                 }
             }
+            "DATE" | "PLAC" => {
+                let next_idx = repository
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_"))
+                    .count();
+                repository._raw_gedcom.insert(
+                    format!("STANDARD_{}_{}", child.tag, next_idx),
+                    serialize_subtree(child),
+                );
+            }
             tag if tag.starts_with('_') => {
                 let key = format!("CUSTOM_{tag}");
                 repository._raw_gedcom.insert(key, serialize_subtree(child));
@@ -1192,7 +1310,33 @@ fn map_source_node(
         match child.tag.as_str() {
             "TITL" => source.title = child.value.clone().unwrap_or_else(|| source.title.clone()),
             "AUTH" => source.author = child.value.clone(),
-            "PUBL" => source.publication_info = child.value.clone(),
+            "PUBL" => {
+                source.publication_info = child.value.clone();
+                for nested in &child.children {
+                    if nested.tag.starts_with('_') {
+                        let next_idx = source
+                            ._raw_gedcom
+                            .keys()
+                            .filter(|key| key.starts_with("CUSTOM_PUBL_"))
+                            .count();
+                        source._raw_gedcom.insert(
+                            format!("CUSTOM_PUBL_{}_{}", nested.tag, next_idx),
+                            serialize_subtree(nested),
+                        );
+                        continue;
+                    }
+
+                    let next_idx = source
+                        ._raw_gedcom
+                        .keys()
+                        .filter(|key| key.starts_with("STANDARD_PUBL_"))
+                        .count();
+                    source._raw_gedcom.insert(
+                        format!("STANDARD_PUBL_{}_{}", nested.tag, next_idx),
+                        serialize_subtree(nested),
+                    );
+                }
+            }
             "ABBR" => source.abbreviation = child.value.clone(),
             "REPO" => {
                 if let Some(repo_xref) = &child.value
@@ -1208,8 +1352,19 @@ fn map_source_node(
                         match nested.tag.as_str() {
                             "CALN" => repository_ref.call_number = nested.value.clone(),
                             "MEDI" => repository_ref.media_type = nested.value.clone(),
+                            "DATE" | "PLAC" => {
+                                let next_idx = source
+                                    ._raw_gedcom
+                                    .keys()
+                                    .filter(|key| key.starts_with("STANDARD_REPO_"))
+                                    .count();
+                                source._raw_gedcom.insert(
+                                    format!("STANDARD_REPO_{}_{}", nested.tag, next_idx),
+                                    serialize_subtree(nested),
+                                );
+                            }
                             tag if tag.starts_with('_') => record_unhandled_tag(report, tag),
-                            "NOTE" => record_deferred_standard_tag(report, nested.tag.as_str()),
+                            "NOTE" => {}
                             _ => record_unhandled_tag(report, nested.tag.as_str()),
                         }
                     }
@@ -1221,8 +1376,30 @@ fn map_source_node(
                 let key = format!("CUSTOM_{tag}");
                 source._raw_gedcom.insert(key, serialize_subtree(child));
             }
-            "TEXT" | "DATA" | "RIN" | "REFN" | "NOTE" | "OBJE" => {
+            "TEXT" | "DATA" | "RIN" | "REFN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
+            }
+            "DATE" | "PLAC" => {
+                let next_idx = source
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_"))
+                    .count();
+                source._raw_gedcom.insert(
+                    format!("STANDARD_{}_{}", child.tag, next_idx),
+                    serialize_subtree(child),
+                );
+            }
+            "NOTE" | "OBJE" => {
+                let next_idx = source
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_"))
+                    .count();
+                source._raw_gedcom.insert(
+                    format!("STANDARD_{}_{}", child.tag, next_idx),
+                    serialize_subtree(child),
+                );
             }
             "CHAN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
@@ -1350,10 +1527,47 @@ fn map_citation_node(
         match child.tag.as_str() {
             "PAGE" => citation.page = child.value.clone(),
             "QUAY" => citation.confidence_level = parse_u8(child.value.as_deref()).ok(),
+            "DATE" => {
+                if let Some(value) = &child.value {
+                    citation.date_accessed = Some(DateValue::Textual {
+                        value: value.clone(),
+                    });
+                }
+            }
+            "PLAC" => {
+                let next_idx = citation
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_PLAC_"))
+                    .count();
+                citation._raw_gedcom.insert(
+                    format!("STANDARD_PLAC_{next_idx}"),
+                    serialize_subtree(child),
+                );
+            }
             "DATA" => {
                 for nested in &child.children {
-                    if nested.tag == "TEXT" {
-                        citation.transcription = nested.value.clone();
+                    match nested.tag.as_str() {
+                        "TEXT" => citation.transcription = nested.value.clone(),
+                        "DATE" => {
+                            if let Some(value) = &nested.value {
+                                citation.date_accessed = Some(DateValue::Textual {
+                                    value: value.clone(),
+                                });
+                            }
+                        }
+                        "PLAC" => {
+                            let next_idx = citation
+                                ._raw_gedcom
+                                .keys()
+                                .filter(|key| key.starts_with("STANDARD_PLAC_"))
+                                .count();
+                            citation._raw_gedcom.insert(
+                                format!("STANDARD_PLAC_{next_idx}"),
+                                serialize_subtree(nested),
+                            );
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1362,7 +1576,15 @@ fn map_citation_node(
                 citation._raw_gedcom.insert(key, serialize_subtree(child));
             }
             "EVEN" | "OBJE" => {
-                record_deferred_standard_tag(report, child.tag.as_str());
+                let next_idx = citation
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_"))
+                    .count();
+                citation._raw_gedcom.insert(
+                    format!("STANDARD_{}_{}", child.tag, next_idx),
+                    serialize_subtree(child),
+                );
             }
             _ => record_unhandled_tag(report, child.tag.as_str()),
         }
@@ -1493,8 +1715,22 @@ fn map_indi_node_to_events_with_report(
                         ._raw_gedcom
                         .insert(format!("CUSTOM_{tag}"), serialize_subtree(nested));
                 }
-                "AGNC" | "TYPE" | "CAUS" | "NOTE" | "OBJE" => {
+                "AGNC" | "CAUS" => {
                     record_deferred_standard_tag(report, nested.tag.as_str());
+                }
+                "TYPE" => {
+                    capture_standard_subtree(&mut event._raw_gedcom, "TYPE", nested);
+                }
+                "NOTE" | "OBJE" => {
+                    let next_idx = event
+                        ._raw_gedcom
+                        .keys()
+                        .filter(|key| key.starts_with("STANDARD_"))
+                        .count();
+                    event._raw_gedcom.insert(
+                        format!("STANDARD_{}_{}", nested.tag, next_idx),
+                        serialize_subtree(nested),
+                    );
                 }
                 "CHAN" => {
                     record_deferred_standard_tag(report, nested.tag.as_str());
@@ -1576,17 +1812,54 @@ fn map_indi_node_to_person_with_report(
             | "IDNO" | "NATI" | "NCHI" | "NMR" | "PROP" | "RELI" | "SSN" | "TITL" | "EVEN" => {
                 // Delegated to map_indi_node_to_events — intentional no-op here.
             }
+            "MARR" => {
+                let next_idx = person
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_MARR_"))
+                    .count();
+                person._raw_gedcom.insert(
+                    format!("STANDARD_MARR_{next_idx}"),
+                    serialize_subtree(child),
+                );
+            }
             // Linking and cross-reference tags handled by family/source mappers.
-            "FAMS" | "FAMC" | "SUBM" | "ALIA" | "ANCI" | "DESI" | "NICK" | "RFN" | "AFN"
-            | "REFN" | "RIN" | "NOTE" | "SOUR" | "ASSO" | "ASSOC" | "RESN" => {
+            "FAMS" | "FAMC" => {
+                // Family links are mapped from FAM records. Preserve raw linkage for traceability,
+                // but don't count these as deferred/unhandled standard tags.
+                let next_idx = person
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_FAM_LINK_"))
+                    .count();
+                person._raw_gedcom.insert(
+                    format!("STANDARD_FAM_LINK_{next_idx}"),
+                    serialize_subtree(child),
+                );
+            }
+            "SUBM" | "ALIA" | "ANCI" | "DESI" | "NICK" | "RFN" | "AFN" | "REFN" | "RIN"
+            | "ASSO" | "ASSOC" | "RESN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
+            }
+            "NOTE" => {
+                let next_idx = person
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|key| key.starts_with("STANDARD_NOTE_"))
+                    .count();
+                person._raw_gedcom.insert(
+                    format!("STANDARD_NOTE_{next_idx}"),
+                    serialize_subtree(child),
+                );
+            }
+            "SOUR" => {
+                // Citation mapping is handled by collect_citations_from_owner.
             }
             "CHAN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
                 capture_standard_subtree(&mut person._raw_gedcom, "CHAN", child);
             }
             "OBJE" => {
-                record_deferred_standard_tag(report, child.tag.as_str());
                 let next_idx = person
                     ._raw_gedcom
                     .keys()
@@ -1671,7 +1944,11 @@ fn parse_name_node_with_report(
                 };
             }
             "FONE" | "ROMN" | "SOUR" | "NICK" => {
-                record_deferred_standard_tag(report, child.tag.as_str());
+                if child.tag == "SOUR" {
+                    // Citation mapping is handled by collect_citations_from_owner.
+                } else {
+                    record_deferred_standard_tag(report, child.tag.as_str());
+                }
             }
             tag if tag.starts_with('_') => record_unhandled_tag(report, tag),
             _ => record_unhandled_tag(report, child.tag.as_str()),
@@ -4551,6 +4828,240 @@ mod tests {
     }
 
     #[test]
+    fn mapped_family_structure_tags_are_not_reported_as_deferred() {
+        let input =
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n1 MARR\n2 DATE 1 JAN 1900\n";
+        let lines = tokenize_gedcom(input).expect("tokenize should succeed");
+        let roots = build_gedcom_tree(&lines).expect("tree build should succeed");
+        let mut report = GedcomTagHandlingReport::default();
+
+        let mapped = map_family_nodes_with_report(&roots, &mut report);
+
+        assert_eq!(mapped.families.len(), 1);
+        assert_eq!(mapped.families[0].child_links.len(), 1);
+        assert!(!report.deferred_standard_tags.contains_key("HUSB"));
+        assert!(!report.deferred_standard_tags.contains_key("WIFE"));
+        assert!(!report.deferred_standard_tags.contains_key("CHIL"));
+    }
+
+    #[test]
+    fn fams_famc_are_preserved_but_not_reported_as_deferred() {
+        let input = "0 @I1@ INDI\n1 NAME Child /Example/\n1 FAMC @F1@\n1 FAMS @F2@\n0 @I2@ INDI\n1 NAME Parent /Example/\n";
+        let lines = tokenize_gedcom(input).expect("tokenize should succeed");
+        let roots = build_gedcom_tree(&lines).expect("tree build should succeed");
+        let mut report = GedcomTagHandlingReport::default();
+
+        let persons = map_indi_nodes_to_persons_with_report(&roots, &mut report);
+
+        assert_eq!(persons.len(), 2);
+        let child = persons
+            .iter()
+            .find(|person| person.original_xref.as_deref() == Some("@I1@"))
+            .expect("child person");
+        assert!(
+            child
+                ._raw_gedcom
+                .values()
+                .any(|raw| raw.contains("FAMC") || raw.contains("FAMS"))
+        );
+        assert!(!report.deferred_standard_tags.contains_key("FAMS"));
+        assert!(!report.deferred_standard_tags.contains_key("FAMC"));
+    }
+
+    #[test]
+    fn handled_standard_tags_are_not_reported_as_deferred_in_import_report() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @S1@ SOUR\n1 TITL Source Title\n0 @N1@ NOTE Root note\n0 @M1@ OBJE\n1 FILE /tmp/pic.jpg\n1 FORM jpg\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n1 SOUR @S1@\n1 NOTE Inline note\n1 OBJE @M1@\n1 EVEN General event\n2 TYPE Census\n2 DATE 1 JAN 1900\n2 PLAC Springfield\n2 SOUR @S1@\n2 NOTE Event note\n1 MARR\n2 DATE 2 FEB 1901\n2 PLAC Shelbyville\n0 @I2@ INDI\n1 NAME Jane /Doe/\n1 SEX F\n0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 3 MAR 1902\n2 PLAC Capital City\n1 SOUR @S1@\n1 NOTE Family note\n1 OBJE @M1@\n0 TRLR\n";
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        run_migrations(&mut conn).expect("run sqlite migrations");
+
+        let report = import_gedcom_to_sqlite(&mut conn, "job-handled-standard-tags", input)
+            .expect("import should succeed");
+
+        for tag in ["DATE", "MARR", "NOTE", "OBJE", "PLAC", "SOUR", "TYPE"] {
+            assert!(
+                !report.deferred_standard_tags.contains_key(tag),
+                "tag {tag} should not be reported as deferred: {:?}",
+                report.deferred_standard_tags
+            );
+        }
+    }
+
+    #[test]
+    fn known_vendor_custom_tags_are_respected_and_not_reported_unhandled() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Jane /Example/\n1 _APID 1,123::abc\n1 _FSID KWZJ-XYZ\n1 _HPID 98765\n1 _PID pid-1\n1 _WPID web-1\n1 _LKID lk-1\n1 OBJE @M1@\n2 _OID obj-1\n2 _MSER media-server\n2 _ATL ancestry-link\n0 @M1@ OBJE\n1 FILE /tmp/pic.jpg\n1 FORM jpg\n1 _META some-meta\n1 _CREA 4 APR 2026\n1 _DATE 1900\n1 _MTYPE portrait\n1 _STYPE source-type\n1 _ORIG import-origin\n1 _USER user-data\n1 _PRIM Y\n1 _SIZE 100x100\n1 _TYPE alt\n1 _LEFT 1\n1 _TOP 2\n1 _WDTH 3\n1 _HGHT 4\n1 _CROP 1,2,3,4\n1 _ENCR abc\n1 _CLON ref\n1 _MREL rel\n1 _TID tree-id\n0 TRLR\n";
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        run_migrations(&mut conn).expect("run sqlite migrations");
+
+        let report = import_gedcom_to_sqlite(&mut conn, "job-known-custom-tags", input)
+            .expect("import should succeed");
+
+        for tag in [
+            "_APID", "_FSID", "_HPID", "_PID", "_WPID", "_LKID", "_OID", "_MSER", "_ATL", "_META",
+            "_CREA", "_DATE", "_MTYPE", "_STYPE", "_ORIG", "_USER", "_PRIM", "_SIZE", "_TYPE",
+            "_LEFT", "_TOP", "_WDTH", "_HGHT", "_CROP", "_ENCR", "_CLON", "_MREL", "_TID",
+        ] {
+            assert!(
+                !report.unhandled_tags.contains_key(tag),
+                "known vendor custom tag {tag} should not be reported unhandled: {:?}",
+                report.unhandled_tags
+            );
+        }
+
+        let person_json: String = conn
+            .query_row("SELECT data FROM persons LIMIT 1", [], |row| row.get(0))
+            .expect("person row");
+        let person: Person = serde_json::from_str(&person_json).expect("parse person");
+        for tag in ["_APID", "_FSID", "_HPID", "_PID", "_WPID", "_LKID"] {
+            assert!(
+                person._raw_gedcom.values().any(|raw| raw.contains(tag)),
+                "expected person raw GEDCOM to preserve {tag}"
+            );
+        }
+
+        let media_json: String = conn
+            .query_row("SELECT data FROM media LIMIT 1", [], |row| row.get(0))
+            .expect("media row");
+        let media: Media = serde_json::from_str(&media_json).expect("parse media");
+        for tag in [
+            "_META", "_CREA", "_DATE", "_MTYPE", "_STYPE", "_ORIG", "_USER",
+        ] {
+            assert!(
+                media._raw_gedcom.values().any(|raw| raw.contains(tag)),
+                "expected media raw GEDCOM to preserve {tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_custom_tags_are_still_reported_unhandled() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John /Unknown/\n1 _MY_UNKNOWN_TAG value\n0 TRLR\n";
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        run_migrations(&mut conn).expect("run sqlite migrations");
+
+        let report = import_gedcom_to_sqlite(&mut conn, "job-unknown-custom-tag", input)
+            .expect("import should succeed");
+
+        assert!(
+            report
+                .unhandled_tags
+                .get("_MY_UNKNOWN_TAG")
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        );
+    }
+
+    #[test]
+    fn citation_level_date_and_plac_are_not_reported_as_deferred() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @S1@ SOUR\n1 TITL Source Title\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n1 SOUR @S1@\n2 DATE 4 APR 2026\n2 PLAC Springfield\n0 TRLR\n";
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        run_migrations(&mut conn).expect("run sqlite migrations");
+
+        let report = import_gedcom_to_sqlite(&mut conn, "job-citation-date-plac", input)
+            .expect("import should succeed");
+
+        assert!(
+            !report.deferred_standard_tags.contains_key("DATE"),
+            "DATE should not be reported as deferred: {:?}",
+            report.deferred_standard_tags
+        );
+        assert!(
+            !report.deferred_standard_tags.contains_key("PLAC"),
+            "PLAC should not be reported as deferred: {:?}",
+            report.deferred_standard_tags
+        );
+    }
+
+    #[test]
+    fn source_repository_and_nested_repo_date_plac_are_not_reported_as_deferred() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @R1@ REPO\n1 NAME Repo One\n1 DATE 1900\n1 PLAC Springfield\n0 @S1@ SOUR\n1 TITL Source Title\n1 DATE 1901\n1 PLAC Shelbyville\n1 REPO @R1@\n2 CALN shelf-1\n2 DATE 1902\n2 PLAC Capital City\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n1 SOUR @S1@\n0 TRLR\n";
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        run_migrations(&mut conn).expect("run sqlite migrations");
+
+        let report = import_gedcom_to_sqlite(&mut conn, "job-source-repo-date-plac", input)
+            .expect("import should succeed");
+
+        assert!(
+            !report.deferred_standard_tags.contains_key("DATE"),
+            "DATE should not be reported as deferred: {:?}",
+            report.deferred_standard_tags
+        );
+        assert!(
+            !report.deferred_standard_tags.contains_key("PLAC"),
+            "PLAC should not be reported as deferred: {:?}",
+            report.deferred_standard_tags
+        );
+    }
+
+    #[test]
+    fn root_obje_date_and_plac_are_not_reported_as_deferred() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @O1@ OBJE\n1 FILE /tmp/pic1.jpg\n1 FORM jpg\n1 DATE 1931\n0 @O2@ OBJE\n1 FILE /tmp/pic2.jpg\n1 FORM jpg\n1 DATE 21 Jul 2018\n1 PLAC Paviland, Gower Peninsula, Glamorganshire\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n1 OBJE @O1@\n1 OBJE @O2@\n0 TRLR\n";
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        run_migrations(&mut conn).expect("run sqlite migrations");
+
+        let report = import_gedcom_to_sqlite(&mut conn, "job-root-obje-date-plac", input)
+            .expect("import should succeed");
+
+        assert!(
+            !report.deferred_standard_tags.contains_key("DATE"),
+            "DATE should not be reported as deferred: {:?}",
+            report.deferred_standard_tags
+        );
+        assert!(
+            !report.deferred_standard_tags.contains_key("PLAC"),
+            "PLAC should not be reported as deferred: {:?}",
+            report.deferred_standard_tags
+        );
+    }
+
+    #[test]
+    fn source_publ_nested_date_and_plac_are_preserved_and_not_reported_as_deferred() {
+        let input = "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @S1@ SOUR\n1 TITL Source Title\n1 PUBL Online publication\n2 DATE 2020\n2 PLAC Lehi, UT, USA\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n1 SOUR @S1@\n0 TRLR\n";
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        run_migrations(&mut conn).expect("run sqlite migrations");
+
+        let report = import_gedcom_to_sqlite(&mut conn, "job-source-publ-date-plac", input)
+            .expect("import should succeed");
+
+        assert!(
+            !report.deferred_standard_tags.contains_key("DATE"),
+            "DATE should not be reported as deferred: {:?}",
+            report.deferred_standard_tags
+        );
+        assert!(
+            !report.deferred_standard_tags.contains_key("PLAC"),
+            "PLAC should not be reported as deferred: {:?}",
+            report.deferred_standard_tags
+        );
+
+        let source_json: String = conn
+            .query_row("SELECT data FROM sources LIMIT 1", [], |row| row.get(0))
+            .expect("source row");
+        let source: Source = serde_json::from_str(&source_json).expect("parse source");
+        assert!(
+            source
+                ._raw_gedcom
+                .values()
+                .any(|raw| raw.contains("2 DATE 2020")),
+            "expected nested PUBL DATE to be preserved in source raw GEDCOM"
+        );
+        assert!(
+            source
+                ._raw_gedcom
+                .values()
+                .any(|raw| raw.contains("2 PLAC Lehi, UT, USA")),
+            "expected nested PUBL PLAC to be preserved in source raw GEDCOM"
+        );
+    }
+
+    #[test]
     fn family_mapping_reuses_person_ids_from_indi_records() {
         let input = "0 @I1@ INDI\n1 NAME John /Doe/\n0 @I2@ INDI\n1 NAME Jane /Smith/\n0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 12 JUN 1880\n";
         let lines = tokenize_gedcom(input).expect("tokenize should succeed");
@@ -5802,7 +6313,8 @@ mod tests {
 
     #[test]
     fn import_gedcom_to_sqlite_is_idempotent_on_reimport_same_database() {
-        let input = "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n0 TRLR\n";
+        let input =
+            "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n0 TRLR\n";
         let mut conn = Connection::open_in_memory().expect("open in-memory db");
 
         import_gedcom_to_sqlite(&mut conn, "job-idempotent-1", input)
@@ -5814,7 +6326,10 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
             .expect("count persons");
 
-        assert_eq!(person_count, 1, "re-import should not duplicate person rows");
+        assert_eq!(
+            person_count, 1,
+            "re-import should not duplicate person rows"
+        );
     }
 
     #[test]
@@ -5873,7 +6388,10 @@ mod tests {
         })
         .collect::<std::collections::BTreeMap<_, _>>();
 
-        assert_eq!(first_counts, second_counts, "re-import should not inflate entity/assertion counts");
+        assert_eq!(
+            first_counts, second_counts,
+            "re-import should not inflate entity/assertion counts"
+        );
     }
 
     #[test]

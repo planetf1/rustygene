@@ -33,6 +33,11 @@
     description: string | null;
   };
 
+  type SourceListItem = {
+    id: string;
+    title: string;
+  };
+
   type FamilySummary = {
     id: string;
     partner1?: { id: string; display_name: string };
@@ -68,6 +73,12 @@
   let error = '';
   let showEdit = false;
   let deleting = false;
+  let sourceMap = new Map<string, string>();
+  let showEvidence = false;
+  let backLabel = '';
+  let backHref = '';
+  $: timelineRows = detail?.events ?? [];
+  $: familyRows = detail?.families ?? [];
 
   function flattenCitations(): string[] {
     const names = detail?.names ?? [];
@@ -77,6 +88,135 @@
     }
 
     return values.map((source, index) => source.citation_id ?? source.source_id ?? `citation-${index + 1}`);
+  }
+
+  function citationTokensFromNames(names: PersonNameAssertion[]): string[] {
+    const values = names.flatMap((name) => name.sources ?? []);
+    return values
+      .map((source, index) => source.source_id ?? source.citation_id ?? `citation-${index + 1}`)
+      .filter((token) => Boolean(token));
+  }
+
+  function formatDate(value: unknown): string {
+    if (value === null || value === undefined) {
+      return 'unknown';
+    }
+
+    if (typeof value === 'string') {
+      return value || 'unknown';
+    }
+
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      const kind = String(record.type ?? '').toLowerCase();
+      if (kind === 'textual') {
+        return String(record.value ?? 'unknown');
+      }
+
+      if (kind === 'exact') {
+        return String(record.date ?? 'unknown');
+      }
+
+      if (kind === 'between' || kind === 'range') {
+        const from = String(record.from ?? record.start ?? '?');
+        const to = String(record.to ?? record.end ?? '?');
+        return `${from} to ${to}`;
+      }
+    }
+
+    return JSON.stringify(value);
+  }
+
+  function displayName(): string {
+    const given = detail?.names[0]?.given_names.join(' ') ?? '';
+    const surname = detail?.names[0]?.surnames.map((s) => s.value).join(' ') ?? '';
+    const joined = `${given} ${surname}`.trim();
+    return joined || `Person ${id}`;
+  }
+
+  function birthEvent(): TimelineEvent | null {
+    return detail?.events.find((event) => event.event_type.toLowerCase() === 'birth') ?? null;
+  }
+
+  function deathEvent(): TimelineEvent | null {
+    return detail?.events.find((event) => event.event_type.toLowerCase() === 'death') ?? null;
+  }
+
+  function lifeSummary(): string {
+    const birth = birthEvent();
+    const death = deathEvent();
+    const from = birth ? formatDate(birth.date) : '?';
+    const to = death ? formatDate(death.date) : '?';
+    return `b. ${from} — d. ${to}`;
+  }
+
+  function genderBadge(): string {
+    return detail?.gender_assertions[0]?.value ?? 'Unknown';
+  }
+
+  function familyLabel(family: FamilySummary): string {
+    const left = family.partner1?.display_name ?? 'Unknown';
+    const right = family.partner2?.display_name ?? 'Unknown';
+    return `${left} + ${right}`;
+  }
+
+  function citationSourceTitle(citationId: string): string {
+    return sourceMap.get(citationId) ?? citationId;
+  }
+
+  function openInChart(mode: 'pedigree' | 'fan' | 'graph'): void {
+    const name = displayName();
+
+    if (mode === 'pedigree') {
+      localStorage.setItem('pedigree_root_person_id', id);
+      localStorage.setItem('pedigree_root_person_name', name);
+      localStorage.setItem('navigation_context', JSON.stringify({ from: 'person', to: 'pedigree', personId: id }));
+      void goto('/charts/pedigree');
+      return;
+    }
+
+    if (mode === 'fan') {
+      localStorage.setItem('ancestor_chart_root_person_id', id);
+      localStorage.setItem('ancestor_chart_root_person_name', name);
+      localStorage.setItem('navigation_context', JSON.stringify({ from: 'person', to: 'fan', personId: id }));
+      void goto('/charts/fan');
+      return;
+    }
+
+    localStorage.setItem('graph_center_person_id', id);
+    localStorage.setItem('graph_center_person_name', name);
+    localStorage.setItem('navigation_context', JSON.stringify({ from: 'person', to: 'graph', personId: id }));
+    void goto('/charts/graph');
+  }
+
+  function readBackContext(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const raw = localStorage.getItem('person_nav_context');
+    if (!raw) {
+      backLabel = '';
+      backHref = '';
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as { from?: string; href?: string };
+      const from = parsed.from ?? '';
+      const href = parsed.href ?? '';
+      if (!from || !href) {
+        backLabel = '';
+        backHref = '';
+        return;
+      }
+
+      backLabel = `← Back to ${from}`;
+      backHref = href;
+    } catch {
+      backLabel = '';
+      backHref = '';
+    }
   }
 
   function dateSortKey(value: unknown): string {
@@ -137,6 +277,24 @@
         api.get<FamilySummary[]>(`/api/v1/persons/${id}/families`)
       ]);
 
+      const citationIds = citationTokensFromNames(personDetail.names);
+      if (citationIds.length > 0) {
+        const ids = [...new Set(citationIds)];
+        const sourceRows = await Promise.all(
+          ids.map(async (citationId) => {
+            try {
+              const source = await api.get<SourceListItem>(`/api/v1/sources/${citationId}`);
+              return [citationId, source.title] as const;
+            } catch {
+              return [citationId, citationId] as const;
+            }
+          })
+        );
+        sourceMap = new Map(sourceRows);
+      } else {
+        sourceMap = new Map();
+      }
+
       detail = {
         ...personDetail,
         events: sortedTimeline(timeline),
@@ -181,6 +339,7 @@
   }
 
   onMount(async () => {
+    readBackContext();
     await loadDetail();
   });
 </script>
@@ -194,13 +353,14 @@
   </main>
 {:else if detail}
   <main class="panel">
+    {#if backHref}
+      <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
+    {/if}
+
     <header class="header">
       <div>
-        <h1>
-          {detail.names[0]?.given_names.join(' ')}
-          {detail.names[0]?.surnames.map((surname) => surname.value).join(' ')}
-        </h1>
-        <p>ID: <code>{id}</code></p>
+        <h1>{displayName()}</h1>
+        <p>{lifeSummary()} · <span class="badge">{genderBadge()}</span></p>
       </div>
       <div class="actions">
         <button type="button" on:click={() => (showEdit = true)}>Edit profile</button>
@@ -210,21 +370,37 @@
       </div>
     </header>
 
+    <section class="chart-links">
+      <button type="button" class="pill" on:click={() => openInChart('pedigree')}>📊 Pedigree</button>
+      <button type="button" class="pill" on:click={() => openInChart('fan')}>🔁 Fan chart</button>
+      <button type="button" class="pill" on:click={() => openInChart('graph')}>🕸 Relationship graph</button>
+    </section>
+
     <section>
-      <AssertionList entityId={id} entityType="persons" assertions={assertionGroup} on:updated={loadDetail} />
-      <button type="button" class="secondary" on:click={() => (showEdit = true)}>Tidy assertions ✨</button>
+      <h2>Summary</h2>
+      <ul class="list">
+        {#if birthEvent()}
+          <li><strong>Birth:</strong> {formatDate(birthEvent()?.date)} {birthEvent()?.description ?? ''}</li>
+        {/if}
+        {#if deathEvent()}
+          <li><strong>Death:</strong> {formatDate(deathEvent()?.date)} {deathEvent()?.description ?? ''}</li>
+        {/if}
+        {#if !birthEvent() && !deathEvent()}
+          <li>Life events are not yet recorded.</li>
+        {/if}
+      </ul>
     </section>
 
     <section>
       <h2>🕰️ Timeline</h2>
-      {#if detail.events.length === 0}
+      {#if timelineRows.length === 0}
         <p>No life events yet — add one to bring this timeline to life.</p>
       {:else}
         <ul class="list">
-          {#each detail.events as event}
+          {#each timelineRows as event (event.id)}
             <li>
               <button type="button" class="linkish" on:click={() => goto(`/events/${event.id}`)}>
-                {event.event_type} — {event.date ? JSON.stringify(event.date) : 'No date'}
+                {event.event_type} — {event.date ? formatDate(event.date) : 'No date'}
               </button>
             </li>
           {/each}
@@ -234,14 +410,15 @@
 
     <section>
       <h2>🏡 Families</h2>
-      {#if detail.families.length === 0}
+      {#if familyRows.length === 0}
         <p>No family links yet — you can connect relationships from a family page.</p>
       {:else}
         <ul class="list">
-          {#each detail.families as family}
+          {#each familyRows as family (family.id)}
             <li>
+              <span>{familyLabel(family)} ({family.your_role ?? 'related'}) · </span>
               <button type="button" class="linkish" on:click={() => goto(`/families/${family.id}`)}>
-                Open family {family.id} ({family.your_role ?? 'related'})
+                Open family
               </button>
             </li>
           {/each}
@@ -256,9 +433,20 @@
       {:else}
         <ul class="list">
           {#each flattenCitations() as citation}
-            <li><code>{citation}</code></li>
+            <li><code>{citationSourceTitle(citation)}</code></li>
           {/each}
         </ul>
+      {/if}
+    </section>
+
+    <section>
+      <button type="button" class="secondary" on:click={() => (showEvidence = !showEvidence)}>
+        {showEvidence ? 'Hide evidence details' : 'Show evidence details'}
+      </button>
+      {#if showEvidence}
+        <div class="evidence-wrap">
+          <AssertionList entityId={id} entityType="persons" assertions={assertionGroup} on:updated={loadDetail} />
+        </div>
       {/if}
     </section>
 
@@ -317,6 +505,30 @@
     color: #6b6192;
   }
 
+  .badge {
+    background: #eef2ff;
+    border: 1px solid #c7d2fe;
+    border-radius: 999px;
+    padding: 0.12rem 0.4rem;
+    font-size: 0.8rem;
+    color: #3730a3;
+  }
+
+  .chart-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    border: 0;
+    padding: 0;
+    background: transparent;
+  }
+
+  .pill {
+    background: #f8fafc;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
+  }
+
   .actions {
     display: inline-flex;
     gap: 0.5rem;
@@ -363,6 +575,19 @@
 
   .secondary {
     background: #7258c7;
+  }
+
+  .back-link {
+    align-self: flex-start;
+    background: transparent;
+    border: 0;
+    color: #4c1d95;
+    padding: 0;
+    text-decoration: underline;
+  }
+
+  .evidence-wrap {
+    margin-top: 0.7rem;
   }
 
   .danger {

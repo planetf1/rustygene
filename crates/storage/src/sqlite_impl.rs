@@ -4216,8 +4216,8 @@ impl Storage for SqliteBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustygene_core::event::{EventParticipant, EventRole};
     use rustygene_core::assertion::{EvidenceType, Sandbox, SandboxStatus};
+    use rustygene_core::event::{EventParticipant, EventRole};
     use rustygene_core::types::ActorRef;
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -4357,7 +4357,10 @@ mod tests {
             original_xref: None,
             _raw_gedcom: Default::default(),
         };
-        backend.create_person(&original).await.expect("create person");
+        backend
+            .create_person(&original)
+            .await
+            .expect("create person");
 
         let mut first_update = original.clone();
         first_update.gender = rustygene_core::types::Gender::Male;

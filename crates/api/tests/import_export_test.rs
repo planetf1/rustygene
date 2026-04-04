@@ -525,9 +525,7 @@ async fn merge_diff_and_selective_merge_create_staging_only() {
         .json()
         .await
         .expect("parse persons before selective merge");
-    let pre_merge_person_count = pre_merge_persons
-        .as_array()
-        .map_or(0, std::vec::Vec::len);
+    let pre_merge_person_count = pre_merge_persons.as_array().map_or(0, std::vec::Vec::len);
 
     let modified = build_modified_kennedy_fixture(base_gedcom);
     let diff_form = reqwest::multipart::Form::new()
@@ -605,9 +603,7 @@ async fn merge_diff_and_selective_merge_create_staging_only() {
         .json()
         .await
         .expect("parse post-merge persons");
-    let post_merge_person_count = post_merge_persons
-        .as_array()
-        .map_or(0, std::vec::Vec::len);
+    let post_merge_person_count = post_merge_persons.as_array().map_or(0, std::vec::Vec::len);
 
     assert_eq!(
         post_merge_person_count, pre_merge_person_count,
