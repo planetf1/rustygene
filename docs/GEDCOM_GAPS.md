@@ -38,7 +38,8 @@ mapping plus citation count preservation across import → export → re-import.
 ### ~~6. Phase 1B GEDCOM Corpus Hardening~~ — IN PROGRESS (baseline in place)
 
 `crates/gedcom/tests/corpus_roundtrip_test.rs` now runs import/export/re-import
-against five vendor fixtures (Ancestry, RootsMagic, Gramps, Legacy, PAF),
+against seven fixtures (Ancestry, RootsMagic, Gramps, Legacy, PAF, Simpsons,
+vendor metadata sample),
 checks round-trip row and assertion-distribution stability, and validates that
 standard deferred-tag counters are present for `ASSO`, `CHAN`, `DATA`, `NOTE`,
 and `OBJE`.
@@ -90,13 +91,12 @@ to verify both typed assertion generation and metadata tag re-emission.
 
 ## Open Gaps
 
-### 9. Multimedia (OBJE) Coverage is Root-Level Only
+### 9. Multimedia (OBJE) richer link-metadata parity
 
 - **Impact:** LOW · Phase 1B
 
 Root-level `OBJE` records are imported/exported as typed `Media` entities.
-Inline `OBJE` links on INDI/FAM are now mapped to `media_ref` assertions.
-Inline event-level `OBJE` links are also mapped to `media_ref` assertions.
+Inline `OBJE` links on INDI/FAM/Event are mapped to `media_ref` assertions.
 Remaining gap is richer link metadata parity beyond simple references/paths.
 
 ### ~~15. torture551.ged Round-Trip Citation Drift~~ — FIXED
@@ -166,7 +166,7 @@ The following issues were discovered and fixed during Phase 8.2:
 - FAMS/FAMC back-links rebuilt correctly on export from family data
 - Source TITL, AUTH, PUBL fields
 - Custom tag pass-through via `_raw_gedcom` (unknown tags survive round-trip for persons)
-- Phase 1B corpus hardening baseline: import/export/re-import test across 5 vendor fixtures
+- Phase 1B corpus hardening baseline: import/export/re-import test across 7 fixtures
 - UUID-based entity primary keys
 - All three test files import and export without errors or panics:
   - `kennedy.ged` (70 persons, 23 families, 23 events, 474 assertions)
@@ -194,12 +194,11 @@ Previously tracked as gaps, now implemented:
 
 The following improvements are deferred to a later phase:
 
-1. **ASSO record import**: Store witness/association links.
-2. **xref alias table**: Optionally preserve original xref IDs across
+1. **xref alias table**: Optionally preserve original xref IDs across
    import/export.
-3. **Storage integration tests** (bead `rustygene-41z`): Cover Place, Note,
+2. **Storage integration tests** (bead `rustygene-41z`): Cover Place, Note,
    Media, and LDS entity CRUD paths.
-4. **CLI show/query expansion** (bead `rustygene-c7h`): Add commands for
+3. **CLI show/query expansion** (bead `rustygene-c7h`): Add commands for
    Source, Citation, Repository, Note, and Media entities.
-5. **HEAD metadata parity**: Preserve/import/export submitter (`SUBM`) metadata
+4. **HEAD metadata parity**: Preserve/import/export submitter (`SUBM`) metadata
    when represented in domain models.
