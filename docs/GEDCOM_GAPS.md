@@ -5,7 +5,7 @@ Known limitations in GEDCOM handling, discovered during Phase 1A/1B testing with
 Phase 1B corpus fixtures (`ancestry_sample.ged`, `rootsmagic_sample.ged`,
 `gramps_sample.ged`, `legacy_sample.ged`, `paf_sample.ged`).
 
-Last reviewed: 2026-04-02.
+Last reviewed: 2026-04-08.
 
 ---
 
@@ -45,6 +45,13 @@ standard tags are explicitly counted as deferred (instead of unhandled) when
 they appear in edge-case paths, and `crates/gedcom/tests/torture551_tag_accounting_test.rs`
 now enforces zero unhandled standard tags for `torture551.ged`.
 
+### ~~16. Vendor custom ID tags were raw-only~~ — PARTIALLY FIXED
+
+Known vendor ID tags (`_APID`, `_FSID`, `_HPID`, `_PID`, `_WPID`, `_LKID`) are
+now mapped to explicit `external_reference` assertions on Person/Family
+entities during import, while still preserving raw subtrees for round-trip
+fidelity.
+
 ---
 
 ## Open Gaps
@@ -70,6 +77,14 @@ mapped into explicit `MediaRef` link structures.
 **Impact: LOW** · Phase 1B+
 
 `1 ASSO @I1@` association records are not parsed or stored.
+
+### 17. Vendor custom metadata tags remain unnormalized
+
+**Impact: LOW** · Phase 2+
+
+Metadata-oriented vendor tags (e.g. `_MSER`, `_OID`, `_ATL`, `_DSCR`, `_ORIG`,
+`_DATE`, crop geometry tags) are preserved and accounted for, but currently
+remain in `_raw_gedcom` rather than first-class domain fields.
 
 ### 15. torture551.ged Round-Trip Event Duplication
 

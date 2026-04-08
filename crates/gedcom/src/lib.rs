@@ -2303,6 +2303,53 @@ fn parse_obje_external_paths(
     paths
 }
 
+fn vendor_source_system_for_tag(tag: &str) -> Option<&'static str> {
+    match tag {
+        "_APID" | "_ATL" | "_LKID" | "_OID" | "_MSER" | "_TID" | "_CLON" | "_ENCR"
+        | "_STYPE" => Some("ancestry"),
+        "_FSID" => Some("familysearch"),
+        "_HPID" => Some("myheritage"),
+        "_PID" | "_WPID" => Some("vendor"),
+        _ => None,
+    }
+}
+
+fn parse_vendor_external_references(
+    raw_gedcom: &std::collections::BTreeMap<String, String>,
+) -> Vec<Value> {
+    let mut refs = Vec::new();
+    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+
+    for value in raw_gedcom.values() {
+        for node in deserialize_serialized_subtrees(value) {
+            let Some(source_system) = vendor_source_system_for_tag(node.tag.as_str()) else {
+                continue;
+            };
+
+            let Some(raw_value) = node.value.as_deref().map(str::trim) else {
+                continue;
+            };
+
+            if raw_value.is_empty() {
+                continue;
+            }
+
+            let dedupe_key = (node.tag.clone(), raw_value.to_string());
+            if !seen.insert(dedupe_key) {
+                continue;
+            }
+
+            refs.push(json!({
+                "source_system": source_system,
+                "vendor_tag": node.tag,
+                "external_id": raw_value,
+            }));
+        }
+    }
+
+    refs
+}
+
 pub fn generate_import_assertions(
     import_job_id: &str,
     persons: &[Person],
@@ -2339,7 +2386,7 @@ pub fn generate_import_assertions(
                 EntityType::Person,
                 "gender",
                 to_value(&person.gender)?,
-                source_citations,
+                source_citations.clone(),
                 &proposed_by,
             ));
         }
@@ -2365,6 +2412,17 @@ pub fn generate_import_assertions(
                     "caption": caption,
                 }),
                 Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for external_reference in parse_vendor_external_references(&person._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                person.id,
+                EntityType::Person,
+                "external_reference",
+                external_reference,
+                source_citations.clone(),
                 &proposed_by,
             ));
         }
@@ -2474,6 +2532,17 @@ pub fn generate_import_assertions(
                     "caption": caption,
                 }),
                 Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for external_reference in parse_vendor_external_references(&family._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                family.id,
+                EntityType::Family,
+                "external_reference",
+                external_reference,
+                source_citations.clone(),
                 &proposed_by,
             ));
         }
@@ -4932,6 +5001,74 @@ mod tests {
                 "expected media raw GEDCOM to preserve {tag}"
             );
         }
+    }
+
+    #[test]
+    fn vendor_id_custom_tags_generate_external_reference_assertions() {
+        let input = "0 @S1@ SOUR\n1 TITL Vendor export\n0 @I1@ INDI\n1 NAME Jane /Example/\n1 _APID 1,123::abc\n1 _FSID KWZJ-XYZ\n1 FAMS @F1@\n0 @I2@ INDI\n1 NAME John /Example/\n1 FAMS @F1@\n0 @F1@ FAM\n1 HUSB @I2@\n1 WIFE @I1@\n1 _APID 9,321::family\n0 TRLR\n";
+
+        let lines = tokenize_gedcom(input).expect("tokenize should succeed");
+        let roots = build_gedcom_tree(&lines).expect("tree build should succeed");
+
+        let persons = map_indi_nodes_to_persons(&roots);
+        let person_events = map_indi_nodes_to_events(&roots);
+        let source_mapping = map_source_chain(&roots);
+        let family_mapping = map_family_nodes(&roots);
+        let media_note_lds_mapping = map_media_note_lds(&roots);
+
+        let assertions = generate_import_assertions(
+            "job-vendor-external-refs",
+            &persons,
+            &[],
+            &family_mapping,
+            &source_mapping,
+            &media_note_lds_mapping,
+            &person_events,
+        )
+        .expect("generate assertions");
+
+        let person_external_refs: Vec<&ImportedAssertionRecord> = assertions
+            .iter()
+            .filter(|record| {
+                record.entity_type == EntityType::Person && record.field == "external_reference"
+            })
+            .collect();
+        assert!(
+            person_external_refs.len() >= 2,
+            "expected external_reference assertions for person vendor IDs"
+        );
+        assert!(person_external_refs.iter().any(|record| {
+            record
+                .assertion
+                .value
+                .get("vendor_tag")
+                .and_then(|value| value.as_str())
+                == Some("_APID")
+        }));
+        assert!(person_external_refs.iter().any(|record| {
+            record
+                .assertion
+                .value
+                .get("vendor_tag")
+                .and_then(|value| value.as_str())
+                == Some("_FSID")
+        }));
+
+        let family_external_refs: Vec<&ImportedAssertionRecord> = assertions
+            .iter()
+            .filter(|record| {
+                record.entity_type == EntityType::Family && record.field == "external_reference"
+            })
+            .collect();
+        assert_eq!(family_external_refs.len(), 1);
+        assert_eq!(
+            family_external_refs[0]
+                .assertion
+                .value
+                .get("vendor_tag")
+                .and_then(|value| value.as_str()),
+            Some("_APID")
+        );
     }
 
     #[test]
