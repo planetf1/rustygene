@@ -41,6 +41,8 @@
 
   type ColorMode = 'confidence' | 'gender';
   type LayoutMode = 'cose-bilkent' | 'cola' | 'breadthfirst' | 'circle';
+  type EdgeType = 'parent_of' | 'child_of' | 'partner' | 'event_participant';
+  type EdgeVisibilityState = Record<EdgeType, boolean>;
 
   type ContextMenuState = {
     open: boolean;
@@ -122,11 +124,25 @@
   let sidePanelOpen = false;
   let selectedNodeSummary: GraphNode | null = null;
   let colorMode: ColorMode = 'confidence';
-  let hideEventEdges = true;
-  let layoutMode: LayoutMode = 'cose-bilkent';
+  let layoutMode: LayoutMode = 'breadthfirst';
+  let edgeVisibility: EdgeVisibilityState = {
+    parent_of: true,
+    child_of: true,
+    partner: true,
+    event_participant: false
+  };
   let contextMenu: ContextMenuState = { open: false, nodeId: '', x: 0, y: 0 };
   let edgeTooltip: TooltipState = { open: false, x: 0, y: 0, text: '' };
   let nodeTooltip: TooltipState = { open: false, x: 0, y: 0, text: '' };
+
+  const defaultColorMode: ColorMode = 'confidence';
+  const defaultLayoutMode: LayoutMode = 'breadthfirst';
+  const defaultEdgeVisibility: EdgeVisibilityState = {
+    parent_of: true,
+    child_of: true,
+    partner: true,
+    event_participant: false
+  };
 
   const edgeIds = new Set<string>();
   const expandedNodeIds = new Set<string>();
@@ -216,7 +232,11 @@
           animate: false,
           fit: false,
           directed: true,
-          spacingFactor: 0.75,
+          avoidOverlap: true,
+          spacingFactor: 1.35,
+          circle: false,
+          grid: true,
+          roots: selectedCenterId ? [`#${selectedCenterId}`] : undefined,
           padding: 8
         };
       case 'circle':
@@ -258,9 +278,9 @@
       const edgeType = String(edge.data('edge_type') ?? '');
       const sourceId = String(edge.data('source') ?? '');
       const targetId = String(edge.data('target') ?? '');
-      const hiddenByEvent = hideEventEdges && edgeType === 'event_participant';
+      const hiddenByFilter = (edgeVisibility[edgeType as EdgeType] ?? true) === false;
       const hiddenByCollapse = hiddenNodeIds.has(sourceId) || hiddenNodeIds.has(targetId);
-      if (hiddenByEvent || hiddenByCollapse) {
+      if (hiddenByFilter || hiddenByCollapse) {
         edge.addClass('hidden');
       } else {
         edge.removeClass('hidden');
@@ -451,7 +471,7 @@
           }
         }
       ],
-      layout: { name: 'cose-bilkent', animate: false, fit: true }
+      layout: { name: 'breadthfirst', animate: false, fit: true, directed: true, avoidOverlap: true }
     });
 
     wireGraphInteractions();
@@ -895,6 +915,44 @@
     refreshEdgeVisibility();
   }
 
+  function edgeVisibilityStats(): { hiddenCount: number; totalCount: number } {
+    if (!cy) {
+      return { hiddenCount: 0, totalCount: 0 };
+    }
+
+    let totalCount = 0;
+    let hiddenCount = 0;
+
+    cy.edges().forEach((edge) => {
+      totalCount += 1;
+      const edgeType = String(edge.data('edge_type') ?? '');
+      const sourceId = String(edge.data('source') ?? '');
+      const targetId = String(edge.data('target') ?? '');
+      const hiddenByFilter = (edgeVisibility[edgeType as EdgeType] ?? true) === false;
+      const hiddenByCollapse = hiddenNodeIds.has(sourceId) || hiddenNodeIds.has(targetId);
+
+      if (hiddenByFilter || hiddenByCollapse) {
+        hiddenCount += 1;
+      }
+    });
+
+    return { hiddenCount, totalCount };
+  }
+
+  $: edgeStats = edgeVisibilityStats();
+
+  function resetGraphDefaults(): void {
+    colorMode = defaultColorMode;
+    layoutMode = defaultLayoutMode;
+    edgeVisibility = { ...defaultEdgeVisibility };
+    hiddenNodeIds.clear();
+    refreshNodeLabels();
+    refreshEdgeVisibility();
+    onColorModeChange();
+    onLayoutModeChange();
+    cy?.fit(undefined, 55);
+  }
+
   function onColorModeChange(): void {
     refreshNodeLabels();
     if (!cy) {
@@ -955,7 +1013,7 @@
     <ul>
       <li><strong>Parent/child edges</strong>: use these to move up/down generations.</li>
       <li><strong>Partner edges</strong>: relationship context only (married/divorced/etc.).</li>
-      <li><strong>Hide event edges</strong> can reduce noise while following tree structure.</li>
+      <li><strong>Edge filters</strong> can reduce noise while following specific relationship types.</li>
     </ul>
   </section>
 
@@ -989,9 +1047,9 @@
       <label>
         Layout
         <select bind:value={layoutMode} on:change={onLayoutModeChange}>
+          <option value="breadthfirst">breadthfirst (semantic default)</option>
           <option value="cose-bilkent">cose-bilkent</option>
           <option value="cola">cola</option>
-          <option value="breadthfirst">breadthfirst</option>
           <option value="circle">circle</option>
         </select>
       </label>
@@ -1004,13 +1062,43 @@
         </select>
       </label>
 
-      <label class="checkbox">
-        <input type="checkbox" bind:checked={hideEventEdges} on:change={refreshEdgeVisibility} />
-        Hide event edges
-      </label>
+      <fieldset class="edge-filter-group">
+        <legend>Edge filters</legend>
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={edgeVisibility.parent_of} on:change={refreshEdgeVisibility} />
+          parent_of
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={edgeVisibility.child_of} on:change={refreshEdgeVisibility} />
+          child_of
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={edgeVisibility.partner} on:change={refreshEdgeVisibility} />
+          partner
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={edgeVisibility.event_participant} on:change={refreshEdgeVisibility} />
+          event_participant
+        </label>
+      </fieldset>
 
       <button type="button" on:click={() => cy?.fit(undefined, 55)}>Fit to screen</button>
       <button type="button" class="ghost" on:click={clearCollapsed}>Reset collapsed</button>
+      <button type="button" class="ghost" on:click={resetGraphDefaults}>Reset defaults</button>
+    </div>
+
+    <div class="legend" aria-label="Relationship graph legend">
+      <h3>Legend</h3>
+      <div class="legend-grid">
+        <div><span class="legend-node person"></span> Person node</div>
+        <div><span class="legend-node family"></span> Family node</div>
+        <div><span class="legend-node unknown"></span> Unknown placeholder</div>
+        <div><span class="legend-edge parent"></span> parent_of / child_of</div>
+        <div><span class="legend-edge partner"></span> partner</div>
+        <div><span class="legend-edge event"></span> event_participant</div>
+        <div><span class="legend-chip">confidence</span> Higher confidence = greener node</div>
+        <div><span class="legend-chip muted">hidden</span> Hidden edges: {edgeStats.hiddenCount}/{edgeStats.totalCount}</div>
+      </div>
     </div>
   </section>
 
@@ -1245,6 +1333,102 @@
 
   .checkbox {
     gap: 0.5rem;
+  }
+
+  .edge-filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid #dbe3f1;
+    border-radius: 0.5rem;
+    padding: 0.3rem 0.5rem;
+    margin: 0;
+  }
+
+  .edge-filter-group legend {
+    padding: 0 0.25rem;
+    color: #334155;
+    font-size: 0.8rem;
+  }
+
+  .legend {
+    border: 1px solid #dbe3f1;
+    background: #f8fbff;
+    border-radius: 0.65rem;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .legend h3 {
+    margin: 0 0 0.45rem;
+    font-size: 0.92rem;
+  }
+
+  .legend-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.3rem 0.8rem;
+    font-size: 0.84rem;
+    color: #334155;
+  }
+
+  .legend-node {
+    display: inline-block;
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 999px;
+    border: 1px solid #0f172a;
+    margin-right: 0.35rem;
+    vertical-align: -1px;
+    background: #93c5fd;
+  }
+
+  .legend-node.family,
+  .legend-node.unknown {
+    border-radius: 2px;
+    transform: rotate(45deg);
+  }
+
+  .legend-node.family {
+    background: #fde68a;
+  }
+
+  .legend-node.unknown {
+    background: #e2e8f0;
+    border-style: dashed;
+  }
+
+  .legend-edge {
+    display: inline-block;
+    width: 1.1rem;
+    height: 0;
+    border-top: 2px solid #0f172a;
+    margin-right: 0.35rem;
+    vertical-align: middle;
+  }
+
+  .legend-edge.partner {
+    border-top-color: #64748b;
+  }
+
+  .legend-edge.event {
+    border-top-color: #64748b;
+    border-top-style: dashed;
+  }
+
+  .legend-chip {
+    display: inline-block;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    padding: 0.05rem 0.35rem;
+    margin-right: 0.35rem;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    background: #ecfeff;
+  }
+
+  .legend-chip.muted {
+    background: #f1f5f9;
   }
 
   .control-row button {
