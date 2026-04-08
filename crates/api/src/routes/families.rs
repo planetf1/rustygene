@@ -13,7 +13,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::errors::ApiError;
-use crate::models::families::{CreateFamilyRequest, FamilyDetailResponse, PartnerSummary};
+use crate::models::families::{
+    CreateFamilyRequest, FamilyDetailResponse, FamilyListResponse, PartnerSummary,
+};
 use crate::models::persons::AssertionValueResponse;
 use crate::AppState;
 
@@ -23,6 +25,15 @@ struct FamiliesQuery {
     limit: Option<u32>,
     #[serde(default)]
     offset: Option<u32>,
+    /// Free-text search on partner names (case-insensitive substring).
+    #[serde(default)]
+    q: Option<String>,
+    /// Sort field: family | marriage_year | children (default: family)
+    #[serde(default)]
+    sort: Option<String>,
+    /// Sort direction: asc | desc (default: asc)
+    #[serde(default)]
+    dir: Option<String>,
     #[serde(default)]
     #[serde(rename = "person_id")]
     _person_id: Option<String>,
@@ -41,16 +52,17 @@ pub fn router() -> Router<AppState> {
 async fn list_families(
     State(state): State<AppState>,
     Query(query): Query<FamiliesQuery>,
-) -> Result<Json<Vec<FamilyDetailResponse>>, ApiError> {
-    let pagination = Pagination {
-        limit: query.limit.unwrap_or(100),
-        offset: query.offset.unwrap_or(0),
-    };
+) -> Result<Json<FamilyListResponse>, ApiError> {
+    let all_families = state
+        .storage
+        .list_families(Pagination {
+            limit: u32::MAX,
+            offset: 0,
+        })
+        .await?;
 
-    let families = state.storage.list_families(pagination).await?;
-
-    let mut response = Vec::with_capacity(families.len());
-    for family in families {
+    let mut response = Vec::with_capacity(all_families.len());
+    for family in all_families {
         let partner1 = if let Some(pid) = family.partner1_id {
             state.storage.get_person(pid).await.ok()
         } else {
@@ -123,7 +135,69 @@ async fn list_families(
         response.push(detail);
     }
 
-    Ok(Json(response))
+    // Helper: family label for search/sort.
+    let family_label = |f: &FamilyDetailResponse| -> String {
+        let p1 = f
+            .partner1
+            .as_ref()
+            .map_or("", |p| p.display_name.as_str())
+            .to_lowercase();
+        let p2 = f
+            .partner2
+            .as_ref()
+            .map_or("", |p| p.display_name.as_str())
+            .to_lowercase();
+        format!("{p1} {p2}")
+    };
+
+    // Apply search filter.
+    if let Some(ref q) = query.q {
+        let q_lc = q.to_lowercase();
+        response.retain(|f| family_label(f).contains(&q_lc));
+    }
+
+    // Helper: marriage year for sort.
+    let marriage_year = |f: &FamilyDetailResponse| -> Option<i32> {
+        f.events
+            .iter()
+            .find(|e| {
+                e.event_type.to_lowercase().contains("marriage")
+                    || e.event_type.to_lowercase() == "married"
+            })
+            .and_then(|e| e.date.as_ref())
+            .and_then(|d| {
+                d.chars()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .get(..4)
+                    .and_then(|y| y.parse().ok())
+            })
+    };
+
+    // Apply sort.
+    let sort_field = query.sort.as_deref().unwrap_or("family");
+    let descending = query.dir.as_deref() == Some("desc");
+    match sort_field {
+        "marriage_year" => response.sort_by(|a, b| {
+            let ord = marriage_year(a).cmp(&marriage_year(b));
+            if descending { ord.reverse() } else { ord }
+        }),
+        "children" => response.sort_by(|a, b| {
+            let ord = a.children.len().cmp(&b.children.len());
+            if descending { ord.reverse() } else { ord }
+        }),
+        _ /* "family" */ => response.sort_by(|a, b| {
+            let ord = family_label(a).cmp(&family_label(b));
+            if descending { ord.reverse() } else { ord }
+        }),
+    }
+
+    let total = response.len();
+    let limit = query.limit.unwrap_or(50) as usize;
+    let offset = query.offset.unwrap_or(0) as usize;
+    let items = response.into_iter().skip(offset).take(limit).collect();
+
+    Ok(Json(FamilyListResponse { total, items }))
 }
 
 async fn create_family(

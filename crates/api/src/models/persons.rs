@@ -79,6 +79,12 @@ pub struct PersonResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PersonListResponse {
+    pub total: usize,
+    pub items: Vec<PersonResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PersonNameAssertion {
     pub assertion_id: EntityId,
     pub given_names: Vec<String>,

@@ -54,6 +54,12 @@ pub struct FamilySummaryForPerson {
     pub your_role: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FamilyListResponse {
+    pub total: usize,
+    pub items: Vec<FamilyDetailResponse>,
+}
+
 impl FamilyDetailResponse {
     pub fn from_family_persons_events(
         family: Family,

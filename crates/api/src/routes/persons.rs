@@ -19,8 +19,8 @@ use uuid::Uuid;
 use crate::errors::ApiError;
 use crate::models::persons::{
     AssertionValueResponse, CreateAssertionRequest, CreatePersonRequest, CreatedPersonResponse,
-    FamilySummaryResponse, GenderAssertionResponse, PersonDetailResponse, PersonNameAssertion,
-    PersonResponse, TimelineEventResponse,
+    FamilySummaryResponse, GenderAssertionResponse, PersonDetailResponse, PersonListResponse,
+    PersonNameAssertion, PersonResponse, TimelineEventResponse,
 };
 use crate::AppState;
 
@@ -30,6 +30,15 @@ struct PersonsQuery {
     limit: Option<u32>,
     #[serde(default)]
     offset: Option<u32>,
+    /// Free-text search on display name (case-insensitive substring match).
+    #[serde(default)]
+    q: Option<String>,
+    /// Sort field: name | birth_year | death_year | assertion_count
+    #[serde(default)]
+    sort: Option<String>,
+    /// Sort direction: asc | desc (default: asc)
+    #[serde(default)]
+    dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,17 +73,18 @@ pub fn router() -> Router<AppState> {
 async fn list_persons(
     State(state): State<AppState>,
     Query(query): Query<PersonsQuery>,
-) -> Result<Json<Vec<PersonResponse>>, ApiError> {
-    let persons = state
+) -> Result<Json<PersonListResponse>, ApiError> {
+    // Load all persons so we can sort/filter in-process (SQLite JSON blob storage).
+    let all_persons = state
         .storage
         .list_persons(Pagination {
-            limit: query.limit.unwrap_or(100),
-            offset: query.offset.unwrap_or(0),
+            limit: u32::MAX,
+            offset: 0,
         })
         .await?;
 
-    let mut response = Vec::with_capacity(persons.len());
-    for person in persons {
+    let mut response: Vec<PersonResponse> = Vec::with_capacity(all_persons.len());
+    for person in all_persons {
         let display_name = display_name_for_person(&person);
         let assertions = state
             .storage
@@ -93,7 +103,42 @@ async fn list_persons(
         });
     }
 
-    Ok(Json(response))
+    // Apply search filter.
+    if let Some(ref q) = query.q {
+        let q_lc = q.to_lowercase();
+        response.retain(|p| p.display_name.to_lowercase().contains(&q_lc));
+    }
+
+    // Apply sort.
+    let sort_field = query.sort.as_deref().unwrap_or("name");
+    let descending = query.dir.as_deref() == Some("desc");
+    match sort_field {
+        "birth_year" => response.sort_by(|a, b| {
+            let ord = a.birth_year.cmp(&b.birth_year);
+            if descending { ord.reverse() } else { ord }
+        }),
+        "death_year" => response.sort_by(|a, b| {
+            let ord = a.death_year.cmp(&b.death_year);
+            if descending { ord.reverse() } else { ord }
+        }),
+        "assertion_count" => response.sort_by(|a, b| {
+            let ca: usize = a.assertion_counts.values().sum();
+            let cb: usize = b.assertion_counts.values().sum();
+            let ord = ca.cmp(&cb);
+            if descending { ord.reverse() } else { ord }
+        }),
+        _ /* "name" */ => response.sort_by(|a, b| {
+            let ord = a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase());
+            if descending { ord.reverse() } else { ord }
+        }),
+    }
+
+    let total = response.len();
+    let limit = query.limit.unwrap_or(50) as usize;
+    let offset = query.offset.unwrap_or(0) as usize;
+    let items = response.into_iter().skip(offset).take(limit).collect();
+
+    Ok(Json(PersonListResponse { total, items }))
 }
 
 async fn create_person(
