@@ -46,9 +46,21 @@
     depth: number;
     x: number;
     y: number;
+    boxWidth: number;
+    boxHeight: number;
     kind: 'person' | 'unknown' | 'linked';
     appearsCount: number;
     hasMissingParents: boolean;
+  };
+
+  type DensityMode = 'standard' | 'compact';
+
+  type LayoutMetrics = {
+    nodeWidth: number;
+    nodeHeight: number;
+    rowGap: number;
+    colGap: number;
+    nameMaxChars: number;
   };
 
   let svgElement: SVGSVGElement | null = null;
@@ -62,7 +74,9 @@
   let rootPersonName = '';
   let generations = 4;
   let loadedGenerations = 4;
+  let densityMode: DensityMode = 'standard';
   let showConfidenceColors = true;
+  let compactDensityGain = 1;
 
   let searchInput = '';
   let searchResults: SearchResult[] = [];
@@ -84,10 +98,31 @@
   let pedigreeGroup: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
   let suppressZoomExpand = false;
 
-  const nodeWidth = 168;
-  const nodeHeight = 54;
-  const rowGap = 18;
-  const colGap = 88;
+  const standardMetrics: LayoutMetrics = {
+    nodeWidth: 168,
+    nodeHeight: 54,
+    rowGap: 18,
+    colGap: 88,
+    nameMaxChars: 22
+  };
+
+  const compactMetrics: LayoutMetrics = {
+    nodeWidth: 122,
+    nodeHeight: 42,
+    rowGap: 8,
+    colGap: 44,
+    nameMaxChars: 16
+  };
+
+  function currentMetrics(): LayoutMetrics {
+    return densityMode === 'compact' ? compactMetrics : standardMetrics;
+  }
+
+  function estimateCompactWidth(label: string): number {
+    const base = 92;
+    const approx = Math.round(label.length * 5.7);
+    return Math.max(96, Math.min(140, base + approx));
+  }
 
   function truncateLabel(label: string, max = 22): string {
     if (label.length <= max) {
@@ -335,13 +370,20 @@
     }
 
     const { width, height } = calculateViewport();
+    updateDensityEstimate();
+    const metrics = currentMetrics();
     const rootDatum = toPedigreeDatum(treeData, 0, loadedGenerations, 'self');
     const hierarchyRoot = d3.hierarchy<PedigreeDatum>(rootDatum, (item) => item.children);
 
     const treeLayout = d3
       .tree<PedigreeDatum>()
-      .nodeSize([nodeHeight + rowGap, nodeWidth + colGap])
-      .separation((left, right) => (left.parent === right.parent ? 1 : 1.2));
+      .nodeSize([metrics.nodeHeight + metrics.rowGap, metrics.nodeWidth + metrics.colGap])
+      .separation((left, right) => {
+        if (left.parent === right.parent) {
+          return densityMode === 'compact' ? 1.05 : 1;
+        }
+        return densityMode === 'compact' ? 1.12 : 1.2;
+      });
 
     treeLayout(hierarchyRoot);
 
@@ -374,8 +416,11 @@
       }
 
       const count = data.personId ? personCounts.get(data.personId) ?? 1 : 1;
-      const y = node.depth * (nodeWidth + colGap) + 70;
+      const y = node.depth * (metrics.nodeWidth + metrics.colGap) + 70;
       const x = (node.x ?? 0) + height / 2;
+      const boxWidth = densityMode === 'compact'
+        ? estimateCompactWidth(data.isUnknown ? '?' : data.displayName)
+        : metrics.nodeWidth;
 
       const renderNode: RenderNode = {
         id: `${data.personId ?? 'unknown'}-${index}`,
@@ -392,6 +437,8 @@
         depth: node.depth,
         x,
         y,
+        boxWidth,
+        boxHeight: metrics.nodeHeight,
         kind,
         appearsCount: count,
         hasMissingParents:
@@ -447,14 +494,18 @@
       .attr('stroke', '#334155')
       .attr('stroke-width', 1.6)
       .attr('stroke-dasharray', (link) => {
-        const targetNode = renderedNodes.find((node) => node.x === (link.target.x ?? 0) + height / 2 && node.y === link.target.depth * (nodeWidth + colGap) + 70);
+        const targetNode = renderedNodes.find(
+          (node) =>
+            node.x === (link.target.x ?? 0) + height / 2 &&
+            node.y === link.target.depth * (metrics.nodeWidth + metrics.colGap) + 70
+        );
         return targetNode ? edgeStrokeDash(targetNode) : 'none';
       })
       .attr('d', (link) => {
         const sx = (link.source.x ?? 0) + height / 2;
-        const sy = link.source.depth * (nodeWidth + colGap) + 70 + nodeWidth / 2;
+        const sy = link.source.depth * (metrics.nodeWidth + metrics.colGap) + 70 + metrics.nodeWidth / 2;
         const tx = (link.target.x ?? 0) + height / 2;
-        const ty = link.target.depth * (nodeWidth + colGap) + 70 - nodeWidth / 2;
+        const ty = link.target.depth * (metrics.nodeWidth + metrics.colGap) + 70 - metrics.nodeWidth / 2;
         return `M ${sy} ${sx} H ${sy + 24} V ${tx} H ${ty}`;
       });
 
@@ -468,7 +519,7 @@
       .attr('tabindex', 0)
       .attr('role', 'button')
       .attr('aria-label', (node) => `Open ${node.displayName}`)
-      .attr('transform', (node) => `translate(${node.y - nodeWidth / 2}, ${node.x - nodeHeight / 2})`)
+      .attr('transform', (node) => `translate(${node.y - node.boxWidth / 2}, ${node.x - node.boxHeight / 2})`)
       .style('cursor', 'pointer')
       .on('mouseenter', (event, node) => {
         const fullLabel = node.kind === 'linked' && node.linkedToPersonId
@@ -541,8 +592,8 @@
       .append('rect')
       .attr('rx', 8)
       .attr('ry', 8)
-      .attr('width', nodeWidth)
-      .attr('height', nodeHeight)
+      .attr('width', (node) => node.boxWidth)
+      .attr('height', (node) => node.boxHeight)
       .attr('fill', (node) => fillColor(node))
       .attr('stroke', (node) => confidenceColor(node.confidence))
       .attr('stroke-width', 2.2)
@@ -551,24 +602,24 @@
     nodeGroups
       .append('text')
       .attr('x', 10)
-      .attr('y', 20)
-      .attr('font-size', 14)
+      .attr('y', densityMode === 'compact' ? 17 : 20)
+      .attr('font-size', densityMode === 'compact' ? 12 : 14)
       .attr('font-weight', 600)
       .attr('fill', '#0f172a')
-      .text((node) => truncateLabel(node.displayName));
+      .text((node) => truncateLabel(node.displayName, metrics.nameMaxChars));
 
     nodeGroups
       .append('text')
       .attr('x', 10)
-      .attr('y', 38)
-      .attr('font-size', 12)
+      .attr('y', (node) => node.boxHeight - 9)
+      .attr('font-size', densityMode === 'compact' ? 10 : 12)
       .attr('fill', '#475569')
       .text((node) => lifeLine(node));
 
     nodeGroups
       .filter((node) => node.kind === 'person' && node.appearsCount > 1)
       .append('text')
-      .attr('x', nodeWidth - 8)
+      .attr('x', (node) => node.boxWidth - 8)
       .attr('y', 12)
       .attr('text-anchor', 'end')
       .attr('font-size', 9)
@@ -677,8 +728,55 @@
     d3.select(svgElement).transition().duration(220).call(zoomBehavior.transform, transform);
   }
 
+  function fitToContent(): void {
+    if (!svgElement || !zoomBehavior || renderedNodes.length === 0) {
+      return;
+    }
+
+    const { width, height } = calculateViewport();
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const node of renderedNodes) {
+      minX = Math.min(minX, node.y - node.boxWidth / 2);
+      maxX = Math.max(maxX, node.y + node.boxWidth / 2);
+      minY = Math.min(minY, node.x - node.boxHeight / 2);
+      maxY = Math.max(maxY, node.x + node.boxHeight / 2);
+    }
+
+    const contentWidth = Math.max(1, maxX - minX);
+    const contentHeight = Math.max(1, maxY - minY);
+    const padding = densityMode === 'compact' ? 20 : 34;
+    const scale = Math.min(2.5, Math.max(0.4, Math.min((width - padding * 2) / contentWidth, (height - padding * 2) / contentHeight)));
+    const tx = (width - contentWidth * scale) / 2 - minX * scale;
+    const ty = (height - contentHeight * scale) / 2 - minY * scale;
+
+    const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
+    d3.select(svgElement).transition().duration(220).call(zoomBehavior.transform, transform);
+  }
+
+  function onDensityModeChange(): void {
+    rerenderWithStyle();
+    fitToContent();
+  }
+
+  function updateDensityEstimate(): void {
+    const { width, height } = calculateViewport();
+    const standardCell = (standardMetrics.nodeWidth + standardMetrics.colGap) *
+      (standardMetrics.nodeHeight + standardMetrics.rowGap);
+    const compactCell = (compactMetrics.nodeWidth + compactMetrics.colGap) *
+      (compactMetrics.nodeHeight + compactMetrics.rowGap);
+
+    const standardVisible = (width * height) / standardCell;
+    const compactVisible = (width * height) / compactCell;
+    compactDensityGain = Math.max(1, compactVisible / standardVisible);
+  }
+
   function rerenderWithStyle(): void {
     if (treeData) {
+      updateDensityEstimate();
       renderChart();
     }
   }
@@ -746,6 +844,14 @@
 
     <div class="toolbar">
       <label>
+        Density
+        <select bind:value={densityMode} on:change={onDensityModeChange}>
+          <option value="standard">Standard</option>
+          <option value="compact">Compact</option>
+        </select>
+      </label>
+
+      <label>
         Generations
         <select bind:value={generations} on:change={onGenerationsChange}>
           {#each [1, 2, 3, 4, 5, 6, 7, 8] as depth}
@@ -762,12 +868,16 @@
       <button type="button" on:click={zoomIn}>Zoom in</button>
       <button type="button" on:click={zoomOut}>Zoom out</button>
       <button type="button" class="ghost" on:click={resetZoom}>Reset</button>
+      <button type="button" class="ghost" on:click={fitToContent}>Fit to content</button>
       <button type="button" class="ghost" on:click={openRootInGraph} disabled={!rootPersonId}>Open in relationship graph</button>
     </div>
   </section>
 
   {#if rootPersonId}
-    <p class="status">Root: <strong>{rootPersonName || rootPersonId}</strong> · loaded depth: {loadedGenerations}</p>
+    <p class="status">
+      Root: <strong>{rootPersonName || rootPersonId}</strong> · loaded depth: {loadedGenerations}
+      · compact visibility gain: {compactDensityGain.toFixed(2)}x
+    </p>
   {/if}
 
   {#if loading}
