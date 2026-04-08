@@ -7,6 +7,7 @@
   import FamilyForm from '$lib/components/FamilyForm.svelte';
   import type { FamilyDraft } from '$lib/components/formTypes';
   import AssertionList from '$lib/components/AssertionList.svelte';
+  import EvidenceTracePanel from '$lib/components/EvidenceTracePanel.svelte';
 
   type FamilyDetail = {
     id: string;
@@ -45,11 +46,36 @@
   let showEdit = false;
   let selectedPartner = '';
   let selectedChild = '';
+  let backLabel = '';
+  let backHref = '';
 
   function familyTitle(): string {
     const p1 = detail?.partner1?.display_name ?? 'Unknown';
     const p2 = detail?.partner2?.display_name ?? 'Unknown';
     return `Family of ${p1} and ${p2}`;
+  }
+
+  function readBackContext(): void {
+    const from = $page.url.searchParams.get('from') ?? '';
+    const back = $page.url.searchParams.get('back') ?? '';
+    backLabel = from ? `← Back to ${from}` : '← Back';
+    backHref = back;
+  }
+
+  function originHref(): string {
+    return `/families/${id}`;
+  }
+
+  function evidenceRefs(): Array<{ citation_id?: string; source_id?: string; label?: string }> {
+    return Object.entries(assertionGroup).flatMap(([field, rows]) =>
+      rows.flatMap((row) =>
+        (row.sources ?? []).map((source) => ({
+          citation_id: source.citation_id,
+          source_id: source.source_id,
+          label: `Assertion: ${field}`
+        }))
+      )
+    );
   }
 
   function toDraft(): FamilyDraft | null {
@@ -77,11 +103,11 @@
       const [family, assertions, personRows] = await Promise.all([
         api.get<FamilyDetail>(`/api/v1/families/${id}`),
         api.get<AssertionGroup>(`/api/v1/families/${id}/assertions`),
-        api.get<PersonOption[]>('/api/v1/persons?limit=200&offset=0')
+        api.get<{ total: number; items: PersonOption[] }>('/api/v1/persons?limit=200&offset=0')
       ]);
       detail = family;
       assertionGroup = assertions;
-      people = personRows;
+      people = personRows.items;
 
       addRecentItem({
         entityType: 'family',
@@ -176,6 +202,7 @@
   }
 
   onMount(async () => {
+    readBackContext();
     await loadFamily();
   });
 </script>
@@ -189,6 +216,10 @@
   </main>
 {:else if detail}
   <main class="panel">
+    {#if backHref}
+      <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
+    {/if}
+
     <header class="header">
       <div>
         <h1>{familyTitle()}</h1>
@@ -275,6 +306,12 @@
 
     <section>
       <h2>📚 Source citations</h2>
+      <EvidenceTracePanel
+        title="Evidence linked to this family"
+        refs={evidenceRefs()}
+        fromLabel={familyTitle()}
+        fromHref={originHref()}
+      />
       <p>Assertion distribution: {Object.entries(detail.assertion_counts).map(([k, v]) => `${k}:${v}`).join(', ') || 'none'}.</p>
     </section>
   </main>
@@ -375,6 +412,15 @@
     border-radius: 0.7rem;
     padding: 0.45rem 0.72rem;
     cursor: pointer;
+  }
+
+  .back-link {
+    align-self: flex-start;
+    background: transparent;
+    border: 0;
+    color: #4c1d95;
+    padding: 0;
+    text-decoration: underline;
   }
 
   .small {

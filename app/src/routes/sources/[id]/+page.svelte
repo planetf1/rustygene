@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { addRecentItem } from '$lib/state.svelte';
   import { api } from '$lib/api';
+  import EvidenceTracePanel from '$lib/components/EvidenceTracePanel.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
 
   type Citation = {
@@ -40,6 +41,8 @@
   let detail: SourceDetail | null = null;
   let repositories: Repository[] = [];
   let editing = false;
+  let backLabel = '';
+  let backHref = '';
 
   let title = '';
   let author = '';
@@ -50,6 +53,25 @@
 
   function repositoryName(repoId: string): string {
     return repositories.find((repo) => repo.id === repoId)?.name ?? repoId;
+  }
+
+  function readBackContext(): void {
+    const from = $page.url.searchParams.get('from') ?? '';
+    const back = $page.url.searchParams.get('back') ?? '';
+    backLabel = from ? `← Back to ${from}` : '← Back';
+    backHref = back;
+  }
+
+  function originHref(): string {
+    return `/sources/${id}`;
+  }
+
+  function citationRefs(): Array<{ citation_id?: string; source_id?: string; label?: string }> {
+    return (detail?.citations ?? []).map((citation) => ({
+      citation_id: citation.id,
+      source_id: citation.source_id,
+      label: citation.page ? `Citation p.${citation.page}` : 'Citation'
+    }));
   }
 
   function seedFormFromDetail(): void {
@@ -149,6 +171,7 @@
   }
 
   onMount(() => {
+    readBackContext();
     void loadDetail();
   });
 </script>
@@ -162,6 +185,10 @@
   </main>
 {:else if detail}
   <main class="panel">
+    {#if backHref}
+      <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
+    {/if}
+
     <header class="header">
       <div>
         <h1>{detail.title}</h1>
@@ -210,22 +237,12 @@
 
     <section>
       <h2>🧾 Citations</h2>
-      {#if detail.citations.length === 0}
-        <p>No citations yet — add one to connect this source to evidence.</p>
-      {:else}
-        <ul class="list">
-          {#each detail.citations as citation}
-            <li>
-              <code>{citation.id}</code>
-              <span>
-                · entity/field back-link available on assertion detail
-                {citation.page ? `· p.${citation.page}` : ''}
-                {citation.volume ? `· vol.${citation.volume}` : ''}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
+      <EvidenceTracePanel
+        title="Citations that point to this source"
+        refs={citationRefs()}
+        fromLabel={detail.title}
+        fromHref={originHref()}
+      />
     </section>
 
     <section>
@@ -301,6 +318,18 @@
     padding: 0.4rem 0.65rem;
     cursor: pointer;
     width: fit-content;
+  }
+
+  .back-link {
+    align-self: flex-start;
+    background: transparent;
+    border: 0;
+    color: #4c1d95;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
+    font-size: 0.85rem;
   }
 
   .secondary {

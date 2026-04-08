@@ -26,6 +26,7 @@
   let source: Source | null = null;
   let loading = false;
   let error = '';
+  let lastLoadedCitationId = '';
 
   function confidenceLabel(level: number | null | undefined): string {
     if (level === null || level === undefined) {
@@ -59,6 +60,11 @@
   onMount(async () => {
     await load();
   });
+
+  $: if (citationId && citationId !== lastLoadedCitationId) {
+    lastLoadedCitationId = citationId;
+    void load();
+  }
 </script>
 
 <section class="detail">

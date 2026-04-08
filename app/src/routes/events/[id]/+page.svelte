@@ -7,6 +7,7 @@
   import EventForm from '$lib/components/EventForm.svelte';
   import type { EventDraft } from '$lib/components/formTypes';
   import AssertionList from '$lib/components/AssertionList.svelte';
+  import EvidenceTracePanel from '$lib/components/EvidenceTracePanel.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
 
   type EventDetail = {
@@ -47,6 +48,8 @@
 
   let selectedPerson = '';
   let selectedRole = 'Principal';
+  let backLabel = '';
+  let backHref = '';
 
   const roles = [
     'Principal',
@@ -65,6 +68,37 @@
 
   function participantName(personId: string): string {
     return people.find((person) => person.id === personId)?.display_name ?? personId;
+  }
+
+  function readBackContext(): void {
+    const from = $page.url.searchParams.get('from') ?? '';
+    const back = $page.url.searchParams.get('back') ?? '';
+    backLabel = from ? `← Back to ${from}` : '← Back';
+    backHref = back;
+  }
+
+  function originHref(): string {
+    return `/events/${id}`;
+  }
+
+  function evidenceRefs(): Array<{ citation_id?: string; source_id?: string; label?: string }> {
+    const fromDetail = (detail?.citations ?? []).map((citation) => ({
+      citation_id: citation.citation_id,
+      source_id: citation.source_id,
+      label: 'Event citation'
+    }));
+
+    const fromAssertions = Object.entries(assertionGroup).flatMap(([field, rows]) =>
+      rows.flatMap((row) =>
+        (row.sources ?? []).map((source) => ({
+          citation_id: source.citation_id,
+          source_id: source.source_id,
+          label: `Assertion: ${field}`
+        }))
+      )
+    );
+
+    return [...fromDetail, ...fromAssertions];
   }
 
   function toDraft(): EventDraft | null {
@@ -94,11 +128,11 @@
       const [eventDetail, assertions, personRows] = await Promise.all([
         api.get<EventDetail>(`/api/v1/events/${id}`),
         api.get<AssertionGroup>(`/api/v1/events/${id}/assertions`),
-        api.get<PersonOption[]>('/api/v1/persons?limit=200&offset=0')
+        api.get<{ total: number; items: PersonOption[] }>('/api/v1/persons?limit=200&offset=0')
       ]);
       detail = eventDetail;
       assertionGroup = assertions;
-      people = personRows;
+      people = personRows.items;
 
       addRecentItem({
         entityType: 'event',
@@ -154,6 +188,7 @@
   }
 
   onMount(async () => {
+    readBackContext();
     await loadEvent();
   });
 </script>
@@ -167,6 +202,10 @@
   </main>
 {:else if detail}
   <main class="panel">
+    {#if backHref}
+      <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
+    {/if}
+
     <header class="header">
       <div>
         <h1>{detail.event_type}</h1>
@@ -220,15 +259,12 @@
 
     <section>
       <h2>Citations</h2>
-      {#if detail.citations.length === 0}
-        <p>No citations attached.</p>
-      {:else}
-        <ul class="list">
-          {#each detail.citations as citation}
-            <li><code>{citation.citation_id ?? citation.source_id ?? 'citation'}</code></li>
-          {/each}
-        </ul>
-      {/if}
+      <EvidenceTracePanel
+        title="Evidence linked to this event"
+        refs={evidenceRefs()}
+        fromLabel={`event ${detail.event_type}`}
+        fromHref={originHref()}
+      />
     </section>
 
     <section>
@@ -328,6 +364,15 @@
     cursor: pointer;
   }
 
+  .back-link {
+    align-self: flex-start;
+    background: transparent;
+    border: 0;
+    color: #4c1d95;
+    padding: 0;
+    text-decoration: underline;
+  }
+
   .small {
     padding: 0.2rem 0.45rem;
     font-size: 0.8rem;
@@ -374,9 +419,4 @@
     margin: 0;
   }
 
-  code {
-    background: #f1f5f9;
-    padding: 0.1rem 0.3rem;
-    border-radius: 0.25rem;
-  }
 </style>
