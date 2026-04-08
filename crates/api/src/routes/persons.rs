@@ -8,10 +8,12 @@ use axum::{Json, Router};
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
+use rustygene_core::event::{Event, EventType};
 use rustygene_core::person::{Person, PersonName};
+use rustygene_core::types::DateValue;
 use rustygene_core::types::{ActorRef, EntityId, Gender};
 use rustygene_storage::{
-    EntityType, FieldAssertion, JsonAssertion, StorageError, StorageErrorCode,
+    EntityType, FieldAssertion, JsonAssertion, Pagination, StorageError, StorageErrorCode,
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -74,6 +76,10 @@ async fn list_persons(
     State(state): State<AppState>,
     Query(query): Query<PersonsQuery>,
 ) -> Result<Json<PersonListResponse>, ApiError> {
+    if state.sqlite_backend.is_none() {
+        return Ok(Json(list_persons_fallback(&state, &query).await?));
+    }
+
     // Use a single SQL query to fetch persons with aggregated assertion counts and
     // birth/death years, avoiding N+1 queries for each person.
     let backend = state.sqlite_backend.clone().ok_or_else(|| {
@@ -106,24 +112,24 @@ async fn list_persons(
                     )
                 ) AS assertion_counts_json,
                 (
-                    SELECT json_extract(e.data, '$.date.date.year')
+                                        SELECT MIN(CAST(json_extract(e.data, '$.date.date.year') AS INTEGER))
                     FROM events e
                     WHERE json_extract(e.data, '$.event_type') = 'birth'
+                                            AND json_extract(e.data, '$.date.date.year') IS NOT NULL
                       AND EXISTS (
                           SELECT 1 FROM json_each(e.data, '$.participants') par
                           WHERE json_extract(par.value, '$.person_id') = p.id
                       )
-                    LIMIT 1
                 ) AS birth_year,
                 (
-                    SELECT json_extract(e.data, '$.date.date.year')
+                                        SELECT MAX(CAST(json_extract(e.data, '$.date.date.year') AS INTEGER))
                     FROM events e
                     WHERE json_extract(e.data, '$.event_type') = 'death'
+                                            AND json_extract(e.data, '$.date.date.year') IS NOT NULL
                       AND EXISTS (
                           SELECT 1 FROM json_each(e.data, '$.participants') par
                           WHERE json_extract(par.value, '$.person_id') = p.id
                       )
-                    LIMIT 1
                 ) AS death_year
             FROM persons p
             ORDER BY p.id
@@ -224,6 +230,134 @@ async fn list_persons(
     let items = response.into_iter().skip(offset).take(limit).collect();
 
     Ok(Json(PersonListResponse { total, items }))
+}
+
+async fn list_persons_fallback(
+    state: &AppState,
+    query: &PersonsQuery,
+) -> Result<PersonListResponse, ApiError> {
+    let mut response: Vec<PersonResponse> = Vec::new();
+    let people = state
+        .storage
+        .list_persons(Pagination {
+            limit: u32::MAX,
+            offset: 0,
+        })
+        .await?;
+
+    for person in people {
+        let assertions = state
+            .storage
+            .list_assertion_records_for_entity(person.id)
+            .await?;
+        let events = state.storage.list_events_for_person(person.id).await?;
+        let (birth_year, death_year) = birth_death_years_from_events(&events);
+
+        let mut assertion_counts = BTreeMap::new();
+        for record in assertions {
+            *assertion_counts.entry(record.field).or_insert(0) += 1;
+        }
+
+        response.push(PersonResponse {
+            id: person.id,
+            display_name: display_name_for_person(&person),
+            birth_year,
+            death_year,
+            assertion_counts,
+        });
+    }
+
+    if let Some(ref q) = query.q {
+        let q_lc = q.to_lowercase();
+        response.retain(|p| p.display_name.to_lowercase().contains(&q_lc));
+    }
+
+    let sort_field = query.sort.as_deref().unwrap_or("name");
+    let descending = query.dir.as_deref() == Some("desc");
+    match sort_field {
+        "birth_year" => response.sort_by(|a, b| {
+            let ord = a.birth_year.cmp(&b.birth_year);
+            if descending {
+                ord.reverse()
+            } else {
+                ord
+            }
+        }),
+        "death_year" => response.sort_by(|a, b| {
+            let ord = a.death_year.cmp(&b.death_year);
+            if descending {
+                ord.reverse()
+            } else {
+                ord
+            }
+        }),
+        "assertion_count" => response.sort_by(|a, b| {
+            let ca: usize = a.assertion_counts.values().sum();
+            let cb: usize = b.assertion_counts.values().sum();
+            let ord = ca.cmp(&cb);
+            if descending {
+                ord.reverse()
+            } else {
+                ord
+            }
+        }),
+        _ => response.sort_by(|a, b| {
+            let ord = a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase());
+            if descending {
+                ord.reverse()
+            } else {
+                ord
+            }
+        }),
+    }
+
+    let total = response.len();
+    let limit = query.limit.unwrap_or(50) as usize;
+    let offset = query.offset.unwrap_or(0) as usize;
+    let items = response.into_iter().skip(offset).take(limit).collect();
+
+    Ok(PersonListResponse { total, items })
+}
+
+fn birth_death_years_from_events(events: &[Event]) -> (Option<i32>, Option<i32>) {
+    let mut birth_year: Option<i32> = None;
+    let mut death_year: Option<i32> = None;
+
+    for event in events {
+        let year = extract_event_year(event);
+        if let Some(year) = year {
+            match event.event_type {
+                EventType::Birth => {
+                    birth_year = Some(match birth_year {
+                        Some(existing) => existing.min(year),
+                        None => year,
+                    });
+                }
+                EventType::Death => {
+                    death_year = Some(match death_year {
+                        Some(existing) => existing.max(year),
+                        None => year,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    (birth_year, death_year)
+}
+
+fn extract_event_year(event: &Event) -> Option<i32> {
+    match &event.date {
+        Some(DateValue::Exact { date, .. }) => Some(date.year),
+        Some(DateValue::Before { date, .. }) => Some(date.year),
+        Some(DateValue::After { date, .. }) => Some(date.year),
+        Some(DateValue::About { date, .. }) => Some(date.year),
+        Some(DateValue::Tolerance { date, .. }) => Some(date.year),
+        Some(DateValue::Range { from, .. }) => Some(from.year),
+        Some(DateValue::Quarter { year, .. }) => Some(*year),
+        Some(DateValue::Textual { .. }) | None => None,
+    }
 }
 
 

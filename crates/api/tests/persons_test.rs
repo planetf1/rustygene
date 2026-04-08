@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use rustygene_api::{start_server, AppState};
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
-use rustygene_core::person::Person;
+use rustygene_core::person::{NameType, Person, PersonName, Surname, SurnameOrigin};
 use rustygene_core::types::{ActorRef, Calendar, DateValue, EntityId, FuzzyDate, Gender};
 use rustygene_storage::run_migrations;
 use rustygene_storage::sqlite_impl::SqliteBackend;
@@ -273,6 +273,202 @@ async fn timeline_endpoint_returns_events_in_chronological_order() {
             .get("description")
             .and_then(serde_json::Value::as_str),
         Some("Later event")
+    );
+
+    server.shutdown().await.expect("shutdown server");
+}
+
+#[tokio::test]
+async fn list_persons_includes_aggregated_assertion_counts_and_event_years() {
+    let backend = in_memory_backend();
+
+    let person = Person {
+        id: EntityId::new(),
+        names: vec![PersonName {
+            name_type: NameType::Birth,
+            date_range: None,
+            given_names: "Ethel May".to_string(),
+            call_name: None,
+            surnames: vec![Surname {
+                value: "Harry".to_string(),
+                origin_type: SurnameOrigin::Patrilineal,
+                connector: None,
+            }],
+            prefix: None,
+            suffix: None,
+            sort_as: None,
+        }],
+        gender: Gender::Female,
+        living: false,
+        private: false,
+        original_xref: None,
+        _raw_gedcom: Default::default(),
+    };
+    backend.create_person(&person).await.expect("create person");
+
+    backend
+        .create_assertion(
+            person.id,
+            EntityType::Person,
+            "name",
+            &make_assertion(serde_json::json!({
+                "name_type": "birth",
+                "date_range": null,
+                "given_names": "Ethel May",
+                "call_name": null,
+                "surnames": [{"value": "Harry", "origin_type": "patrilineal", "connector": null}],
+                "prefix": null,
+                "suffix": null,
+                "sort_as": null
+            })),
+        )
+        .await
+        .expect("create name assertion");
+    backend
+        .create_assertion(
+            person.id,
+            EntityType::Person,
+            "gender",
+            &make_assertion(serde_json::json!("female")),
+        )
+        .await
+        .expect("create gender assertion");
+
+    let birth_1 = Event {
+        id: EntityId::new(),
+        event_type: EventType::Birth,
+        date: Some(DateValue::Exact {
+            date: FuzzyDate::new(1888, Some(1), Some(1)),
+            calendar: Calendar::Gregorian,
+        }),
+        place_ref: None,
+        participants: vec![EventParticipant {
+            person_id: person.id,
+            role: EventRole::Principal,
+            census_role: None,
+        }],
+        description: Some("Earlier birth assertion".to_string()),
+        _raw_gedcom: Default::default(),
+    };
+    let birth_2 = Event {
+        id: EntityId::new(),
+        event_type: EventType::Birth,
+        date: Some(DateValue::Exact {
+            date: FuzzyDate::new(1891, Some(1), Some(1)),
+            calendar: Calendar::Gregorian,
+        }),
+        place_ref: None,
+        participants: vec![EventParticipant {
+            person_id: person.id,
+            role: EventRole::Principal,
+            census_role: None,
+        }],
+        description: Some("Later birth assertion".to_string()),
+        _raw_gedcom: Default::default(),
+    };
+    let death_1 = Event {
+        id: EntityId::new(),
+        event_type: EventType::Death,
+        date: Some(DateValue::Exact {
+            date: FuzzyDate::new(1955, Some(1), Some(1)),
+            calendar: Calendar::Gregorian,
+        }),
+        place_ref: None,
+        participants: vec![EventParticipant {
+            person_id: person.id,
+            role: EventRole::Principal,
+            census_role: None,
+        }],
+        description: Some("Earlier death assertion".to_string()),
+        _raw_gedcom: Default::default(),
+    };
+    let death_2 = Event {
+        id: EntityId::new(),
+        event_type: EventType::Death,
+        date: Some(DateValue::Exact {
+            date: FuzzyDate::new(1962, Some(1), Some(1)),
+            calendar: Calendar::Gregorian,
+        }),
+        place_ref: None,
+        participants: vec![EventParticipant {
+            person_id: person.id,
+            role: EventRole::Principal,
+            census_role: None,
+        }],
+        description: Some("Later death assertion".to_string()),
+        _raw_gedcom: Default::default(),
+    };
+
+    backend.create_event(&birth_1).await.expect("create birth_1");
+    backend.create_event(&birth_2).await.expect("create birth_2");
+    backend.create_event(&death_1).await.expect("create death_1");
+    backend.create_event(&death_2).await.expect("create death_2");
+
+    let state = AppState::with_default_cors(backend, 0).expect("build app state");
+    let server = start_server(state, 0).await.expect("start server");
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "http://{}/api/v1/persons?limit=10&offset=0",
+            server.local_addr
+        ))
+        .send()
+        .await
+        .expect("list persons");
+    let status = response.status();
+    let body_text = response.text().await.expect("read list response body");
+    assert_eq!(status, StatusCode::OK, "unexpected response body: {body_text}");
+
+    let body: serde_json::Value =
+        serde_json::from_str(&body_text).expect("parse list response JSON");
+    let items = body
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .expect("items array");
+
+    let person_row = items
+        .iter()
+        .find(|row| {
+            row.get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| id == person.id.to_string())
+        })
+        .expect("created person must be present in list");
+
+    assert_eq!(
+        person_row
+            .get("display_name")
+            .and_then(serde_json::Value::as_str),
+        Some("Ethel May Harry")
+    );
+    assert_eq!(
+        person_row
+            .get("birth_year")
+            .and_then(serde_json::Value::as_i64),
+        Some(1888)
+    );
+    assert_eq!(
+        person_row
+            .get("death_year")
+            .and_then(serde_json::Value::as_i64),
+        Some(1962)
+    );
+
+    let assertion_counts = person_row
+        .get("assertion_counts")
+        .and_then(serde_json::Value::as_object)
+        .expect("assertion_counts object");
+    assert_eq!(
+        assertion_counts
+            .get("name")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        assertion_counts
+            .get("gender")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
     );
 
     server.shutdown().await.expect("shutdown server");
