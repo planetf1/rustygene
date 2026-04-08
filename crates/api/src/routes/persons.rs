@@ -90,8 +90,8 @@ async fn list_persons(
 
     let rows: Vec<PersonRow> = backend.with_connection(|conn| {
         // Aggregate assertion field counts and birth/death years in pure SQL.
-        // assertions JSON blob: we GROUP BY entity_id and aggregate field counts.
-        // events: join to pick out birth/death event years.
+        // Events are linked to persons via json_each(e.data, '$.participants'),
+        // matching the same pattern used by list_events_for_person() in storage.
         let sql = "
             SELECT
                 p.id,
@@ -108,21 +108,24 @@ async fn list_persons(
                 (
                     SELECT json_extract(e.data, '$.date.date.year')
                     FROM events e
-                    JOIN event_log el ON el.event_id = e.id
-                    WHERE el.person_id = p.id
-                      AND json_extract(e.data, '$.event_type') = 'birth'
+                    WHERE json_extract(e.data, '$.event_type') = 'birth'
+                      AND EXISTS (
+                          SELECT 1 FROM json_each(e.data, '$.participants') par
+                          WHERE json_extract(par.value, '$.person_id') = p.id
+                      )
                     LIMIT 1
                 ) AS birth_year,
                 (
                     SELECT json_extract(e.data, '$.date.date.year')
                     FROM events e
-                    JOIN event_log el ON el.event_id = e.id
-                    WHERE el.person_id = p.id
-                      AND json_extract(e.data, '$.event_type') = 'death'
+                    WHERE json_extract(e.data, '$.event_type') = 'death'
+                      AND EXISTS (
+                          SELECT 1 FROM json_each(e.data, '$.participants') par
+                          WHERE json_extract(par.value, '$.person_id') = p.id
+                      )
                     LIMIT 1
                 ) AS death_year
             FROM persons p
-            WHERE p.sandbox_id IS NULL
             ORDER BY p.id
         ";
 
@@ -148,6 +151,7 @@ async fn list_persons(
 
         Ok(rows)
     })?;
+
 
     // Build the response, parsing person display names from JSON blobs.
     let mut response: Vec<PersonResponse> = Vec::with_capacity(rows.len());
