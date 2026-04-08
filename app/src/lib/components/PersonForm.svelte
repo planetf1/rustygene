@@ -159,10 +159,10 @@
     {#each draft.givenNames as given, i}
       <div class="row">
         <input bind:value={draft.givenNames[i]} placeholder="Given name" />
-        <button type="button" on:click={() => removeGivenName(i)}>−</button>
+        <button type="button" class="btn-secondary" on:click={() => removeGivenName(i)}>−</button>
       </div>
     {/each}
-    <button type="button" on:click={addGivenName}>+ Add given name</button>
+    <button type="button" class="btn-secondary" on:click={addGivenName}>+ Add given name</button>
   </section>
 
   <section>
@@ -178,10 +178,10 @@
           <option>Unknown</option>
         </select>
         <input bind:value={draft.surnames[i].connector} placeholder="Connector (optional)" />
-        <button type="button" on:click={() => removeSurname(i)}>−</button>
+        <button type="button" class="btn-secondary" on:click={() => removeSurname(i)}>−</button>
       </div>
     {/each}
-    <button type="button" on:click={addSurname}>+ Add surname</button>
+    <button type="button" class="btn-secondary" on:click={addSurname}>+ Add surname</button>
   </section>
 
   <section class="grid-two">
@@ -249,8 +249,8 @@
   {/if}
 
   <div class="actions">
-    <button type="button" class="secondary" on:click={cancel} disabled={saving}>Cancel</button>
-    <button type="button" on:click={submit} disabled={saving}>{saving ? 'Saving…' : 'Save person'}</button>
+    <button type="button" class="btn-secondary" on:click={cancel} disabled={saving}>Cancel</button>
+    <button type="button" class="btn-primary" on:click={submit} disabled={saving}>{saving ? 'Saving…' : 'Save person'}</button>
   </div>
 </div>
 
@@ -300,9 +300,11 @@
   input,
   select,
   textarea {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.45rem 0.55rem;
+    background: var(--color-surface);
+    color: var(--color-text);
     font: inherit;
   }
 
@@ -312,22 +314,11 @@
     gap: 0.5rem;
   }
 
-  button {
-    border: 0;
-    border-radius: 0.45rem;
-    background: #2563eb;
-    color: #fff;
-    padding: 0.45rem 0.7rem;
-    cursor: pointer;
-  }
 
-  .secondary {
-    background: #64748b;
-  }
 
   .error {
     margin: 0;
-    color: #b91c1c;
+    color: var(--color-danger);
     font-size: 0.9rem;
   }
 </style>

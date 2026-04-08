@@ -297,13 +297,14 @@
 
 <style>
   .panel {
-    background: #fff;
-    border: 1px solid #e2e8f0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .header {
@@ -315,11 +316,12 @@
 
   .header h1 {
     margin: 0;
+    color: var(--color-text);
   }
 
   .header p {
     margin: 0.25rem 0 0;
-    color: #64748b;
+    color: var(--color-muted);
   }
 
   .controls {
@@ -338,7 +340,7 @@
     flex-direction: column;
     gap: 0.25rem;
     font-size: 0.9rem;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .search {
@@ -348,10 +350,12 @@
 
   input,
   select {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     padding: 0.35rem 0.45rem;
     font: inherit;
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 
   .bulk-actions {
@@ -364,17 +368,20 @@
     border: 0;
     border-radius: 0.45rem;
     padding: 0.4rem 0.65rem;
-    background: #2563eb;
+    background: var(--color-primary);
     color: #fff;
     cursor: pointer;
   }
 
   button.secondary {
-    background: #475569;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
   }
 
   button.danger {
-    background: #b91c1c;
+    background: var(--color-danger);
+    color: #fff;
   }
 
   button:disabled {
@@ -394,14 +401,14 @@
 
   th,
   td {
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid var(--color-border);
     text-align: left;
     vertical-align: top;
     padding: 0.45rem;
   }
 
   th {
-    color: #475569;
+    color: var(--color-muted);
     font-size: 0.82rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -413,7 +420,7 @@
     overflow-wrap: anywhere;
     max-width: 22rem;
     font-size: 0.8rem;
-    color: #0f172a;
+    color: var(--color-text);
   }
 
   .status {
@@ -422,28 +429,33 @@
     font-size: 0.75rem;
     text-transform: uppercase;
     font-weight: 700;
-    background: #e2e8f0;
-    color: #334155;
+    background: var(--color-surface-soft);
+    color: var(--color-muted);
+    border: 1px solid var(--color-border);
   }
 
   .status.pending {
-    background: #fef3c7;
-    color: #92400e;
+    background: transparent;
+    border-color: var(--color-secondary);
+    color: var(--color-secondary);
   }
 
   .status.approved {
-    background: #dcfce7;
-    color: #166534;
+    background: transparent;
+    border-color: var(--color-primary);
+    color: var(--color-primary);
   }
 
   .status.rejected {
-    background: #fee2e2;
-    color: #991b1b;
+    background: transparent;
+    border-color: var(--color-danger);
+    color: var(--color-danger);
   }
 
   .status.disputed {
-    background: #fce7f3;
-    color: #9d174d;
+    background: transparent;
+    border-color: var(--color-danger);
+    color: var(--color-danger);
   }
 
   .actions-cell {
@@ -453,13 +465,13 @@
 
   .error {
     margin: 0;
-    color: #b91c1c;
+    color: var(--color-danger);
   }
 
   .linkish {
     border: 0;
     background: transparent;
-    color: #1d4ed8;
+    color: var(--color-primary);
     cursor: pointer;
     padding: 0;
     font: inherit;

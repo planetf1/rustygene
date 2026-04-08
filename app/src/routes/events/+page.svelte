@@ -215,10 +215,11 @@
         offset: String(nextOffset)
       });
 
-      const result = await api.get<EventRow[]>(`/api/v1/events?${query.toString()}`);
-      rows = reset ? result : [...rows, ...result];
-      offset = nextOffset + result.length;
-      hasMore = result.length === pageSize;
+      const payload = await api.get<{ items: EventRow[]; total: number } | EventRow[]>(`/api/v1/events?${query.toString()}`);
+      const resultRows = Array.isArray(payload) ? payload : (payload.items || []);
+      rows = reset ? resultRows : [...rows, ...resultRows];
+      offset = nextOffset + resultRows.length;
+      hasMore = resultRows.length === pageSize;
       applyFilters();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load events';
@@ -340,13 +341,14 @@
 
 <style>
   .panel {
-    background: linear-gradient(180deg, #ffffff 0%, #fff9ff 100%);
-    border: 1px solid var(--rg-border, #e8def8);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 1rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 0.95rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .header {
@@ -397,7 +399,7 @@
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    border: 1px solid var(--rg-border, #e8def8);
+    border: 1px solid var(--color-border);
     border-radius: 0.8rem;
     overflow: hidden;
   }
@@ -408,10 +410,18 @@
   }
 
   thead th {
-    background: linear-gradient(180deg, #f9f2ff 0%, #fff1f9 100%);
+    background: var(--color-surface-soft);
+    color: var(--color-text);
   }
 
-  .sort-head {
+  th,
+  td {
+    text-align: left;
+    padding: 0.55rem 0.65rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  :global(.content button.sort-head) {
     border: 0;
     background: transparent;
     padding: 0;
@@ -419,13 +429,13 @@
     font: inherit;
     font-weight: 600;
     cursor: pointer;
+    box-shadow: none;
   }
 
-  th,
-  td {
-    text-align: left;
-    padding: 0.55rem 0.65rem;
-    border-bottom: 1px solid #f0e8ff;
+  :global(.content button.sort-head:hover) {
+    transform: none;
+    filter: none;
+    background: transparent;
   }
 
   tr {

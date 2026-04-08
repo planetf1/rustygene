@@ -252,36 +252,39 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    box-shadow: var(--shadow-sm);
   }
 
   h1,
   h2 {
     margin: 0;
+    color: var(--color-text);
   }
 
   .subtitle {
     margin: 0;
-    color: #475569;
+    color: var(--color-muted);
   }
 
   .section {
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.65rem;
     padding: 0.85rem;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    background: var(--color-surface);
   }
 
   fieldset {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.55rem;
     padding: 0.6rem;
     display: flex;
@@ -290,7 +293,7 @@
   }
 
   legend {
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.88rem;
     padding: 0 0.25rem;
   }
@@ -299,7 +302,7 @@
     display: inline-flex;
     flex-direction: column;
     gap: 0.35rem;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .checkbox {
@@ -310,24 +313,26 @@
   }
 
   input[type='text'] {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     padding: 0.45rem 0.55rem;
     font: inherit;
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 
   button {
     border: 0;
     border-radius: 0.45rem;
     padding: 0.45rem 0.75rem;
-    background: #2563eb;
+    background: var(--color-primary);
     color: #fff;
     cursor: pointer;
     width: fit-content;
   }
 
   button.danger {
-    background: #b91c1c;
+    background: var(--color-danger);
   }
 
   button:disabled {
@@ -337,11 +342,11 @@
 
   .ok {
     margin: 0;
-    color: #166534;
+    color: var(--color-primary);
   }
 
   .error {
     margin: 0;
-    color: #b91c1c;
+    color: var(--color-danger);
   }
 </style>

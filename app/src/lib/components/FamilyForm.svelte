@@ -165,8 +165,8 @@
   {/if}
 
   <div class="actions">
-    <button type="button" class="secondary" on:click={cancel} disabled={saving}>Cancel</button>
-    <button type="button" on:click={submit} disabled={saving}>{saving ? 'Saving…' : 'Save family'}</button>
+    <button type="button" class="btn-secondary" on:click={cancel} disabled={saving}>Cancel</button>
+    <button type="button" class="btn-primary" on:click={submit} disabled={saving}>{saving ? 'Saving…' : 'Save family'}</button>
   </div>
 </div>
 
@@ -193,16 +193,18 @@
   input,
   select,
   textarea {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.45rem 0.55rem;
+    background: var(--color-surface);
+    color: var(--color-text);
     font: inherit;
   }
 
   .child-grid {
     max-height: 12rem;
     overflow: auto;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.5rem;
     display: grid;
@@ -227,22 +229,10 @@
     gap: 0.5rem;
   }
 
-  button {
-    border: 0;
-    border-radius: 0.45rem;
-    background: #2563eb;
-    color: #fff;
-    padding: 0.45rem 0.7rem;
-    cursor: pointer;
-  }
-
-  .secondary {
-    background: #64748b;
-  }
 
   .error {
     margin: 0;
-    color: #b91c1c;
+    color: var(--color-danger);
     font-size: 0.9rem;
   }
 </style>

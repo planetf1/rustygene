@@ -483,13 +483,14 @@
 
 <style>
   .panel {
-    background: linear-gradient(180deg, #ffffff 0%, #fff9ff 100%);
-    border: 1px solid var(--rg-border, #e8def8);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 1rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .header {
@@ -501,11 +502,12 @@
 
   .header h1 {
     margin: 0;
+    color: var(--color-text);
   }
 
   .header p {
     margin: 0.2rem 0 0;
-    color: #6b6192;
+    color: var(--color-muted);
   }
 
   .actions {
@@ -514,15 +516,15 @@
   }
 
   .core-edit {
-    border: 1px solid #d8cff5;
+    border: 1px solid var(--color-border);
     border-radius: 0.7rem;
     padding: 0.75rem;
-    background: #fcf9ff;
+    background: var(--color-surface-soft);
   }
 
   .core-edit h2 {
     margin: 0 0 0.55rem;
-    color: #5a3fa8;
+    color: var(--color-text);
     font-size: 0.95rem;
   }
 
@@ -538,29 +540,31 @@
     flex-direction: column;
     gap: 0.2rem;
     font-size: 0.84rem;
-    color: #5a4f7d;
+    color: var(--color-text);
   }
 
   .core-grid input,
   .core-grid select {
-    border: 1px solid #d7cdf2;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.35rem 0.45rem;
     font: inherit;
     font-size: 0.85rem;
     min-width: 0;
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 
   section {
-    border: 1px solid #efe6ff;
+    border: 1px solid var(--color-border);
     border-radius: 0.85rem;
     padding: 0.85rem;
-    background: #fffdff;
+    background: var(--color-surface);
   }
 
   section h2 {
     margin-top: 0;
-    color: #593ca8;
+    color: var(--color-muted);
   }
 
   .list {
@@ -569,6 +573,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+    color: var(--color-text);
   }
 
   .inline-actions {
@@ -579,20 +584,22 @@
   }
 
   .muted {
-    color: #6b6192;
+    color: var(--color-muted);
     margin-left: 0.35rem;
   }
 
   select {
-    border: 1px solid #dfd2f8;
+    border: 1px solid var(--color-border);
     border-radius: 0.7rem;
     padding: 0.5rem 0.62rem;
     font: inherit;
     min-width: 17rem;
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 
   button {
-    background: #2563eb;
+    background: var(--color-primary);
     color: #fff;
     border: 0;
     border-radius: 0.7rem;
@@ -604,7 +611,7 @@
     align-self: flex-start;
     background: transparent;
     border: 0;
-    color: #4c1d95;
+    color: var(--color-primary);
     padding: 0;
     text-decoration: underline;
   }
@@ -616,27 +623,29 @@
   }
 
   .danger {
-    background: #d03165;
+    background: var(--color-danger);
   }
 
   .secondary {
-    background: #5b6b83;
+    background: var(--color-muted);
   }
 
   .linkish {
     border: 0;
     background: transparent;
-    color: #6a46dc;
+    color: var(--color-primary);
     cursor: pointer;
     padding: 0;
     font: inherit;
     font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgb(52 32 97 / 32%);
+    background: rgb(15 23 42 / 45%);
     border: 0;
     width: 100%;
     padding: 0;
@@ -649,19 +658,19 @@
     right: 0;
     bottom: 0;
     width: min(760px, 100%);
-    background: #ffffff;
-    border-left: 1px solid var(--rg-border, #e8def8);
+    background: var(--color-surface);
+    border-left: 1px solid var(--color-border);
     padding: 1rem;
     overflow: auto;
   }
 
   .error {
-    color: #b91c1c;
+    color: var(--color-danger);
     margin: 0;
   }
 
   code {
-    background: #f5efff;
+    background: var(--color-surface-soft);
     padding: 0.1rem 0.3rem;
     border-radius: 0.35rem;
   }

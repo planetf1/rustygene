@@ -107,20 +107,24 @@
 
   function fillFor(genderHint: ArcDatum['genderHint'], isPlaceholder: boolean): string {
     if (isPlaceholder) {
-      return '#cbd5e1';
+      return 'var(--color-border)';
     }
 
     if (genderHint === 'male') {
-      return '#60a5fa';
+      return 'var(--color-primary)';
     }
     if (genderHint === 'female') {
-      return '#f9a8d4';
+      return 'var(--color-secondary)';
     }
-    return '#94a3b8';
+    return 'var(--color-muted)';
+  }
+
+  function bgForNode(isPlaceholder: boolean): string {
+    return isPlaceholder ? 'var(--color-muted)' : 'var(--color-text)';
   }
 
   function strokeFor(isPlaceholder: boolean): string {
-    return isPlaceholder ? '#64748b' : '#0f172a';
+    return isPlaceholder ? 'var(--color-border)' : 'var(--color-surface)';
   }
 
   function arcPath(arc: ArcDatum): string {
@@ -534,6 +538,7 @@
 
   $: chartWidth = Math.max(960, Math.floor(chartContainer?.clientWidth ?? 980));
   $: rootRadius = rootRadiusForGenerations(generations);
+  $: centerHoleRadius = rootRadius - 4;
   $: ringWidth = ringWidthForGenerations(generations);
   $: maxRadius = rootRadius + ringWidth * generations + 8;
   $: chartHeight = Math.max(760, Math.ceil(maxRadius + 24 + 24));
@@ -639,10 +644,10 @@
         <circle
           cx="0"
           cy="0"
-          r={rootRadius}
-          fill="#dbeafe"
-          stroke="#1e3a8a"
-          stroke-width="2"
+          r={centerHoleRadius}
+          fill="var(--color-surface-soft)"
+          stroke="var(--color-border)"
+          stroke-width="1.5"
           class="clickable"
           role="button"
           tabindex="0"
@@ -650,8 +655,8 @@
           on:click={onRootCircleClick}
           on:keydown={onRootCircleKeydown}
         />
-        <text x="0" y="-4" text-anchor="middle" class="root-text">{rootPersonName || '?'}</text>
-        <text x="0" y="14" text-anchor="middle" class="root-subtext">click centre</text>
+        <text x="0" y="-4" text-anchor="middle" class="root-text" fill="var(--color-text)" font-weight="600" font-family="var(--font-family-heading)">{rootPersonName || '?'}</text>
+        <text x="0" y="14" text-anchor="middle" class="root-subtext" fill="var(--color-muted)" font-size="0.75rem">click centre</text>
 
         {#each arcs as arc}
           <path
@@ -681,6 +686,8 @@
               text-anchor="middle"
               dominant-baseline="middle"
               font-size={labelFontSizeForArc(arc)}
+              fill="var(--color-surface)"
+              font-family="var(--font-family-sans)"
             >
               <textPath href={`#${arcLabelPathId(arc)}`} startOffset="50%">{labelTextForArc(arc)}</textPath>
             </text>
@@ -712,22 +719,24 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .header h1 {
     margin: 0;
+    color: var(--color-text);
   }
 
   .header p {
     margin: 0.35rem 0 0;
-    color: #64748b;
+    color: var(--color-muted);
   }
 
   .controls {
@@ -745,16 +754,17 @@
 
   .search-box label {
     font-size: 0.9rem;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .search-box input,
   .toolbar input[type='range'] {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.42rem 0.52rem;
     font: inherit;
-    background: #fff;
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 
   .search-results {
@@ -765,17 +775,18 @@
     margin: 0;
     padding: 0.3rem;
     list-style: none;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
-    background: #fff;
+    background: var(--color-surface);
     z-index: 20;
-    box-shadow: 0 8px 24px rgb(15 23 42 / 16%);
+    box-shadow: var(--shadow-lg);
   }
 
   .search-results button {
     width: 100%;
     border: 0;
     background: transparent;
+    color: var(--color-text);
     padding: 0.45rem;
     border-radius: 0.35rem;
     text-align: left;
@@ -786,11 +797,11 @@
   }
 
   .search-results button:hover {
-    background: #f8fafc;
+    background: var(--color-surface-soft);
   }
 
   .search-results small {
-    color: #64748b;
+    color: var(--color-muted);
     font-size: 0.78rem;
   }
 
@@ -805,7 +816,7 @@
     display: inline-flex;
     gap: 0.5rem;
     align-items: center;
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.9rem;
   }
 
@@ -813,27 +824,27 @@
     border: 0;
     border-radius: 0.45rem;
     padding: 0.42rem 0.68rem;
-    background: #2563eb;
+    background: var(--color-primary);
     color: #fff;
     cursor: pointer;
   }
 
   button.ghost {
-    background: #f8fafc;
-    color: #0f172a;
-    border: 1px solid #cbd5e1;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
   }
 
   .breadcrumb,
   .status {
     margin: 0;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .crumb {
     border: 0;
     background: transparent;
-    color: #1d4ed8;
+    color: var(--color-primary);
     text-decoration: underline;
     padding: 0;
     cursor: pointer;
@@ -841,14 +852,14 @@
 
   .error {
     margin: 0;
-    color: #b91c1c;
+    color: var(--color-danger);
   }
 
   .chart {
     position: relative;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.6rem;
-    background: #f8fafc;
+    background: var(--color-surface-soft);
     overflow: hidden;
     min-height: 720px;
   }
@@ -865,32 +876,32 @@
 
   .clickable:focus-visible {
     outline: none;
-    stroke: #1d4ed8;
+    stroke: var(--color-primary);
     stroke-width: 3px;
   }
 
   .root-text {
     font-size: 0.65rem;
-    fill: #0f172a;
+    fill: var(--color-text);
     font-weight: 600;
   }
 
   .root-subtext {
     font-size: 0.58rem;
-    fill: #334155;
+    fill: var(--color-muted);
   }
 
   .arc-label {
     font-size: 0.56rem;
-    fill: #0f172a;
+    fill: var(--color-text);
     pointer-events: none;
   }
 
   .tooltip {
     position: absolute;
     z-index: 40;
-    background: #0f172a;
-    color: #fff;
+    background: var(--color-text);
+    color: var(--color-surface);
     border-radius: 0.35rem;
     padding: 0.42rem 0.5rem;
     font-size: 0.78rem;

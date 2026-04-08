@@ -219,7 +219,7 @@
 
   textarea,
   select {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.4rem 0.5rem;
     font: inherit;
@@ -232,13 +232,13 @@
   }
 
   .note-card {
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.55rem;
     padding: 0.6rem;
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
-    background: #fff;
+    background: var(--color-surface);
   }
 
   .meta {
@@ -249,8 +249,8 @@
   }
 
   .badge {
-    background: #ede9fe;
-    color: #5b21b6;
+    background: var(--color-surface-soft);
+    color: var(--color-primary);
     border-radius: 999px;
     padding: 0.1rem 0.5rem;
     font-size: 0.75rem;
@@ -261,12 +261,12 @@
   .body,
   .linked {
     margin: 0;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .linked {
     font-size: 0.82rem;
-    color: #64748b;
+    color: var(--color-muted);
   }
 
   .actions {
@@ -277,28 +277,28 @@
   button {
     border: 0;
     border-radius: 0.4rem;
-    background: #2563eb;
-    color: #fff;
+    background: var(--color-primary);
+    color: var(--color-surface);
     padding: 0.35rem 0.55rem;
     cursor: pointer;
     width: fit-content;
   }
 
   .secondary {
-    background: #475569;
+    background: var(--color-muted);
   }
 
   .danger {
-    background: #b91c1c;
+    background: var(--color-danger);
   }
 
   .error {
     margin: 0;
-    color: #b91c1c;
+    color: var(--color-danger);
   }
 
   code {
-    background: #f1f5f9;
+    background: var(--color-surface-soft);
     border-radius: 0.3rem;
     padding: 0.05rem 0.3rem;
   }

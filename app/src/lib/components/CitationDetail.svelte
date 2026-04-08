@@ -91,10 +91,10 @@
 
 <style>
   .detail {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     padding: 0.55rem;
-    background: #fff;
+    background: var(--color-surface);
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
@@ -103,10 +103,11 @@
   h4,
   p {
     margin: 0;
+    color: var(--color-text);
   }
 
   a {
-    color: #1d4ed8;
+    color: var(--color-primary);
     text-decoration: none;
   }
 
@@ -115,11 +116,11 @@
   }
 
   .error {
-    color: #b91c1c;
+    color: var(--color-danger);
   }
 
   code {
-    background: #f1f5f9;
+    background: var(--color-surface-soft);
     border-radius: 0.25rem;
     padding: 0.1rem 0.3rem;
   }

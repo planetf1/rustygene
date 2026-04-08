@@ -106,10 +106,10 @@
 
 <style>
   .evidence-panel {
-    border: 1px solid #e5def8;
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 0.8rem;
-    background: #fff;
+    background: var(--color-surface);
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
@@ -127,12 +127,12 @@
     font-size: 0.88rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #593ca8;
+    color: var(--color-muted);
   }
 
   .count {
-    background: #ede5ff;
-    color: #5b21b6;
+    background: var(--color-surface-soft);
+    color: var(--color-text);
     border-radius: 999px;
     padding: 0.08rem 0.4rem;
     font-size: 0.75rem;
@@ -141,7 +141,7 @@
 
   .empty {
     margin: 0;
-    color: #888;
+    color: var(--color-muted);
     font-style: italic;
     font-size: 0.9rem;
   }
@@ -161,19 +161,18 @@
     justify-content: space-between;
     gap: 0.5rem;
     padding: 0.35rem 0.45rem;
-    border: 1px solid #f0e8ff;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
-    background: #fffdff;
+    background: var(--color-surface);
   }
 
   .evidence-row:hover {
-    background: #f9f4ff;
-    border-color: #dfd2f8;
+    background: var(--color-surface-soft);
   }
 
   .label {
     font-size: 0.84rem;
-    color: #4a3e71;
+    color: var(--color-text);
   }
 
   .chips {
@@ -185,22 +184,22 @@
 
   .chip {
     border-radius: 999px;
-    border: 1px solid #c4b5fd;
+    border: 1px solid var(--color-primary);
     padding: 0.12rem 0.45rem;
     font-size: 0.75rem;
     cursor: pointer;
-    background: #f5f3ff;
-    color: #5b21b6;
+    background: var(--color-surface);
+    color: var(--color-primary);
   }
 
   .chip.source {
-    border-color: #a7f3d0;
-    background: #ecfdf5;
-    color: #065f46;
+    border-color: var(--color-secondary);
+    color: var(--color-secondary);
   }
 
   .chip:hover {
     filter: brightness(0.98);
+    background: var(--color-surface-soft);
   }
 
   .preview {

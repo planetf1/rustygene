@@ -659,13 +659,14 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .hero,
@@ -688,10 +689,11 @@
   h2,
   h3 {
     margin: 0;
+    color: var(--color-text);
   }
 
   .hero p {
-    color: #475569;
+    color: var(--color-muted);
     margin-top: 0.35rem;
   }
 
@@ -703,32 +705,35 @@
   .steps span {
     border-radius: 999px;
     padding: 0.35rem 0.7rem;
-    background: #e2e8f0;
-    color: #475569;
+    background: var(--color-surface-soft);
+    color: var(--color-muted);
+    border: 1px solid var(--color-border);
     font-size: 0.88rem;
   }
 
   .steps span.active {
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: var(--color-surface);
+    color: var(--color-primary);
+    border-color: var(--color-primary);
     font-weight: 600;
   }
 
   .card {
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
+    background: var(--color-surface);
   }
 
   .dropzone {
     width: 100%;
-    border: 2px dashed #93c5fd;
+    border: 2px dashed var(--color-primary);
     border-radius: 0.75rem;
-    background: linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%);
-    color: #0f172a;
+    background: var(--color-surface-soft);
+    color: var(--color-text);
     padding: 1.5rem;
     display: flex;
     flex-direction: column;
@@ -737,8 +742,8 @@
   }
 
   .dropzone.drag-active {
-    border-color: #2563eb;
-    background: #dbeafe;
+    border-color: var(--color-primary);
+    background: var(--color-surface);
   }
 
   .hidden-input {
@@ -758,24 +763,25 @@
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.95rem;
   }
 
   input,
   select {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.55rem 0.65rem;
     font: inherit;
-    background: #ffffff;
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 
   .hint,
   .progress-meta,
   .empty,
   small {
-    color: #475569;
+    color: var(--color-muted);
     margin: 0;
   }
 
@@ -788,15 +794,16 @@
     border: 0;
     border-radius: 0.45rem;
     padding: 0.55rem 0.85rem;
-    background: #2563eb;
+    background: var(--color-primary);
     color: #ffffff;
     cursor: pointer;
     width: fit-content;
   }
 
   button.secondary {
-    background: #e2e8f0;
-    color: #0f172a;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
   }
 
   button:disabled {
@@ -807,34 +814,35 @@
   .status-pill {
     border-radius: 999px;
     padding: 0.35rem 0.7rem;
-    background: #f1f5f9;
-    color: #475569;
+    background: var(--color-surface-soft);
+    color: var(--color-muted);
     font-size: 0.85rem;
+    border: 1px solid var(--color-border);
   }
 
   .status-pill.connected {
-    background: #dcfce7;
-    color: #166534;
+    color: var(--color-primary);
+    border-color: var(--color-primary);
   }
 
   .progress-shell {
     width: 100%;
     height: 0.9rem;
-    background: #e2e8f0;
+    background: var(--color-border);
     border-radius: 999px;
     overflow: hidden;
   }
 
   .progress-bar {
     height: 100%;
-    background: linear-gradient(90deg, #2563eb 0%, #38bdf8 100%);
+    background: var(--color-primary);
     transition: width 0.18s ease;
   }
 
   .log-panel {
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.65rem;
-    background: #f8fafc;
+    background: var(--color-surface-soft);
     padding: 0.85rem;
     max-height: 18rem;
     overflow: auto;
@@ -846,6 +854,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
+    color: var(--color-text);
   }
 
   .mono {
@@ -860,35 +869,34 @@
   }
 
   .summary-card {
-    border: 1px solid #dbeafe;
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 0.85rem;
-    background: #eff6ff;
+    background: var(--color-surface);
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
   }
 
   .summary-card span {
-    color: #475569;
+    color: var(--color-muted);
   }
 
   .summary-card strong {
     font-size: 1.6rem;
-    color: #1d4ed8;
+    color: var(--color-primary);
   }
 
   .warnings,
   .errors-block {
-    border: 1px solid #fcd34d;
+    border: 1px solid var(--color-border);
     border-radius: 0.65rem;
     padding: 0.85rem;
-    background: #fffbeb;
+    background: var(--color-surface);
   }
 
   .errors-block {
-    border-color: #fecaca;
-    background: #fef2f2;
+    border-color: var(--color-danger);
   }
 
   .warning-group + .warning-group {
@@ -899,6 +907,7 @@
   .errors-block ul {
     margin: 0.5rem 0 0;
     padding-left: 1.1rem;
+    color: var(--color-text);
   }
 
   .warning-group li {
@@ -914,10 +923,10 @@
   }
 
   .ok {
-    color: #166534;
+    color: var(--color-primary);
   }
 
   .error {
-    color: #b91c1c;
+    color: var(--color-danger);
   }
 </style>

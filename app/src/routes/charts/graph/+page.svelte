@@ -335,9 +335,9 @@
 
   function styleForNode(): string {
     if (colorMode === 'gender') {
-      return '#93c5fd';
+      return '#6366f1'; /* indigo-500 default for gender until fixed properly, wait, the cytoscape doesn't have gender data by default. */
     }
-    return 'mapData(confidence, 0, 1, #ef4444, #16a34a)';
+    return 'mapData(confidence, 0, 1, #ef4444, #10b981)';
   }
 
   async function initializeGraphCanvas(): Promise<void> {
@@ -353,26 +353,31 @@
     cy = cytoscapeCtor({
       container: graphContainer,
       elements: [],
+      minZoom: 0.2,
+      maxZoom: 1.5,
       style: [
         {
           selector: 'node',
           style: {
             label: 'data(label)',
             'background-color': styleForNode(),
-            shape: 'ellipse',
-            width: 105,
-            height: 105,
-            color: '#0f172a',
-            'font-size': 17,
+            shape: 'round-rectangle',
+            width: 'label',
+            height: 'label',
+            padding: '10px',
+            color: '#ffffff',
+            'font-size': 13,
             'font-weight': 600,
             'text-wrap': 'wrap',
-            'text-max-width': 160,
+            'text-max-width': 220,
             'text-valign': 'center',
             'text-halign': 'center',
+            'text-outline-color': 'transparent',
+            'text-outline-width': 0,
             'text-margin-y': 0,
             'border-color': '#0f172a',
             'border-width': 'mapData(merged, 0, 1, 1, 4)',
-            'line-height': 1.2
+            'line-height': 1.25
           }
         },
         {
@@ -1208,28 +1213,30 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
     position: relative;
+    box-shadow: var(--shadow-sm);
   }
 
   .header h1 {
     margin: 0;
+    color: var(--color-text);
   }
 
   .header p {
     margin: 0.35rem 0 0;
-    color: #64748b;
+    color: var(--color-muted);
   }
 
   .guide {
-    border: 1px solid #dbe3f1;
-    background: #f8fbff;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-soft);
     border-radius: 0.65rem;
     padding: 0.75rem 0.85rem;
   }
@@ -1237,18 +1244,18 @@
   .guide h2 {
     margin: 0 0 0.35rem;
     font-size: 0.98rem;
+    color: var(--color-text);
   }
 
-  .guide p {
+  .guide p, .guide ul {
     margin: 0;
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.9rem;
   }
 
   .guide ul {
-    margin: 0.5rem 0 0;
+    margin-top: 0.5rem;
     padding-left: 1rem;
-    color: #334155;
     font-size: 0.86rem;
   }
 
@@ -1267,16 +1274,17 @@
 
   .search-area label {
     font-size: 0.875rem;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .search-area input,
   select {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.45rem 0.55rem;
     font: inherit;
-    background: #ffffff;
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 
   .search-results {
@@ -1288,10 +1296,10 @@
     margin: 0;
     padding: 0.35rem;
     list-style: none;
-    border: 1px solid #e2e8f0;
-    background: #ffffff;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
     border-radius: 0.45rem;
-    box-shadow: 0 8px 24px rgb(15 23 42 / 16%);
+    box-shadow: var(--shadow-md);
   }
 
   .search-results button {
@@ -1305,14 +1313,15 @@
     display: flex;
     flex-direction: column;
     gap: 0.2rem;
+    color: var(--color-text);
   }
 
   .search-results button:hover {
-    background: #f8fafc;
+    background: var(--color-surface-soft);
   }
 
   .search-results small {
-    color: #64748b;
+    color: var(--color-muted);
     font-size: 0.78rem;
   }
 
@@ -1327,7 +1336,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.9rem;
   }
 
@@ -1339,7 +1348,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    border: 1px solid #dbe3f1;
+    border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     padding: 0.3rem 0.5rem;
     margin: 0;
@@ -1347,13 +1356,13 @@
 
   .edge-filter-group legend {
     padding: 0 0.25rem;
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.8rem;
   }
 
   .legend {
-    border: 1px solid #dbe3f1;
-    background: #f8fbff;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-soft);
     border-radius: 0.65rem;
     padding: 0.6rem 0.75rem;
   }
@@ -1361,6 +1370,7 @@
   .legend h3 {
     margin: 0 0 0.45rem;
     font-size: 0.92rem;
+    color: var(--color-text);
   }
 
   .legend-grid {
@@ -1368,7 +1378,7 @@
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 0.3rem 0.8rem;
     font-size: 0.84rem;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .legend-node {
@@ -1435,35 +1445,35 @@
     border: 0;
     border-radius: 0.45rem;
     padding: 0.4rem 0.7rem;
-    background: #2563eb;
+    background: var(--color-primary);
     color: #ffffff;
     cursor: pointer;
   }
 
   .control-row .ghost {
-    background: #f8fafc;
-    color: #0f172a;
-    border: 1px solid #cbd5e1;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
   }
 
   .center-indicator,
   .status {
     margin: 0;
-    color: #334155;
+    color: var(--color-muted);
   }
 
   .error {
     margin: 0;
-    color: #b91c1c;
+    color: var(--color-danger);
   }
 
   .graph-wrap {
     position: relative;
     min-height: 68vh;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.6rem;
     overflow: hidden;
-    background: #f8fafc;
+    background: var(--color-bg);
   }
 
   .graph-canvas {
@@ -1475,21 +1485,23 @@
     position: absolute;
     z-index: 25;
     pointer-events: none;
-    background: #0f172a;
-    color: #ffffff;
+    background: var(--color-surface-soft);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
     border-radius: 0.35rem;
     padding: 0.35rem 0.45rem;
     font-size: 0.78rem;
     max-width: 20rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .context-menu {
     position: absolute;
     z-index: 26;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
-    box-shadow: 0 10px 24px rgb(15 23 42 / 18%);
+    box-shadow: var(--shadow-md);
     min-width: 12rem;
     overflow: hidden;
   }
@@ -1497,15 +1509,15 @@
   .context-menu button {
     width: 100%;
     border: 0;
-    background: #ffffff;
+    background: var(--color-surface);
     text-align: left;
     padding: 0.5rem 0.6rem;
     cursor: pointer;
-    color: #0f172a;
+    color: var(--color-text);
   }
 
   .context-menu button:hover {
-    background: #f8fafc;
+    background: var(--color-surface-soft);
   }
 
   .overlay {
@@ -1515,7 +1527,7 @@
     width: 100%;
     padding: 0;
     border-radius: 0;
-    background: rgb(15 23 42 / 35%);
+    background: rgb(15 23 42 / 45%);
   }
 
   .side-panel {
@@ -1524,14 +1536,15 @@
     right: 0;
     bottom: 0;
     width: min(460px, 100%);
-    background: #ffffff;
-    border-left: 1px solid #e2e8f0;
+    background: var(--color-surface);
+    border-left: 1px solid var(--color-border);
     padding: 1rem;
     overflow: auto;
     z-index: 35;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+    color: var(--color-text);
   }
 
   .side-panel h2,
@@ -1551,13 +1564,13 @@
     border-radius: 0.45rem;
     padding: 0.45rem 0.7rem;
     cursor: pointer;
-    background: #2563eb;
+    background: var(--color-primary);
     color: #ffffff;
   }
 
   .panel-actions .ghost {
-    border: 1px solid #cbd5e1;
-    background: #ffffff;
-    color: #0f172a;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 </style>

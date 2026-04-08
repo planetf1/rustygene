@@ -2,11 +2,7 @@ body {
   margin: 0;
   font-family: var(--font-family-sans);
   color: var(--color-text);
-  background:
-    radial-gradient(circle at 6% 10%, rgb(155 123 255 / 20%) 0%, transparent 28%),
-    radial-gradient(circle at 90% 12%, rgb(255 159 207 / 20%) 0%, transparent 30%),
-    radial-gradient(circle at 80% 82%, rgb(142 231 209 / 22%) 0%, transparent 32%),
-    linear-gradient(180deg, #fff9ff 0%, var(--color-bg) 100%);
+  background: var(--color-bg);
 }
 
 a:focus-visible,
@@ -14,15 +10,17 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 3px solid rgb(125 93 242 / 45%);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
 .content h1,
 .content h2,
 .content h3 {
-  color: #3f2e86;
-  letter-spacing: 0.01em;
+  color: var(--color-text);
+  font-family: var(--font-family-heading);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .content p {
@@ -34,22 +32,22 @@ textarea:focus-visible {
 .content .surface {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  background: linear-gradient(180deg, #ffffff 0%, #fffaff 100%);
+  box-shadow: var(--shadow-sm);
+  background: var(--color-surface);
 }
 
 .content label {
-  color: #594f7d;
-  font-weight: 600;
+  color: var(--color-text);
+  font-weight: 500;
 }
 
 .content input,
 .content select,
 .content textarea {
-  border: 1px solid #dfd2f8;
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   padding: 0.5rem 0.62rem;
-  background: #fff;
+  background: var(--color-surface);
   color: var(--color-text);
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
@@ -59,7 +57,7 @@ textarea:focus-visible {
 .content textarea:focus {
   outline: none;
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgb(155 123 255 / 17%);
+  box-shadow: 0 0 0 3px rgb(79 70 229 / 17%);
 }
 
 .content table {
@@ -69,42 +67,48 @@ textarea:focus-visible {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: #fff;
+  background: var(--color-surface);
 }
 
 .content thead th {
-  background: linear-gradient(180deg, #f9f2ff 0%, #fff0f8 100%);
-  color: #412a89;
+  background: var(--color-surface-soft);
+  color: var(--color-text);
   border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
 }
 
 .content th,
 .content td {
   text-align: left;
-  padding: 0.6rem 0.7rem;
-  border-bottom: 1px solid #f0e8ff;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
 }
 
 .content tbody tr:hover {
-  background: #fdf7ff;
+  background: var(--color-surface-soft);
 }
 
 .content button:not(.overlay) {
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
-  color: #fff;
-  font-weight: 600;
-  box-shadow: var(--shadow-sm);
-  transition: transform 120ms ease, filter 120ms ease;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  transition: all 150ms ease;
+  font-weight: 500;
+  font-family: var(--font-family-sans);
 }
 
 .content .btn-primary,
 .content .action-primary {
-  background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
-  color: #fff;
-  border: 0;
-  font-weight: 700;
+  background: var(--color-primary);
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.content .btn-primary:hover,
+.content .action-primary:hover {
+  background: var(--color-primary-strong);
 }
 
 .content .btn-secondary,
@@ -112,37 +116,34 @@ textarea:focus-visible {
 .content .ghost,
 .content .secondary,
 .content .btn-page {
-  background: #ffffff;
-  color: #4b3a85;
-  border: 1px solid #d8cbf5;
-  box-shadow: none;
-  font-weight: 600;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.content .btn-secondary:hover,
+.content .action-secondary:hover {
+  background: var(--color-surface-soft);
 }
 
 .content .btn-danger,
 .content .action-danger,
 .content .danger {
-  background: linear-gradient(135deg, #ef4444, var(--color-danger));
+  background: var(--color-danger);
   color: #fff;
-  border: 0;
-  font-weight: 700;
 }
 
 .content table.table-compact th,
 .content table.table-compact td {
-  padding: 0.42rem 0.58rem;
-  line-height: 1.24;
+  padding: 0.5rem 0.75rem;
+  line-height: 1.4;
 }
 
 .content table.table-compact thead th {
-  font-size: 0.76rem;
-  letter-spacing: 0.025em;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-}
-
-.content button:not(.overlay):hover {
-  transform: translateY(-1px);
-  filter: brightness(1.02);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -99,19 +99,19 @@
   let suppressZoomExpand = false;
 
   const standardMetrics: LayoutMetrics = {
-    nodeWidth: 168,
-    nodeHeight: 54,
-    rowGap: 18,
-    colGap: 88,
-    nameMaxChars: 22
+    nodeWidth: 180,
+    nodeHeight: 64,
+    rowGap: 24,
+    colGap: 40,
+    nameMaxChars: 24
   };
 
   const compactMetrics: LayoutMetrics = {
-    nodeWidth: 122,
-    nodeHeight: 42,
-    rowGap: 8,
-    colGap: 44,
-    nameMaxChars: 16
+    nodeWidth: 140,
+    nodeHeight: 48,
+    rowGap: 12,
+    colGap: 24,
+    nameMaxChars: 18
   };
 
   function currentMetrics(): LayoutMetrics {
@@ -144,27 +144,36 @@
     return `${node.birthYear} - ${node.deathYear}`;
   }
 
-  function confidenceColor(confidence: number): string {
-    if (!showConfidenceColors) {
-      return '#94a3b8';
+  function colorForDepth(depth: number): string {
+    if (depth === 1) return 'var(--color-border)';
+
+    if (depth > 5) {
+      return 'var(--color-warning, #f59e0b)';
     }
-    if (confidence < 0.45) {
-      return '#dc2626';
-    }
-    if (confidence < 0.75) {
-      return '#f59e0b';
-    }
-    return '#16a34a';
+    return 'var(--color-secondary)';
   }
 
   function fillColor(node: RenderNode): string {
     if (node.kind === 'unknown') {
-      return '#f8fafc';
+      return 'var(--color-surface-soft)';
     }
     if (node.kind === 'linked') {
-      return '#dbeafe';
+      return 'var(--color-primary-soft, var(--color-surface-hover, #dbeafe))';
     }
-    return '#ffffff';
+    return 'var(--color-surface)';
+  }
+
+  function confidenceColor(confidence: number): string {
+    if (!showConfidenceColors) {
+      return 'var(--color-border)';
+    }
+    if (confidence < 0.45) {
+      return 'var(--color-danger)';
+    }
+    if (confidence < 0.75) {
+      return 'var(--color-warning)';
+    }
+    return 'var(--color-success)';
   }
 
   function nodeStrokeDash(node: RenderNode): string {
@@ -491,7 +500,7 @@
       .data(links)
       .join('path')
       .attr('fill', 'none')
-      .attr('stroke', '#334155')
+      .attr('stroke', 'var(--color-border)')
       .attr('stroke-width', 1.6)
       .attr('stroke-dasharray', (link) => {
         const targetNode = renderedNodes.find(
@@ -506,7 +515,8 @@
         const sy = link.source.depth * (metrics.nodeWidth + metrics.colGap) + 70 + metrics.nodeWidth / 2;
         const tx = (link.target.x ?? 0) + height / 2;
         const ty = link.target.depth * (metrics.nodeWidth + metrics.colGap) + 70 - metrics.nodeWidth / 2;
-        return `M ${sy} ${sx} H ${sy + 24} V ${tx} H ${ty}`;
+        const midY = (sy + ty) / 2;
+        return `M ${sy} ${sx} C ${midY} ${sx}, ${midY} ${tx}, ${ty} ${tx}`;
       });
 
     const nodeGroups = pedigreeGroup
@@ -588,6 +598,12 @@
         }
       });
 
+    if (selection.select('#node-shadow').empty()) {
+      const defs = selection.append('defs');
+      const filter = defs.append('filter').attr('id', 'node-shadow').attr('x', '-10%').attr('y', '-10%').attr('width', '130%').attr('height', '130%');
+      filter.append('feDropShadow').attr('dx', '0').attr('dy', '2').attr('stdDeviation', '3').attr('flood-opacity', '0.08');
+    }
+
     nodeGroups
       .append('rect')
       .attr('rx', 8)
@@ -596,8 +612,9 @@
       .attr('height', (node) => node.boxHeight)
       .attr('fill', (node) => fillColor(node))
       .attr('stroke', (node) => confidenceColor(node.confidence))
-      .attr('stroke-width', 2.2)
-      .attr('stroke-dasharray', (node) => nodeStrokeDash(node));
+      .attr('stroke-width', 2)
+      .attr('stroke-dasharray', (node) => nodeStrokeDash(node))
+      .attr('filter', 'url(#node-shadow)');
 
     nodeGroups
       .append('text')
@@ -605,7 +622,7 @@
       .attr('y', densityMode === 'compact' ? 17 : 20)
       .attr('font-size', densityMode === 'compact' ? 12 : 14)
       .attr('font-weight', 600)
-      .attr('fill', '#0f172a')
+      .attr('fill', 'var(--color-text)')
       .text((node) => truncateLabel(node.displayName, metrics.nameMaxChars));
 
     nodeGroups
@@ -613,7 +630,7 @@
       .attr('x', 10)
       .attr('y', (node) => node.boxHeight - 9)
       .attr('font-size', densityMode === 'compact' ? 10 : 12)
-      .attr('fill', '#475569')
+      .attr('fill', 'var(--color-muted)')
       .text((node) => lifeLine(node));
 
     nodeGroups
@@ -623,7 +640,7 @@
       .attr('y', 12)
       .attr('text-anchor', 'end')
       .attr('font-size', 9)
-      .attr('fill', '#1d4ed8')
+      .attr('fill', 'var(--color-primary)')
       .text((node) => `appears ${node.appearsCount}x`);
 
     if (zoomBehavior) {
@@ -900,27 +917,29 @@
 
 <style>
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .header h1 {
     margin: 0;
+    color: var(--color-text);
   }
 
   .header p {
     margin: 0.35rem 0 0;
-    color: #64748b;
+    color: var(--color-muted);
   }
 
   .guide {
-    border: 1px solid #dbe3f1;
-    background: #f8fbff;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-soft);
     border-radius: 0.65rem;
     padding: 0.75rem 0.85rem;
   }
@@ -928,18 +947,19 @@
   .guide h2 {
     margin: 0 0 0.35rem;
     font-size: 0.98rem;
+    color: var(--color-text);
   }
 
   .guide p {
     margin: 0;
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.9rem;
   }
 
   .guide ul {
     margin: 0.5rem 0 0;
     padding-left: 1rem;
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.86rem;
   }
 
@@ -958,16 +978,17 @@
 
   .search-box label {
     font-size: 0.9rem;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .search-box input,
   select {
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
     padding: 0.42rem 0.52rem;
     font: inherit;
-    background: #fff;
+    background: var(--color-surface);
+    color: var(--color-text);
   }
 
   .search-results {
@@ -978,17 +999,18 @@
     margin: 0;
     padding: 0.3rem;
     list-style: none;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
-    background: #fff;
+    background: var(--color-surface);
     z-index: 20;
-    box-shadow: 0 8px 24px rgb(15 23 42 / 16%);
+    box-shadow: var(--shadow-lg);
   }
 
   .search-results button {
     width: 100%;
     border: 0;
     background: transparent;
+    color: var(--color-text);
     padding: 0.45rem;
     border-radius: 0.35rem;
     text-align: left;
@@ -999,11 +1021,11 @@
   }
 
   .search-results button:hover {
-    background: #f8fafc;
+    background: var(--color-surface-soft);
   }
 
   .search-results small {
-    color: #64748b;
+    color: var(--color-muted);
     font-size: 0.78rem;
   }
 
@@ -1018,7 +1040,7 @@
     display: inline-flex;
     gap: 0.4rem;
     align-items: center;
-    color: #334155;
+    color: var(--color-text);
     font-size: 0.9rem;
   }
 
@@ -1030,32 +1052,32 @@
     border: 0;
     border-radius: 0.45rem;
     padding: 0.42rem 0.68rem;
-    background: #2563eb;
+    background: var(--color-primary);
     color: #fff;
     cursor: pointer;
   }
 
   button.ghost {
-    background: #f8fafc;
-    color: #0f172a;
-    border: 1px solid #cbd5e1;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
   }
 
   .status {
     margin: 0;
-    color: #334155;
+    color: var(--color-text);
   }
 
   .error {
     margin: 0;
-    color: #b91c1c;
+    color: var(--color-danger);
   }
 
   .chart {
     position: relative;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--color-border);
     border-radius: 0.6rem;
-    background: #f8fafc;
+    background: var(--color-surface-soft);
     overflow: hidden;
     min-height: 680px;
   }
@@ -1067,7 +1089,7 @@
   }
 
   :global(g.node-group:focus-visible rect) {
-    stroke: #1d4ed8 !important;
+    stroke: var(--color-primary) !important;
     stroke-width: 4 !important;
   }
 
@@ -1075,8 +1097,8 @@
     position: fixed;
     z-index: 40;
     pointer-events: none;
-    background: #0f172a;
-    color: #fff;
+    background: var(--color-text);
+    color: var(--color-surface);
     border-radius: 0.35rem;
     padding: 0.36rem 0.46rem;
     font-size: 0.78rem;

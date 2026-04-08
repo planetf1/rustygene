@@ -55,15 +55,15 @@
   {:else}
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Related records graph">
       {#each positioned as node}
-        <line x1={centerX} y1={centerY} x2={node.x} y2={node.y} stroke="#ddd6fe" stroke-width="1.5" />
+        <line x1={centerX} y1={centerY} x2={node.x} y2={node.y} stroke="var(--color-border)" stroke-width="1.5" />
       {/each}
 
-      <circle cx={centerX} cy={centerY} r="27" fill="#ede9fe" stroke="#7c3aed" stroke-width="2" />
+      <circle cx={centerX} cy={centerY} r="27" fill="var(--color-surface)" stroke="var(--color-primary)" stroke-width="2" />
       <text x={centerX} y={centerY + 4} text-anchor="middle" class="center-label">{shortLabel(centerLabel)}</text>
 
       {#each positioned as node}
         <g>
-          <circle cx={node.x} cy={node.y} r="18" fill="#fff" stroke={kindColor(node.kind)} stroke-width="2" />
+          <circle cx={node.x} cy={node.y} r="18" fill="var(--color-surface)" stroke={kindColor(node.kind)} stroke-width="2" />
           <text x={node.x} y={node.y + 4} text-anchor="middle" class="node-dot">•</text>
         </g>
       {/each}
@@ -85,10 +85,10 @@
 
 <style>
   .related-graph {
-    border: 1px solid #e5def8;
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
     padding: 0.8rem;
-    background: #fff;
+    background: var(--color-surface);
     display: flex;
     flex-direction: column;
     gap: 0.55rem;
@@ -105,12 +105,12 @@
     font-size: 0.88rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #593ca8;
+    color: var(--color-muted);
   }
 
   .count {
-    background: #ede5ff;
-    color: #5b21b6;
+    background: var(--color-surface-soft);
+    color: var(--color-text);
     border-radius: 999px;
     padding: 0.08rem 0.4rem;
     font-size: 0.75rem;
@@ -119,27 +119,27 @@
 
   .empty {
     margin: 0;
-    color: #888;
+    color: var(--color-muted);
     font-style: italic;
     font-size: 0.9rem;
   }
 
   svg {
     width: 100%;
-    border: 1px solid #f0e8ff;
+    border: 1px solid var(--color-border);
     border-radius: 0.6rem;
-    background: #fffdff;
+    background: var(--color-surface);
   }
 
   .center-label {
     font-size: 0.68rem;
-    fill: #4c1d95;
+    fill: var(--color-text);
     font-weight: 600;
   }
 
   .node-dot {
     font-size: 0.85rem;
-    fill: #7c3aed;
+    fill: var(--color-primary);
   }
 
   .node-links {
@@ -153,9 +153,10 @@
 
   .node-link {
     width: 100%;
-    border: 1px solid #efe6ff;
+    border: 1px solid var(--color-border);
     border-radius: 0.45rem;
-    background: #fffdff;
+    background: var(--color-surface);
+    color: var(--color-text);
     cursor: pointer;
     font: inherit;
     display: flex;
@@ -166,7 +167,7 @@
   }
 
   .node-link:hover {
-    background: #faf5ff;
+    background: var(--color-surface-soft);
   }
 
   .kind {

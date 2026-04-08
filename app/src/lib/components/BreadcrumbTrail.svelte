@@ -41,7 +41,7 @@
   .crumb-link {
     border: 0;
     background: transparent;
-    color: #5b21b6;
+    color: var(--color-primary);
     text-decoration: underline;
     text-underline-offset: 2px;
     cursor: pointer;
@@ -50,20 +50,21 @@
   }
 
   .crumb-link:hover {
-    color: #4c1d95;
+    color: var(--color-primary-strong);
   }
 
   .crumb-current {
-    color: #6b5fa0;
+    color: var(--color-muted);
   }
 
   .crumb-current.is-current {
-    color: #2d1c4f;
+    color: var(--color-text);
     font-weight: 600;
   }
 
   .sep {
-    color: #9d84d8;
+    color: var(--color-muted);
     user-select: none;
+    opacity: 0.6;
   }
 </style>

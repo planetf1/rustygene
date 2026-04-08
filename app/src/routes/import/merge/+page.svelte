@@ -280,16 +280,16 @@
 
 <style>
   .panel { display: flex; flex-direction: column; gap: 1rem; }
-  .subtitle, .muted { color: #475569; margin: 0; }
-  .card { border: 1px solid #e2e8f0; border-radius: 0.65rem; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+  .subtitle, .muted { color: var(--color-muted); margin: 0; }
+  .card { border: 1px solid var(--color-border); border-radius: 0.65rem; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; background: var(--color-surface); box-shadow: var(--shadow-sm); }
   .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
-  button { border: 0; border-radius: 0.45rem; padding: 0.5rem 0.85rem; background: #2563eb; color: #fff; cursor: pointer; }
-  button.secondary { background: #e2e8f0; color: #0f172a; }
+  button { border: 0; border-radius: 0.45rem; padding: 0.5rem 0.85rem; background: var(--color-primary); color: #fff; cursor: pointer; }
+  button.secondary { background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text); }
   button:disabled { opacity: 0.6; cursor: not-allowed; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.45rem; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+  th, td { padding: 0.45rem; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; }
   .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
-  .entity-card { border: 1px solid #e2e8f0; border-radius: 0.55rem; padding: 0.75rem; }
-  .ok { color: #166534; }
-  .error { color: #b91c1c; }
+  .entity-card { border: 1px solid var(--color-border); border-radius: 0.55rem; padding: 0.75rem; background: var(--color-surface); }
+  .ok { color: var(--color-primary); margin:0; }
+  .error { color: var(--color-danger); margin:0; }
 </style>
