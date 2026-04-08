@@ -1774,14 +1774,25 @@ fn map_indi_node_to_events_with_report(
                 "TYPE" => {
                     capture_standard_subtree(&mut event._raw_gedcom, "TYPE", nested);
                 }
-                "NOTE" | "OBJE" => {
+                "NOTE" => {
                     let next_idx = event
                         ._raw_gedcom
                         .keys()
-                        .filter(|key| key.starts_with("STANDARD_"))
+                        .filter(|key| key.starts_with("STANDARD_NOTE_"))
                         .count();
                     event._raw_gedcom.insert(
-                        format!("STANDARD_{}_{}", nested.tag, next_idx),
+                        format!("STANDARD_NOTE_{next_idx}"),
+                        serialize_subtree(nested),
+                    );
+                }
+                "OBJE" => {
+                    let next_idx = event
+                        ._raw_gedcom
+                        .keys()
+                        .filter(|key| key.contains("OBJE_REF_"))
+                        .count();
+                    event._raw_gedcom.insert(
+                        format!("CUSTOM_OBJE_REF_{next_idx}"),
                         serialize_subtree(nested),
                     );
                 }
@@ -3042,6 +3053,31 @@ pub fn generate_import_assertions(
             ));
         }
 
+        for media_ref in parse_obje_media_refs(&event._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "media_ref",
+                to_value(&media_ref)?,
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        for (external_path, caption) in parse_obje_external_paths(&event._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "media_ref",
+                json!({
+                    "external_path": external_path,
+                    "caption": caption,
+                }),
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
         for note_ref in parse_note_refs(&event._raw_gedcom) {
             assertions.push(build_import_assertion(
                 event.id,
@@ -3151,6 +3187,31 @@ pub fn generate_import_assertions(
                 EntityType::Event,
                 "description",
                 to_value(description)?,
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        for media_ref in parse_obje_media_refs(&event._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "media_ref",
+                to_value(&media_ref)?,
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        for (external_path, caption) in parse_obje_external_paths(&event._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "media_ref",
+                json!({
+                    "external_path": external_path,
+                    "caption": caption,
+                }),
                 source_citations.clone(),
                 &proposed_by,
             ));

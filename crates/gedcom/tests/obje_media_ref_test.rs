@@ -22,9 +22,18 @@ fn indi_and_fam_obje_links_generate_media_refs() {
 1 OBJE
 2 FILE /tmp/inline-photo.jpg
 2 TITL Inline Photo
+1 BIRT
+2 DATE 1 JAN 1900
+2 OBJE @M1@
+2 OBJE
+3 FILE /tmp/inline-birth-photo.jpg
+3 TITL Inline Birth Photo
 0 @F1@ FAM
 1 HUSB @I1@
 1 OBJE @M1@
+1 MARR
+2 DATE 1 JAN 1920
+2 OBJE @M1@
 0 TRLR
 "#;
     let lines = tokenize_gedcom(input).expect("tokenize ancestry GEDCOM");
@@ -53,11 +62,23 @@ fn indi_and_fam_obje_links_generate_media_refs() {
         .iter()
         .filter(|record| {
             record.field == "media_ref"
-                && matches!(record.entity_type, EntityType::Person | EntityType::Family)
+                && matches!(
+                    record.entity_type,
+                    EntityType::Person | EntityType::Family | EntityType::Event
+                )
         })
         .count();
 
-    assert!(media_ref_count >= 2);
+    assert!(media_ref_count >= 4);
+
+    let event_media_ref_count = assertions
+        .iter()
+        .filter(|record| record.field == "media_ref" && record.entity_type == EntityType::Event)
+        .count();
+    assert!(
+        event_media_ref_count >= 2,
+        "expected event-level OBJE links to map to Event media_ref assertions"
+    );
 
     let inline_path_assertions = assertions
         .iter()

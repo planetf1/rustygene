@@ -96,8 +96,8 @@ to verify both typed assertion generation and metadata tag re-emission.
 
 Root-level `OBJE` records are imported/exported as typed `Media` entities.
 Inline `OBJE` links on INDI/FAM are now mapped to `media_ref` assertions.
-Remaining gap is broader typed link parity across all owner contexts (notably
-event-level OBJE coverage and richer link metadata parity).
+Inline event-level `OBJE` links are also mapped to `media_ref` assertions.
+Remaining gap is richer link metadata parity beyond simple references/paths.
 
 ### ~~15. torture551.ged Round-Trip Citation Drift~~ — FIXED
 
