@@ -48,6 +48,12 @@
   let selectedChild = '';
   let backLabel = '';
   let backHref = '';
+  let editingCore = false;
+  let corePartnerLink: FamilyDetail['partner_link'] = 'Unknown';
+  let coreConfidence = 0.9;
+  let coreEvidenceType: 'direct' | 'indirect' | 'negative' = 'direct';
+  let coreError = '';
+  let savingCore = false;
 
   function familyTitle(): string {
     const p1 = detail?.partner1?.display_name ?? 'Unknown';
@@ -76,6 +82,56 @@
         }))
       )
     );
+  }
+
+  function openCoreEdit(): void {
+    if (!detail) {
+      return;
+    }
+
+    corePartnerLink = detail.partner_link;
+    coreConfidence = 0.9;
+    coreEvidenceType = 'direct';
+    coreError = '';
+    editingCore = true;
+  }
+
+  function cancelCoreEdit(): void {
+    editingCore = false;
+    coreError = '';
+  }
+
+  async function saveCoreEdit(): Promise<void> {
+    if (!detail) {
+      return;
+    }
+
+    savingCore = true;
+    coreError = '';
+
+    try {
+      await api.put(`/api/v1/families/${id}`, {
+        partner1_id: detail.partner1?.id ?? null,
+        partner2_id: detail.partner2?.id ?? null,
+        child_ids: detail.children.map((child) => child.id),
+        partner_link: corePartnerLink
+      });
+
+      await api.post(`/api/v1/families/${id}/assertions`, {
+        field: 'partner_link',
+        value: corePartnerLink,
+        confidence: coreConfidence,
+        evidence_type: coreEvidenceType,
+        status: 'proposed'
+      });
+
+      editingCore = false;
+      await loadFamily();
+    } catch (err) {
+      coreError = err instanceof Error ? err.message : 'Failed to save core family fields';
+    } finally {
+      savingCore = false;
+    }
   }
 
   function toDraft(): FamilyDraft | null {
@@ -226,10 +282,48 @@
         <p>ID: <code>{id}</code></p>
       </div>
       <div class="actions">
+        <button type="button" class="secondary" on:click={() => (editingCore ? cancelCoreEdit() : openCoreEdit())}>
+          {editingCore ? 'Cancel quick edit' : 'Quick edit core fields'}
+        </button>
         <button type="button" on:click={() => (showEdit = true)}>Edit family</button>
         <button type="button" class="danger" on:click={deleteFamily}>Remove family</button>
       </div>
     </header>
+
+    {#if editingCore}
+      <section class="core-edit">
+        <h2>Inline core edit</h2>
+        <div class="core-grid">
+          <label>
+            Partner link
+            <select bind:value={corePartnerLink}>
+              <option value="Married">Married</option>
+              <option value="Unmarried">Unmarried</option>
+              <option value="Unknown">Unknown</option>
+            </select>
+          </label>
+          <label>
+            Confidence
+            <input type="number" min="0" max="1" step="0.01" bind:value={coreConfidence} />
+          </label>
+          <label>
+            Evidence type
+            <select bind:value={coreEvidenceType}>
+              <option value="direct">Direct</option>
+              <option value="indirect">Indirect</option>
+              <option value="negative">Negative</option>
+            </select>
+          </label>
+        </div>
+        {#if coreError}
+          <p class="error">{coreError}</p>
+        {/if}
+        <div class="inline-actions">
+          <button type="button" on:click={saveCoreEdit} disabled={savingCore}>{savingCore ? 'Saving…' : 'Save'}</button>
+          <button type="button" class="secondary" on:click={cancelCoreEdit}>Cancel</button>
+        </div>
+      </section>
+    {/if}
 
     <section>
       <h2>💞 Partners</h2>
@@ -365,6 +459,44 @@
     gap: 0.5rem;
   }
 
+  .core-edit {
+    border: 1px solid #d8cff5;
+    border-radius: 0.7rem;
+    padding: 0.75rem;
+    background: #fcf9ff;
+  }
+
+  .core-edit h2 {
+    margin: 0 0 0.55rem;
+    color: #5a3fa8;
+    font-size: 0.95rem;
+  }
+
+  .core-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .core-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.84rem;
+    color: #5a4f7d;
+  }
+
+  .core-grid input,
+  .core-grid select {
+    border: 1px solid #d7cdf2;
+    border-radius: 0.45rem;
+    padding: 0.35rem 0.45rem;
+    font: inherit;
+    font-size: 0.85rem;
+    min-width: 0;
+  }
+
   section {
     border: 1px solid #efe6ff;
     border-radius: 0.85rem;
@@ -431,6 +563,10 @@
 
   .danger {
     background: #d03165;
+  }
+
+  .secondary {
+    background: #5b6b83;
   }
 
   .linkish {

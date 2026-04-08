@@ -77,6 +77,12 @@
   let showEvidence = false;
   let backLabel = '';
   let backHref = '';
+  let editingGender = false;
+  let genderDraft = 'Unknown';
+  let genderConfidence = 0.9;
+  let genderEvidenceType: 'direct' | 'indirect' | 'negative' = 'direct';
+  let genderError = '';
+  let savingGender = false;
   $: timelineRows = detail?.events ?? [];
   $: familyRows = detail?.families ?? [];
 
@@ -152,6 +158,44 @@
 
   function genderBadge(): string {
     return detail?.gender_assertions[0]?.value ?? 'Unknown';
+  }
+
+  function openGenderEdit(): void {
+    genderDraft = genderBadge();
+    genderConfidence = detail?.gender_assertions[0]?.confidence ?? 0.9;
+    genderEvidenceType = 'direct';
+    genderError = '';
+    editingGender = true;
+  }
+
+  function cancelGenderEdit(): void {
+    editingGender = false;
+    genderError = '';
+  }
+
+  async function saveGenderEdit(): Promise<void> {
+    if (!genderDraft.trim()) {
+      genderError = 'Gender is required.';
+      return;
+    }
+
+    savingGender = true;
+    genderError = '';
+    try {
+      await api.post(`/api/v1/persons/${id}/assertions`, {
+        field: 'gender',
+        value: genderDraft.trim(),
+        confidence: genderConfidence,
+        evidence_type: genderEvidenceType,
+        status: 'proposed'
+      });
+      editingGender = false;
+      await loadDetail();
+    } catch (err) {
+      genderError = err instanceof Error ? err.message : 'Failed to save gender';
+    } finally {
+      savingGender = false;
+    }
   }
 
   function familyLabel(family: FamilySummary): string {
@@ -385,6 +429,9 @@
         </div>
       </div>
       <div class="overview-actions">
+        <button type="button" class="btn-secondary" on:click={() => (editingGender ? cancelGenderEdit() : openGenderEdit())}>
+          {editingGender ? 'Cancel gender edit' : 'Quick edit gender'}
+        </button>
         <button type="button" class="btn-primary" on:click={() => (showEdit = true)}>Edit</button>
         <button type="button" class="btn-secondary" on:click={() => openInChart('pedigree')}>Pedigree</button>
         <button type="button" class="btn-secondary" on:click={() => openInChart('fan')}>Fan</button>
@@ -398,6 +445,35 @@
     <!-- ── Key facts ──────────────────────────────────────────── -->
     <section class="section-card">
       <h2 class="section-title">Key facts</h2>
+      {#if editingGender}
+        <div class="inline-edit">
+          <label>
+            Gender
+            <select bind:value={genderDraft}>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Unknown">Unknown</option>
+            </select>
+          </label>
+          <label>
+            Confidence
+            <input type="number" min="0" max="1" step="0.01" bind:value={genderConfidence} />
+          </label>
+          <label>
+            Evidence type
+            <select bind:value={genderEvidenceType}>
+              <option value="direct">Direct</option>
+              <option value="indirect">Indirect</option>
+              <option value="negative">Negative</option>
+            </select>
+          </label>
+          <button type="button" class="btn-primary" on:click={saveGenderEdit} disabled={savingGender}>{savingGender ? 'Saving…' : 'Save gender'}</button>
+          <button type="button" class="btn-secondary" on:click={cancelGenderEdit}>Cancel</button>
+          {#if genderError}
+            <p class="error">{genderError}</p>
+          {/if}
+        </div>
+      {/if}
       <dl class="fact-grid">
         <dt>Birth</dt>
         <dd>
@@ -658,6 +734,35 @@
     gap: 0.3rem 1rem;
     font-size: 0.9rem;
     margin: 0;
+  }
+
+  .inline-edit {
+    margin: 0 0 0.7rem;
+    border: 1px solid #dfd2f8;
+    border-radius: 0.6rem;
+    padding: 0.55rem;
+    background: #fcf9ff;
+    display: flex;
+    align-items: flex-end;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+
+  .inline-edit label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    font-size: 0.8rem;
+    color: #5a4f7d;
+  }
+
+  .inline-edit input,
+  .inline-edit select {
+    border: 1px solid #d7cdf2;
+    border-radius: 0.45rem;
+    padding: 0.3rem 0.45rem;
+    font: inherit;
+    font-size: 0.84rem;
   }
 
   dt {

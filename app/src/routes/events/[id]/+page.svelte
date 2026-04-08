@@ -50,6 +50,14 @@
   let selectedRole = 'Principal';
   let backLabel = '';
   let backHref = '';
+  let editingCore = false;
+  let coreEventType = '';
+  let coreDate = '';
+  let corePlaceId = '';
+  let coreConfidence = 0.9;
+  let coreEvidenceType: 'direct' | 'indirect' | 'negative' = 'direct';
+  let coreError = '';
+  let savingCore = false;
 
   const roles = [
     'Principal',
@@ -99,6 +107,66 @@
     );
 
     return [...fromDetail, ...fromAssertions];
+  }
+
+  function openCoreEdit(): void {
+    if (!detail) {
+      return;
+    }
+
+    coreEventType = detail.event_type;
+    coreDate = detail.date ?? '';
+    corePlaceId = detail.place_id ?? '';
+    coreConfidence = detail.confidence || 0.9;
+    coreEvidenceType = 'direct';
+    coreError = '';
+    editingCore = true;
+  }
+
+  function cancelCoreEdit(): void {
+    editingCore = false;
+    coreError = '';
+  }
+
+  async function saveCoreEdit(): Promise<void> {
+    if (!detail) {
+      return;
+    }
+    if (!coreEventType.trim()) {
+      coreError = 'Event type is required.';
+      return;
+    }
+
+    savingCore = true;
+    coreError = '';
+
+    try {
+      await api.put(`/api/v1/events/${id}`, {
+        event_type: coreEventType.trim(),
+        date: coreDate.trim() || null,
+        place_id: corePlaceId.trim() || null,
+        participants: detail.participants
+      });
+
+      await api.post(`/api/v1/events/${id}/assertions`, {
+        field: 'core_overview',
+        value: {
+          event_type: coreEventType.trim(),
+          date: coreDate.trim() || null,
+          place_id: corePlaceId.trim() || null
+        },
+        confidence: coreConfidence,
+        evidence_type: coreEvidenceType,
+        status: 'proposed'
+      });
+
+      editingCore = false;
+      await loadEvent();
+    } catch (err) {
+      coreError = err instanceof Error ? err.message : 'Failed to save core event fields';
+    } finally {
+      savingCore = false;
+    }
   }
 
   function toDraft(): EventDraft | null {
@@ -212,10 +280,52 @@
         <p>{detail.date ?? 'No date'} · {detail.place_id ?? 'No place'}</p>
       </div>
       <div class="actions">
+        <button type="button" class="secondary" on:click={() => (editingCore ? cancelCoreEdit() : openCoreEdit())}>
+          {editingCore ? 'Cancel quick edit' : 'Quick edit core fields'}
+        </button>
         <button type="button" on:click={() => (showEdit = true)}>Edit</button>
         <button type="button" class="danger" on:click={deleteEvent}>Delete</button>
       </div>
     </header>
+
+    {#if editingCore}
+      <section class="core-edit">
+        <h2>Inline core edit</h2>
+        <div class="core-grid">
+          <label>
+            Event type
+            <input bind:value={coreEventType} placeholder="Birth, Marriage, Census…" />
+          </label>
+          <label>
+            Date
+            <input bind:value={coreDate} placeholder="e.g. 1901-03-14" />
+          </label>
+          <label>
+            Place ID
+            <input bind:value={corePlaceId} placeholder="optional place id" />
+          </label>
+          <label>
+            Confidence
+            <input type="number" min="0" max="1" step="0.01" bind:value={coreConfidence} />
+          </label>
+          <label>
+            Evidence type
+            <select bind:value={coreEvidenceType}>
+              <option value="direct">Direct</option>
+              <option value="indirect">Indirect</option>
+              <option value="negative">Negative</option>
+            </select>
+          </label>
+        </div>
+        {#if coreError}
+          <p class="error">{coreError}</p>
+        {/if}
+        <div class="inline-actions">
+          <button type="button" on:click={saveCoreEdit} disabled={savingCore}>{savingCore ? 'Saving…' : 'Save'}</button>
+          <button type="button" class="secondary" on:click={cancelCoreEdit}>Cancel</button>
+        </div>
+      </section>
+    {/if}
 
     <section>
       <h2>Participants</h2>
@@ -327,6 +437,44 @@
     gap: 0.5rem;
   }
 
+  .core-edit {
+    border: 1px solid #d8cff5;
+    border-radius: 0.7rem;
+    padding: 0.75rem;
+    background: #fcf9ff;
+  }
+
+  .core-edit h2 {
+    margin: 0 0 0.55rem;
+    color: #5a3fa8;
+    font-size: 0.95rem;
+  }
+
+  .core-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .core-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.84rem;
+    color: #5a4f7d;
+  }
+
+  .core-grid input,
+  .core-grid select {
+    border: 1px solid #d7cdf2;
+    border-radius: 0.45rem;
+    padding: 0.35rem 0.45rem;
+    font: inherit;
+    font-size: 0.85rem;
+    min-width: 0;
+  }
+
   .list {
     margin: 0;
     padding-left: 1rem;
@@ -381,6 +529,10 @@
 
   .danger {
     background: #dc2626;
+  }
+
+  .secondary {
+    background: #5b6b83;
   }
 
   .linkish {
