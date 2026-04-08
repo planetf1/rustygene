@@ -647,6 +647,8 @@ pub fn map_family_nodes_with_report(
         let mut child_links: Vec<ChildLink> = Vec::new();
         let mut chan_subtrees: Vec<String> = Vec::new();
         let mut family_note_subtrees: Vec<String> = Vec::new();
+        let mut family_sour_subtrees: Vec<String> = Vec::new();
+        let mut family_lds_subtrees: Vec<(String, String)> = Vec::new();
 
         for child in &fam.children {
             match child.tag.as_str() {
@@ -684,14 +686,21 @@ pub fn map_family_nodes_with_report(
                     // Family event tags are mapped in `map_family_events`.
                 }
                 tag if tag.starts_with('_') => record_unhandled_tag(report, tag),
-                "NCHI" | "SUBM" | "SLGS" | "REFN" | "RIN" => {
+                "NCHI" | "SUBM" | "REFN" | "RIN" => {
                     record_deferred_standard_tag(report, child.tag.as_str())
+                }
+                "SLGS" => {
+                    record_deferred_standard_tag(report, child.tag.as_str());
+                    // Store SLGS raw subtree so its SOUR children survive export round-trip.
+                    let tag = child.tag.clone();
+                    family_lds_subtrees.push((tag, serialize_subtree(child)));
                 }
                 "NOTE" => {
                     family_note_subtrees.push(serialize_subtree(child));
                 }
                 "SOUR" => {
-                    // Citation mapping is handled by collect_citations_from_owner.
+                    // Citations extracted by collect_citations_from_owner; preserve for round-trip.
+                    family_sour_subtrees.push(serialize_subtree(child));
                 }
                 "CHAN" => {
                     record_deferred_standard_tag(report, child.tag.as_str());
@@ -768,6 +777,23 @@ pub fn map_family_nodes_with_report(
             family
                 ._raw_gedcom
                 .insert(format!("STANDARD_NOTE_{idx}"), subtree);
+        }
+
+        for (idx, subtree) in family_sour_subtrees.into_iter().enumerate() {
+            family
+                ._raw_gedcom
+                .insert(format!("CUSTOM_SOUR_{idx}"), subtree);
+        }
+
+        for (tag, subtree) in family_lds_subtrees {
+            let next_idx = family
+                ._raw_gedcom
+                .keys()
+                .filter(|k| k.starts_with(&format!("CUSTOM_{tag}_")))
+                .count();
+            family
+                ._raw_gedcom
+                .insert(format!("CUSTOM_{tag}_{next_idx}"), subtree);
         }
 
         for child in &fam.children {
@@ -913,6 +939,9 @@ fn map_family_events(
                     // Place-linking will be wired when place importer is in pipeline.
                     if let Some(value) = &nested.value {
                         event.description = Some(format!("place: {value}"));
+                    }
+                    if !nested.children.is_empty() {
+                        capture_standard_subtree(&mut event._raw_gedcom, "PLAC", nested);
                     }
                 }
                 "SOUR" => {
@@ -1089,6 +1118,16 @@ fn map_note_node(node: &GedcomNode) -> Note {
         if child.tag == "CHAN" {
             capture_standard_subtree(&mut note._raw_gedcom, "CHAN", child);
         }
+        if child.tag == "SOUR" {
+            // Citations extracted by collect_citations_from_owner; preserve for round-trip.
+            let next_idx = note
+                ._raw_gedcom
+                .keys()
+                .filter(|k| k.starts_with("CUSTOM_SOUR_"))
+                .count();
+            note._raw_gedcom
+                .insert(format!("CUSTOM_SOUR_{next_idx}"), serialize_subtree(child));
+        }
     }
 
     note
@@ -1170,6 +1209,17 @@ fn map_lds_ordinance_node(
                     format!("STANDARD_{}_{}", child.tag, next_idx),
                     serialize_subtree(child),
                 );
+            }
+            "SOUR" => {
+                // Citations extracted by collect_citations_from_owner; preserve for round-trip.
+                let next_idx = ordinance
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|k| k.starts_with("CUSTOM_SOUR_"))
+                    .count();
+                ordinance
+                    ._raw_gedcom
+                    .insert(format!("CUSTOM_SOUR_{next_idx}"), serialize_subtree(child));
             }
             _ => record_unhandled_tag(report, child.tag.as_str()),
         }
@@ -1699,6 +1749,9 @@ fn map_indi_node_to_events_with_report(
                     if let Some(value) = &nested.value {
                         event.description = Some(format!("place: {value}"));
                     }
+                    if !nested.children.is_empty() {
+                        capture_standard_subtree(&mut event._raw_gedcom, "PLAC", nested);
+                    }
                 }
                 "SOUR" => {
                     let next_idx = event
@@ -1795,6 +1848,8 @@ fn map_indi_node_to_person_with_report(
         person._raw_gedcom.insert(key, serialize_subtree(custom));
     }
 
+    let mut name_idx = 0usize;
+
     for child in &node.children {
         match child.tag.as_str() {
             "SEX" => {
@@ -1804,6 +1859,21 @@ fn map_indi_node_to_person_with_report(
                 person
                     .names
                     .push(parse_name_node_with_report(child, report));
+                for name_child in &child.children {
+                    if matches!(name_child.tag.as_str(), "SOUR" | "NOTE") {
+                        let prefix = format!("CUSTOM_NAME_{name_idx}_{}", name_child.tag);
+                        let next_idx = person
+                            ._raw_gedcom
+                            .keys()
+                            .filter(|k| k.starts_with(&format!("{prefix}_")))
+                            .count();
+                        person._raw_gedcom.insert(
+                            format!("{prefix}_{next_idx}"),
+                            serialize_subtree(name_child),
+                        );
+                    }
+                }
+                name_idx += 1;
             }
             // Event and attribute tags are extracted by map_indi_node_to_events.
             "BIRT" | "CHR" | "DEAT" | "BURI" | "CREM" | "ADOP" | "BAPM" | "BARM" | "BASM"
@@ -1838,8 +1908,21 @@ fn map_indi_node_to_person_with_report(
                 );
             }
             "SUBM" | "ALIA" | "ANCI" | "DESI" | "NICK" | "RFN" | "AFN" | "REFN" | "RIN"
-            | "ASSO" | "ASSOC" | "RESN" => {
+            | "RESN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
+            }
+            "ASSO" | "ASSOC" => {
+                record_deferred_standard_tag(report, child.tag.as_str());
+                // Store ASSO subtree so its SOUR children survive export round-trip.
+                let next_idx = person
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|k| k.starts_with("CUSTOM_ASSO_"))
+                    .count();
+                person._raw_gedcom.insert(
+                    format!("CUSTOM_ASSO_{next_idx}"),
+                    serialize_subtree(child),
+                );
             }
             "NOTE" => {
                 let next_idx = person
@@ -1853,7 +1936,16 @@ fn map_indi_node_to_person_with_report(
                 );
             }
             "SOUR" => {
-                // Citation mapping is handled by collect_citations_from_owner.
+                // Citations extracted by collect_citations_from_owner; preserve subtree for round-trip.
+                let next_idx = person
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|k| k.starts_with("CUSTOM_SOUR_"))
+                    .count();
+                person._raw_gedcom.insert(
+                    format!("CUSTOM_SOUR_{next_idx}"),
+                    serialize_subtree(child),
+                );
             }
             "CHAN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
@@ -1867,6 +1959,20 @@ fn map_indi_node_to_person_with_report(
                     .count();
                 person._raw_gedcom.insert(
                     format!("CUSTOM_OBJE_REF_{next_idx}"),
+                    serialize_subtree(child),
+                );
+            }
+            "BAPL" | "CONL" | "INIT" | "ENDL" | "SLGC" => {
+                // LDS ordinances are also parsed by collect_lds_from_node; store raw
+                // so SOUR children under these tags survive the export round-trip.
+                let tag = child.tag.clone();
+                let next_idx = person
+                    ._raw_gedcom
+                    .keys()
+                    .filter(|k| k.starts_with(&format!("CUSTOM_{tag}_")))
+                    .count();
+                person._raw_gedcom.insert(
+                    format!("CUSTOM_{tag}_{next_idx}"),
                     serialize_subtree(child),
                 );
             }
@@ -2006,10 +2112,24 @@ fn serialize_subtree_inner(node: &GedcomNode, out: &mut String) {
     out.push(' ');
     out.push_str(&node.tag);
     if let Some(value) = &node.value {
+        let mut segments = value.split('\n');
+        let first_segment = segments.next().unwrap_or_default();
         out.push(' ');
-        out.push_str(value);
+        out.push_str(first_segment);
+        out.push('\n');
+
+        for segment in segments {
+            out.push_str(&node.level.saturating_add(1).to_string());
+            out.push_str(" CONT");
+            if !segment.is_empty() {
+                out.push(' ');
+                out.push_str(segment);
+            }
+            out.push('\n');
+        }
+    } else {
+        out.push('\n');
     }
-    out.push('\n');
 
     for child in &node.children {
         serialize_subtree_inner(child, out);
@@ -3568,7 +3688,31 @@ fn append_raw_gedcom_subtrees(
 ) {
     let mut entries: Vec<(&String, &String)> = raw_gedcom
         .iter()
-        .filter(|(key, _)| key.starts_with("CUSTOM_"))
+        .filter(|(key, _)| {
+            (key.starts_with("CUSTOM_") && !key.starts_with("CUSTOM_NAME_"))
+                || key.starts_with("STANDARD_NOTE_")
+        })
+        .collect();
+    entries.sort_by(|(left_key, _), (right_key, _)| {
+        raw_key_order(left_key).cmp(&raw_key_order(right_key))
+    });
+
+    for (_, value) in entries {
+        for subtree in deserialize_serialized_subtrees(value) {
+            insert_subtree(children, parent_level, subtree);
+        }
+    }
+}
+
+fn append_prefixed_raw_gedcom_subtrees(
+    children: &mut Vec<GedcomNode>,
+    parent_level: u8,
+    raw_gedcom: &std::collections::BTreeMap<String, String>,
+    prefix: &str,
+) {
+    let mut entries: Vec<(&String, &String)> = raw_gedcom
+        .iter()
+        .filter(|(key, _)| key.starts_with(prefix))
         .collect();
     entries.sort_by(|(left_key, _), (right_key, _)| {
         raw_key_order(left_key).cmp(&raw_key_order(right_key))
@@ -3773,8 +3917,15 @@ pub fn person_to_indi_node_with_policy(
             children: Vec::new(),
         });
     } else {
-        for name in &person.names {
-            children.push(person_name_to_name_node(name));
+        for (idx, name) in person.names.iter().enumerate() {
+            let mut name_node = person_name_to_name_node(name);
+            append_prefixed_raw_gedcom_subtrees(
+                &mut name_node.children,
+                name_node.level,
+                &person._raw_gedcom,
+                &format!("CUSTOM_NAME_{idx}_"),
+            );
+            children.push(name_node);
         }
 
         append_raw_gedcom_subtrees(&mut children, 0, &person._raw_gedcom);
@@ -3822,7 +3973,11 @@ pub fn person_to_indi_node_with_policy(
                     children: Vec::new(),
                 });
             }
-            if let Some(place) = place_name_for_event(event, places) {
+            let has_raw_plac = event
+                ._raw_gedcom
+                .keys()
+                .any(|key| key.starts_with("CUSTOM_STD_PLAC_"));
+            if !has_raw_plac && let Some(place) = place_name_for_event(event, places) {
                 event_children.push(GedcomNode {
                     level: 2,
                     xref: None,
@@ -4046,7 +4201,11 @@ pub fn family_to_fam_node(
                 children: Vec::new(),
             });
         }
-        if let Some(place) = place_name_for_event(event, places) {
+        let has_raw_plac = event
+            ._raw_gedcom
+            .keys()
+            .any(|key| key.starts_with("CUSTOM_STD_PLAC_"));
+        if !has_raw_plac && let Some(place) = place_name_for_event(event, places) {
             event_children.push(GedcomNode {
                 level: 2,
                 xref: None,

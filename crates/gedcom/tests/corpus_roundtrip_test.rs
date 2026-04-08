@@ -8,8 +8,8 @@ use rustygene_core::family::Family;
 use rustygene_core::person::Person;
 use rustygene_core::place::Place;
 use rustygene_gedcom::{
-    ExportPrivacyPolicy, family_to_fam_node, import_gedcom_to_sqlite, media_to_obje_node,
-    note_to_note_node, person_to_indi_node_with_policy, render_gedcom_file,
+    ExportPrivacyPolicy, GedcomNode, family_to_fam_node, import_gedcom_to_sqlite,
+    media_to_obje_node, note_to_note_node, person_to_indi_node_with_policy, render_gedcom_file,
     repository_to_repo_node, source_to_sour_node,
 };
 use rustygene_storage::run_migrations;
@@ -120,6 +120,23 @@ fn load_families(conn: &Connection) -> Vec<Family> {
         .collect()
 }
 
+fn rewrite_inline_source_references(
+    node: &mut GedcomNode,
+    anonymous_source_xrefs: &BTreeMap<String, String>,
+) {
+    if node.tag == "SOUR"
+        && let Some(value) = &node.value
+        && !value.starts_with('@')
+        && let Some(rewritten) = anonymous_source_xrefs.get(value.trim())
+    {
+        node.value = Some(rewritten.clone());
+    }
+
+    for child in &mut node.children {
+        rewrite_inline_source_references(child, anonymous_source_xrefs);
+    }
+}
+
 fn export_db_as_gedcom(conn: &Connection) -> String {
     let persons: Vec<Person> = load_persons(conn);
     let families: Vec<Family> = load_families(conn);
@@ -156,11 +173,17 @@ fn export_db_as_gedcom(conn: &Connection) -> String {
         nodes.push(family_to_fam_node(family, &events, &places, &xref));
     }
 
-    for (idx, source) in sources.iter().enumerate() {
-        let xref = source
-            .original_xref
-            .clone()
-            .unwrap_or_else(|| format!("@S{}@", idx + 1));
+    // Only export sources that have an original xref.  Inline/anonymous sources
+    // (created from verbatim SOUR text via resolve_source_id) are preserved in
+    // the owning entity's _raw_gedcom as CUSTOM_SOUR_N entries; re-exporting them
+    // as root SOUR records would produce a duplicate anonymous Source on re-import.
+    let mut anonymous_source_xrefs: BTreeMap<String, String> = BTreeMap::new();
+    for source in &sources {
+        let xref = source.original_xref.clone().unwrap_or_else(|| {
+            let generated = format!("@SX{}@", source.id.0.simple());
+            anonymous_source_xrefs.insert(source.title.clone(), generated.clone());
+            generated
+        });
         nodes.push(source_to_sour_node(source, &xref));
     }
 
@@ -183,6 +206,12 @@ fn export_db_as_gedcom(conn: &Connection) -> String {
             .clone()
             .unwrap_or_else(|| format!("@M{}@", idx + 1));
         nodes.push(media_to_obje_node(media_item, &xref));
+    }
+
+    if !anonymous_source_xrefs.is_empty() {
+        for node in &mut nodes {
+            rewrite_inline_source_references(node, &anonymous_source_xrefs);
+        }
     }
 
     render_gedcom_file(&nodes)
@@ -385,7 +414,6 @@ fn corpus_roundtrip_torture551_event_count_regression() {
 }
 
 #[test]
-#[ignore] // Broader torture551 round-trip fidelity still has citation drift; tracked separately.
 fn corpus_roundtrip_torture551_ged_diagnostic() {
     let input = read_gedcom_fixture("torture551.ged");
     let db1 = temp_db_path("torture551-db1");
@@ -411,6 +439,7 @@ fn corpus_roundtrip_torture551_ged_diagnostic() {
     let exported = export_db_as_gedcom(&conn1);
     assert!(exported.contains("0 HEAD"));
     assert!(exported.contains("0 TRLR"));
+
 
     let mut conn2 = setup_db(&db2);
     import_gedcom_to_sqlite(&mut conn2, "corpus-reimport-torture551", &exported)
