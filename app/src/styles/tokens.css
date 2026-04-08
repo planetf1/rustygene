@@ -1,0 +1,46 @@
+:root {
+  /* Palette */
+  --color-bg: #fff7fb;
+  --color-surface: #ffffff;
+  --color-surface-soft: #fff9ff;
+  --color-text: #2a2342;
+  --color-muted: #5e557e;
+  --color-border: #e8def8;
+  --color-primary: #9b7bff;
+  --color-primary-strong: #7d5df2;
+  --color-secondary: #ff9fcf;
+  --color-tertiary: #8ee7d1;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #dc2626;
+
+  /* Typography */
+  --font-family-sans: Inter, 'Avenir Next', 'Nunito', system-ui, -apple-system, sans-serif;
+
+  /* Radius */
+  --radius-sm: 0.7rem;
+  --radius-md: 0.9rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.2rem;
+  --radius-pill: 999px;
+
+  /* Shadows */
+  --shadow-sm: 0 8px 16px rgb(125 93 242 / 22%);
+  --shadow-md: 0 10px 24px rgb(125 93 242 / 10%);
+  --shadow-lg: 0 16px 34px rgb(125 93 242 / 12%);
+
+  /* Compatibility aliases (existing UI uses these vars) */
+  --rg-bg: var(--color-bg);
+  --rg-surface: var(--color-surface);
+  --rg-surface-soft: var(--color-surface-soft);
+  --rg-text: var(--color-text);
+  --rg-muted: var(--color-muted);
+  --rg-border: var(--color-border);
+  --rg-primary: var(--color-primary);
+  --rg-primary-strong: var(--color-primary-strong);
+  --rg-secondary: var(--color-secondary);
+  --rg-tertiary: var(--color-tertiary);
+  --rg-success: var(--color-success);
+  --rg-warning: var(--color-warning);
+  --rg-shadow: var(--shadow-lg);
+}
