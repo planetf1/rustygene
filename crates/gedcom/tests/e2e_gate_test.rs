@@ -324,6 +324,7 @@ async fn e2e_phase1a_gate_test() {
             .unwrap_or_else(|| format!("@F{}@", idx + 1));
         export_nodes.push(family_to_fam_node(
             family,
+            &persons_for_export,
             &events_for_export,
             &places_for_export,
             &xref,
@@ -399,6 +400,39 @@ async fn e2e_phase1a_gate_test() {
             > 0,
         "exported persons must include at least one named person"
     );
+
+    let person_xrefs_by_id: std::collections::BTreeMap<_, _> = persons_for_export
+        .iter()
+        .filter_map(|person| person.original_xref.clone().map(|xref| (person.id, xref)))
+        .collect();
+    for family in &families_for_export {
+        if let Some(partner1) = family.partner1_id
+            && let Some(expected_xref) = person_xrefs_by_id.get(&partner1)
+        {
+            assert!(
+                exported_gedcom.contains(&format!("1 HUSB {expected_xref}")),
+                "family export must preserve original partner xref in HUSB link"
+            );
+        }
+
+        if let Some(partner2) = family.partner2_id
+            && let Some(expected_xref) = person_xrefs_by_id.get(&partner2)
+        {
+            assert!(
+                exported_gedcom.contains(&format!("1 WIFE {expected_xref}")),
+                "family export must preserve original partner xref in WIFE link"
+            );
+        }
+
+        for child_link in &family.child_links {
+            if let Some(expected_xref) = person_xrefs_by_id.get(&child_link.child_id) {
+                assert!(
+                    exported_gedcom.contains(&format!("1 CHIL {expected_xref}")),
+                    "family export must preserve original child xref in CHIL link"
+                );
+            }
+        }
+    }
 
     // =========================================================================
     // Step 5: Re-import exported GEDCOM into DB2

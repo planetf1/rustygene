@@ -170,7 +170,7 @@ fn export_db_as_gedcom(conn: &Connection) -> String {
             .original_xref
             .clone()
             .unwrap_or_else(|| format!("@F{}@", idx + 1));
-        nodes.push(family_to_fam_node(family, &events, &places, &xref));
+        nodes.push(family_to_fam_node(family, &persons, &events, &places, &xref));
     }
 
     // Only export sources that have an original xref.  Inline/anonymous sources

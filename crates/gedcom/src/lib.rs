@@ -4107,11 +4107,22 @@ fn person_name_to_name_node(name: &PersonName) -> GedcomNode {
 #[must_use]
 pub fn family_to_fam_node(
     family: &Family,
+    persons: &[Person],
     events: &[Event],
     places: &[Place],
     xref: &str,
 ) -> GedcomNode {
     let mut children = Vec::new();
+
+    // Prefer the original GEDCOM xref captured on import; if unavailable,
+    // fall back to a deterministic synthetic xref derived from the entity UUID.
+    let person_xref_for = |person_id: EntityId| {
+        persons
+            .iter()
+            .find(|person| person.id == person_id)
+            .and_then(|person| person.original_xref.clone())
+            .unwrap_or_else(|| format!("@I{}@", person_id.0.simple()))
+    };
 
     // HUSB: husband (partner1_id encoded as xref)
     if let Some(partner1_id) = family.partner1_id {
@@ -4119,7 +4130,7 @@ pub fn family_to_fam_node(
             level: 1,
             xref: None,
             tag: "HUSB".to_string(),
-            value: Some(format!("@I{}@", partner1_id.0.simple())),
+            value: Some(person_xref_for(partner1_id)),
             children: Vec::new(),
         });
     }
@@ -4130,7 +4141,7 @@ pub fn family_to_fam_node(
             level: 1,
             xref: None,
             tag: "WIFE".to_string(),
-            value: Some(format!("@I{}@", partner2_id.0.simple())),
+            value: Some(person_xref_for(partner2_id)),
             children: Vec::new(),
         });
     }
@@ -4159,7 +4170,7 @@ pub fn family_to_fam_node(
             level: 1,
             xref: None,
             tag: "CHIL".to_string(),
-            value: Some(format!("@I{}@", child_link.child_id.0.simple())),
+            value: Some(person_xref_for(child_link.child_id)),
             children: chil_children,
         });
     }
@@ -5732,7 +5743,7 @@ mod tests {
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
-        let node = family_to_fam_node(&family, &[], &[], "@F1@");
+        let node = family_to_fam_node(&family, &[], &[], &[], "@F1@");
 
         assert_eq!(node.level, 0);
         assert_eq!(node.xref, Some("@F1@".to_string()));
@@ -5764,7 +5775,7 @@ mod tests {
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
-        let node = family_to_fam_node(&family, &[], &[], "@F1@");
+        let node = family_to_fam_node(&family, &[], &[], &[], "@F1@");
 
         // Find CHIL node
         let chil_node = node.children.iter().find(|n| n.tag == "CHIL");
@@ -5775,6 +5786,132 @@ mod tests {
         let pedi_node = chil.children.iter().find(|n| n.tag == "PEDI");
         assert!(pedi_node.is_some());
         assert_eq!(pedi_node.unwrap().value, Some("ADOPTED".to_string()));
+    }
+
+    #[test]
+    fn family_to_fam_node_prefers_original_person_xrefs_for_links() {
+        let partner1_id = EntityId::new();
+        let partner2_id = EntityId::new();
+        let child_id = EntityId::new();
+
+        let persons = vec![
+            Person {
+                id: partner1_id,
+                names: Vec::new(),
+                gender: Gender::Unknown,
+                living: false,
+                private: false,
+                original_xref: Some("@I17@".to_string()),
+                _raw_gedcom: std::collections::BTreeMap::new(),
+            },
+            Person {
+                id: partner2_id,
+                names: Vec::new(),
+                gender: Gender::Unknown,
+                living: false,
+                private: false,
+                original_xref: Some("@I42@".to_string()),
+                _raw_gedcom: std::collections::BTreeMap::new(),
+            },
+            Person {
+                id: child_id,
+                names: Vec::new(),
+                gender: Gender::Unknown,
+                living: false,
+                private: false,
+                original_xref: Some("@I99@".to_string()),
+                _raw_gedcom: std::collections::BTreeMap::new(),
+            },
+        ];
+
+        let family = Family {
+            id: EntityId::new(),
+            partner1_id: Some(partner1_id),
+            partner2_id: Some(partner2_id),
+            partner_link: PartnerLink::Married,
+            couple_relationship: None,
+            child_links: vec![ChildLink {
+                child_id,
+                lineage_type: LineageType::Biological,
+            }],
+            original_xref: Some("@F1@".to_string()),
+            _raw_gedcom: std::collections::BTreeMap::new(),
+        };
+
+        let node = family_to_fam_node(&family, &persons, &[], &[], "@F1@");
+
+        assert!(
+            node.children
+                .iter()
+                .any(|child| child.tag == "HUSB" && child.value.as_deref() == Some("@I17@"))
+        );
+        assert!(
+            node.children
+                .iter()
+                .any(|child| child.tag == "WIFE" && child.value.as_deref() == Some("@I42@"))
+        );
+        assert!(
+            node.children
+                .iter()
+                .any(|child| child.tag == "CHIL" && child.value.as_deref() == Some("@I99@"))
+        );
+    }
+
+    #[test]
+    fn family_to_fam_node_falls_back_to_deterministic_entity_id_xref() {
+        let partner1_id = EntityId::new();
+        let child_id = EntityId::new();
+
+        let persons = vec![
+            Person {
+                id: partner1_id,
+                names: Vec::new(),
+                gender: Gender::Unknown,
+                living: false,
+                private: false,
+                original_xref: None,
+                _raw_gedcom: std::collections::BTreeMap::new(),
+            },
+            Person {
+                id: child_id,
+                names: Vec::new(),
+                gender: Gender::Unknown,
+                living: false,
+                private: false,
+                original_xref: None,
+                _raw_gedcom: std::collections::BTreeMap::new(),
+            },
+        ];
+
+        let family = Family {
+            id: EntityId::new(),
+            partner1_id: Some(partner1_id),
+            partner2_id: None,
+            partner_link: PartnerLink::Unknown,
+            couple_relationship: None,
+            child_links: vec![ChildLink {
+                child_id,
+                lineage_type: LineageType::Biological,
+            }],
+            original_xref: Some("@F1@".to_string()),
+            _raw_gedcom: std::collections::BTreeMap::new(),
+        };
+
+        let node = family_to_fam_node(&family, &persons, &[], &[], "@F1@");
+
+        let expected_husb = format!("@I{}@", partner1_id.0.simple());
+        let expected_chil = format!("@I{}@", child_id.0.simple());
+
+        assert!(
+            node.children
+                .iter()
+                .any(|child| child.tag == "HUSB" && child.value.as_deref() == Some(&expected_husb))
+        );
+        assert!(
+            node.children
+                .iter()
+                .any(|child| child.tag == "CHIL" && child.value.as_deref() == Some(&expected_chil))
+        );
     }
 
     #[test]
@@ -5885,7 +6022,7 @@ mod tests {
             _raw_gedcom: std::collections::BTreeMap::new(),
         };
 
-        let node = family_to_fam_node(&family, &[event], &[place], "@F1@");
+        let node = family_to_fam_node(&family, &[], &[event], &[place], "@F1@");
         let marr_node = node
             .children
             .iter()
@@ -6870,11 +7007,17 @@ mod tests {
         let mut x_counter = 1usize;
 
         // Export persons
-        let mut stmt = conn.prepare("SELECT data FROM persons ORDER BY rowid")?;
-        let persons = stmt.query_map([], |row| {
-            let json_str: String = row.get(0)?;
-            Ok(serde_json::from_str::<Person>(&json_str))
-        })?;
+        let all_persons: Vec<Person> = {
+            let mut stmt = conn.prepare("SELECT data FROM persons ORDER BY rowid")?;
+            stmt.query_map([], |row| {
+                let json_str: String = row.get(0)?;
+                Ok(serde_json::from_str::<Person>(&json_str))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|result| result.ok())
+            .collect()
+        };
 
         // Load all events so they can be passed to the exporters.
         let all_events: Vec<Event> = {
@@ -6901,18 +7044,17 @@ mod tests {
             .collect()
         };
 
-        for person_result in persons {
-            let person: Person = person_result??;
+        for person in &all_persons {
             let xref = format!("@I{}@", x_counter);
             x_counter += 1;
             let node = person_to_indi_node_with_policy(
-                &person,
+                person,
                 &all_events,
                 &all_places,
                 &xref,
                 ExportPrivacyPolicy::None,
             )
-            .unwrap_or_else(|| person_to_indi_node(&person, &all_events, &all_places, &xref));
+            .unwrap_or_else(|| person_to_indi_node(person, &all_events, &all_places, &xref));
             nodes.push(node);
         }
 
@@ -6932,7 +7074,13 @@ mod tests {
                 family_count += 1;
                 let xref = format!("@F{}@", x_counter);
                 x_counter += 1;
-                nodes.push(family_to_fam_node(&family, &all_events, &all_places, &xref));
+                nodes.push(family_to_fam_node(
+                    &family,
+                    &all_persons,
+                    &all_events,
+                    &all_places,
+                    &xref,
+                ));
             } else if let Ok(_relationship) = serde_json::from_str::<Relationship>(&json_str) {
                 relationship_count += 1;
                 // Relationships are not exported as separate GEDCOM records

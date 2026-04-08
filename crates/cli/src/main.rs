@@ -1217,7 +1217,7 @@ fn run_export_command(
             }
             for (idx, family) in families.iter().enumerate() {
                 let xref = preserved_or_generated_xref(family.original_xref.as_deref(), 'F', idx);
-                nodes.push(family_to_fam_node(family, &events, &places, &xref));
+                nodes.push(family_to_fam_node(family, &persons, &events, &places, &xref));
             }
             for (idx, source) in sources.iter().enumerate() {
                 let xref = preserved_or_generated_xref(source.original_xref.as_deref(), 'S', idx);

@@ -61,66 +61,64 @@ fidelity.
 
 ## Open Gaps
 
-### 8. NOTE Records Not Stored
+### 8. Inline NOTE links are not yet typed note_ref assertions
 
-- **Impact:** LOW · Phase 1B
+- **Impact:** MEDIUM · Phase 1B · **Bead: rustygene-gwx**
 
-Stand-alone `NOTE @N1@` records and inline `1 NOTE` subrecords are absorbed by
-the raw GEDCOM fallback. They survive round-trip via `_raw_gedcom` but are not
-typed entities.
+Root-level `NOTE @N...@` records are imported/exported as typed `Note` entities.
+However, many inline `NOTE` links/subrecords are still carried via `_raw_gedcom`
+rather than surfaced as first-class `note_ref` assertions on owner entities.
 
 ### 9. Multimedia (OBJE) Coverage is Root-Level Only
 
 - **Impact:** LOW · Phase 1B
 
 Root-level `OBJE` records are imported/exported as typed `Media` entities.
-Inline `OBJE` links on other records are currently deferred/counted but not yet
-mapped into explicit `MediaRef` link structures.
+Inline `OBJE` links on INDI/FAM are now mapped to `media_ref` assertions.
+Remaining gap is broader typed link parity across all owner contexts (notably
+event-level OBJE coverage and richer link metadata parity).
 
 ### 10. ASSO (Association) Records Ignored
 
-- **Impact:** LOW · Phase 1B+
+- **Impact:** LOW · Phase 1B+ · **Bead: rustygene-0wf**
 
-`1 ASSO @I1@` association records are not parsed or stored.
+`1 ASSO @I1@` association records are preserved and round-tripped via raw GEDCOM,
+but are not yet parsed into first-class typed association/domain records.
 
 ### 17. Vendor custom metadata tags remain unnormalized
 
-- **Impact:** LOW · Phase 2+
+- **Impact:** LOW · Phase 2+ · **Bead: rustygene-x22**
 
 Metadata-oriented vendor tags (e.g. `_MSER`, `_OID`, `_ATL`, `_DSCR`, `_ORIG`,
 `_DATE`, crop geometry tags) are preserved and accounted for, but currently
 remain in `_raw_gedcom` rather than first-class domain fields.
 
-### 15. torture551.ged Round-Trip Citation Drift (event duplication fixed)
+### ~~15. torture551.ged Round-Trip Citation Drift~~ — FIXED
 
 - **Impact:** MEDIUM · Phase 1B Corpus Hardening · **Bead: rustygene-p0k**
 
-`torture551.ged` has documented (torturous) edge cases in GEDCOM structure.
-After the `rustygene-jqk` fix, round-trip event count now remains stable.
-However, full round-trip diagnostics still show citation drift:
+`torture551.ged` citation round-trip drift is resolved.
 
-- citations row count changes from 58 to 45 after import → export → re-import
-- this indicates some `SOUR` linkage/citation context is not being re-emitted
-  with full fidelity in torture551 edge-case paths
-- `simpsons.ged` round-trip remains stable, so this appears fixture-specific
-  to torture551 complexity
+- The full diagnostic `corpus_roundtrip_torture551_ged_diagnostic` is active and passing.
+- Citation-bearing SOUR contexts (including complex torture551 paths) now preserve
+  row counts and assertion distribution across import → export → re-import.
 
-**Workaround:** `corpus_roundtrip_torture551_event_count_regression` is active,
-while full-row-count diagnostic `corpus_roundtrip_torture551_ged_diagnostic`
-remains ignored pending the citation-drift fix.
+**Validation:** `corpus_roundtrip_torture551_event_count_regression` and full
+diagnostic round-trip tests both pass.
 
 ---
 
 ## Round-Trip Fidelity Gaps
 
-### 11. xref IDs Not Preserved
+### ~~11. Family link xrefs not preserved~~ — FIXED
 
-- **Impact:** MEDIUM
+- **Resolved by:** `rustygene-9el`
 
-Original xref identifiers (`@I23@`, `@F5@`, `@S2@`) are not preserved across
-import/export. The exporter assigns sequential UUIDs as xrefs (`@I<uuid>@`),
-which breaks any external cross-references that relied on the original IDs.
-This is by design (UUID-based primary keys), but it is a fidelity loss.
+`family_to_fam_node` now prefers preserved original GEDCOM person xrefs when
+emitting `HUSB` / `WIFE` / `CHIL` links. Regression coverage includes both:
+
+- import → export validation that family links retain original person xrefs
+- deterministic fallback to `@I<entity_uuid_simple>@` when no original xref exists
 
 ### ~~12. CHAN (Change Timestamp) Not Exported~~ — FIXED
 
