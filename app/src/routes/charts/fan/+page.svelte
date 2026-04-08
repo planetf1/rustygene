@@ -44,8 +44,28 @@
     genderHint: 'male' | 'female' | 'unknown';
   };
 
-  const ringWidth = 70;
-  const rootRadius = 48;
+  function ringWidthForGenerations(depth: number): number {
+    if (depth >= 8) {
+      return 48;
+    }
+    if (depth >= 7) {
+      return 52;
+    }
+    if (depth >= 6) {
+      return 58;
+    }
+    return 64;
+  }
+
+  function rootRadiusForGenerations(depth: number): number {
+    if (depth >= 8) {
+      return 36;
+    }
+    if (depth >= 6) {
+      return 40;
+    }
+    return 46;
+  }
 
   let loading = false;
   let error = '';
@@ -156,7 +176,68 @@
   }
 
   function canRenderArcLabel(arc: ArcDatum): boolean {
-    return arc.endAngle - arc.startAngle > 0.12;
+    const span = arc.endAngle - arc.startAngle;
+    const radius = (arc.innerRadius + arc.outerRadius) / 2;
+    const arcPixels = span * radius;
+    return arcPixels >= 30;
+  }
+
+  function arcLabelPathId(arc: ArcDatum): string {
+    return `fan-label-${arc.key.replace(':', '-')}`;
+  }
+
+  function arcLabelPath(arc: ArcDatum): string {
+    const radius = (arc.innerRadius + arc.outerRadius) / 2;
+    const line = d3
+      .arc<ArcDatum>()
+      .innerRadius(radius)
+      .outerRadius(radius)
+      .startAngle(arc.startAngle)
+      .endAngle(arc.endAngle);
+    return line(arc) ?? '';
+  }
+
+  function labelTextForArc(arc: ArcDatum): string {
+    if (arc.isPlaceholder) {
+      return '';
+    }
+
+    const span = arc.endAngle - arc.startAngle;
+    const radius = (arc.innerRadius + arc.outerRadius) / 2;
+    const arcPixels = span * radius;
+    const { surname, given } = surnameAndGiven(arc.displayName);
+    const birth = arc.birthYear === null ? '?' : String(arc.birthYear);
+
+    if (arcPixels < 40) {
+      return '';
+    }
+    if (arcPixels < 58) {
+      return surname.slice(0, 6);
+    }
+    if (arcPixels < 86) {
+      return surname;
+    }
+    if (arcPixels < 120) {
+      return `${surname} · ${birth}`;
+    }
+    return `${given ? `${truncateGiven(given)} ` : ''}${surname} · ${birth}`;
+  }
+
+  function labelFontSizeForArc(arc: ArcDatum): number {
+    const span = arc.endAngle - arc.startAngle;
+    const radius = (arc.innerRadius + arc.outerRadius) / 2;
+    const arcPixels = span * radius;
+
+    if (arcPixels > 150) {
+      return 11;
+    }
+    if (arcPixels > 120) {
+      return 10;
+    }
+    if (arcPixels > 90) {
+      return 9;
+    }
+    return 8;
   }
 
   function nodeAtPath(root: AncestorApiNode | null, pathBits: number[]): AncestorApiNode | null {
@@ -187,6 +268,8 @@
 
   function buildArcs(root: AncestorApiNode, maxGenerations: number): ArcDatum[] {
     const result: ArcDatum[] = [];
+    const rootRadius = rootRadiusForGenerations(maxGenerations);
+    const ringWidth = ringWidthForGenerations(maxGenerations);
 
     for (let generation = 1; generation <= maxGenerations; generation += 1) {
       const slots = 2 ** generation;
@@ -450,6 +533,8 @@
   }
 
   $: chartWidth = Math.max(960, Math.floor(chartContainer?.clientWidth ?? 980));
+  $: rootRadius = rootRadiusForGenerations(generations);
+  $: ringWidth = ringWidthForGenerations(generations);
   $: maxRadius = rootRadius + ringWidth * generations + 8;
   $: chartHeight = Math.max(760, Math.ceil(maxRadius + 24 + 24));
   $: centerX = chartWidth / 2;
@@ -589,16 +674,16 @@
             on:keydown={(event) => onArcKeydown(event, arc)}
           />
 
-          {#if !arc.isPlaceholder && canRenderArcLabel(arc)}
-            {@const point = centroid(arc, 0.5)}
-            {@const split = surnameAndGiven(arc.displayName)}
-            <g transform={`translate(${point.x}, ${point.y}) rotate(${labelRotation(arc)})`}>
-              <text text-anchor={labelAnchor(arc)} dominant-baseline="middle" class="arc-label surname">{split.surname}</text>
-              <text text-anchor={labelAnchor(arc)} dominant-baseline="middle" dy="12" class="arc-label">{truncateGiven(split.given)}</text>
-              <text text-anchor={labelAnchor(arc)} dominant-baseline="middle" dy="24" class="arc-label year">
-                {arc.birthYear === null ? '?' : arc.birthYear}
-              </text>
-            </g>
+          {#if !arc.isPlaceholder && canRenderArcLabel(arc) && labelTextForArc(arc)}
+            <path id={arcLabelPathId(arc)} d={arcLabelPath(arc)} fill="none" pointer-events="none" />
+            <text
+              class="arc-label"
+              text-anchor="middle"
+              dominant-baseline="middle"
+              font-size={labelFontSizeForArc(arc)}
+            >
+              <textPath href={`#${arcLabelPathId(arc)}`} startOffset="50%">{labelTextForArc(arc)}</textPath>
+            </text>
           {/if}
         {/each}
       </g>
@@ -765,12 +850,12 @@
     border-radius: 0.6rem;
     background: #f8fafc;
     overflow: hidden;
-    min-height: 760px;
+    min-height: 720px;
   }
 
   svg {
     width: 100%;
-    height: 760px;
+    height: 720px;
     display: block;
   }
 
@@ -796,16 +881,9 @@
   }
 
   .arc-label {
-    font-size: 0.54rem;
+    font-size: 0.56rem;
     fill: #0f172a;
-  }
-
-  .arc-label.surname {
-    font-weight: 700;
-  }
-
-  .arc-label.year {
-    fill: #334155;
+    pointer-events: none;
   }
 
   .tooltip {
