@@ -19,15 +19,21 @@ fn indi_and_fam_obje_links_generate_media_refs() {
 1 NAME John /Doe/
 1 SEX M
 1 OBJE @M1@
+2 _CROP 10,20,30,40
+2 _PRIM Y
 1 OBJE
 2 FILE /tmp/inline-photo.jpg
 2 TITL Inline Photo
+2 _CROP 1,2,3,4
+2 _PRIM N
 1 BIRT
 2 DATE 1 JAN 1900
 2 OBJE @M1@
+3 _PRIM Y
 2 OBJE
 3 FILE /tmp/inline-birth-photo.jpg
 3 TITL Inline Birth Photo
+3 _CROP 5,6,7,8
 0 @F1@ FAM
 1 HUSB @I1@
 1 OBJE @M1@
@@ -96,5 +102,33 @@ fn indi_and_fam_obje_links_generate_media_refs() {
     assert!(
         inline_path_assertions >= 1,
         "expected inline OBJE FILE path to be preserved as external media_ref"
+    );
+
+    let has_crop_metadata = assertions.iter().any(|record| {
+        record.field == "media_ref"
+            && record
+                .assertion
+                .value
+                .get("crop_rect_pct")
+                .and_then(serde_json::Value::as_object)
+                .is_some()
+    });
+    assert!(
+        has_crop_metadata,
+        "expected _CROP to normalize into media_ref.crop_rect_pct"
+    );
+
+    let has_primary_flag = assertions.iter().any(|record| {
+        record.field == "media_ref"
+            && record
+                .assertion
+                .value
+                .get("is_primary")
+                .and_then(serde_json::Value::as_bool)
+                .is_some()
+    });
+    assert!(
+        has_primary_flag,
+        "expected _PRIM to normalize into media_ref.is_primary"
     );
 }

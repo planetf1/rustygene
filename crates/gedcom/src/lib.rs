@@ -12,7 +12,7 @@ use rustygene_core::assertion::{
 };
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
 use rustygene_core::evidence::{
-    Citation, CitationRef, Media, MediaRef, Note, NoteRef, NoteType, Repository, RepositoryRef,
+    Citation, CitationRef, Media, Note, NoteRef, NoteType, Repository, RepositoryRef,
     RepositoryType, Source,
 };
 use rustygene_core::family::{
@@ -2355,7 +2355,70 @@ fn family_event_owner_tag(event: &Event) -> Option<&'static str> {
     }
 }
 
-fn parse_obje_media_refs(raw_gedcom: &std::collections::BTreeMap<String, String>) -> Vec<MediaRef> {
+fn parse_obje_crop_rect_pct(raw_value: &str) -> Option<Value> {
+    let parts: Vec<u8> = raw_value
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<u8>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+
+    if parts.len() != 4 {
+        return None;
+    }
+
+    Some(json!({
+        "x_pct": parts[0],
+        "y_pct": parts[1],
+        "width_pct": parts[2],
+        "height_pct": parts[3],
+    }))
+}
+
+fn parse_obje_primary_flag(raw_value: &str) -> Option<bool> {
+    match raw_value.trim().to_ascii_uppercase().as_str() {
+        "Y" | "YES" | "TRUE" | "1" => Some(true),
+        "N" | "NO" | "FALSE" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_obje_link_metadata(node: &GedcomNode) -> (Option<String>, Option<Value>, Option<bool>, Value) {
+    let mut caption: Option<String> = None;
+    let mut crop_rect_pct: Option<Value> = None;
+    let mut is_primary: Option<bool> = None;
+    let mut vendor_tags = serde_json::Map::new();
+
+    for child in &node.children {
+        match child.tag.as_str() {
+            "TITL" => caption = child.value.clone(),
+            "_CROP" => {
+                if let Some(value) = child.value.as_deref() {
+                    crop_rect_pct = parse_obje_crop_rect_pct(value);
+                    vendor_tags.insert("_CROP".to_string(), json!(value.trim()));
+                }
+            }
+            "_PRIM" => {
+                if let Some(value) = child.value.as_deref() {
+                    is_primary = parse_obje_primary_flag(value);
+                    vendor_tags.insert("_PRIM".to_string(), json!(value.trim()));
+                }
+            }
+            tag if tag.starts_with('_') => {
+                if let Some(value) = child.value.as_deref() {
+                    vendor_tags.insert(tag.to_string(), json!(value.trim()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (caption, crop_rect_pct, is_primary, Value::Object(vendor_tags))
+}
+
+fn parse_obje_media_ref_assertions(
+    raw_gedcom: &std::collections::BTreeMap<String, String>,
+) -> Vec<Value> {
     let mut refs = Vec::new();
 
     for (key, serialized) in raw_gedcom {
@@ -2376,20 +2439,30 @@ fn parse_obje_media_refs(raw_gedcom: &std::collections::BTreeMap<String, String>
                 continue;
             }
 
-            refs.push(MediaRef {
-                media_id: entity_id_from_xref("OBJE", value),
-                crop_rect_pct: None,
-                caption: None,
+            let (caption, crop_rect_pct, is_primary, vendor_tags) = parse_obje_link_metadata(&node);
+            let mut value = json!({
+                "media_id": entity_id_from_xref("OBJE", value),
+                "caption": caption,
+                "crop_rect_pct": crop_rect_pct,
+                "is_primary": is_primary,
             });
+
+            if let Some(obj) = value.as_object_mut()
+                && !vendor_tags.as_object().is_some_and(|m| m.is_empty())
+            {
+                obj.insert("link_vendor_tags".to_string(), vendor_tags);
+            }
+
+            refs.push(value);
         }
     }
 
     refs
 }
 
-fn parse_obje_external_paths(
+fn parse_obje_external_path_assertions(
     raw_gedcom: &std::collections::BTreeMap<String, String>,
-) -> Vec<(String, Option<String>)> {
+) -> Vec<Value> {
     let mut paths = Vec::new();
 
     for (key, serialized) in raw_gedcom {
@@ -2402,30 +2475,50 @@ fn parse_obje_external_paths(
                 continue;
             }
 
+            let (caption, crop_rect_pct, is_primary, vendor_tags) = parse_obje_link_metadata(&node);
+
             if let Some(value) = node.value.as_deref() {
                 let trimmed = value.trim();
                 if !(trimmed.is_empty() || (trimmed.starts_with('@') && trimmed.ends_with('@'))) {
-                    paths.push((trimmed.to_string(), None));
+                    let mut payload = json!({
+                        "external_path": trimmed,
+                        "caption": caption,
+                        "crop_rect_pct": crop_rect_pct,
+                        "is_primary": is_primary,
+                    });
+                    if let Some(obj) = payload.as_object_mut()
+                        && !vendor_tags.as_object().is_some_and(|m| m.is_empty())
+                    {
+                        obj.insert("link_vendor_tags".to_string(), vendor_tags.clone());
+                    }
+                    paths.push(payload);
                     continue;
                 }
             }
 
             let mut file_path: Option<String> = None;
-            let mut caption: Option<String> = None;
 
             for child in &node.children {
                 if child.tag == "FILE" {
                     file_path = child.value.clone();
-                }
-                if child.tag == "TITL" {
-                    caption = child.value.clone();
                 }
             }
 
             if let Some(file_path) = file_path {
                 let trimmed = file_path.trim().to_string();
                 if !trimmed.is_empty() {
-                    paths.push((trimmed, caption));
+                    let mut payload = json!({
+                        "external_path": trimmed,
+                        "caption": caption,
+                        "crop_rect_pct": crop_rect_pct,
+                        "is_primary": is_primary,
+                    });
+                    if let Some(obj) = payload.as_object_mut()
+                        && !vendor_tags.as_object().is_some_and(|m| m.is_empty())
+                    {
+                        obj.insert("link_vendor_tags".to_string(), vendor_tags.clone());
+                    }
+                    paths.push(payload);
                 }
             }
         }
@@ -2733,26 +2826,23 @@ pub fn generate_import_assertions(
             ));
         }
 
-        for media_ref in parse_obje_media_refs(&person._raw_gedcom) {
+        for media_ref in parse_obje_media_ref_assertions(&person._raw_gedcom) {
             assertions.push(build_import_assertion(
                 person.id,
                 EntityType::Person,
                 "media_ref",
-                to_value(&media_ref)?,
+                media_ref,
                 Vec::new(),
                 &proposed_by,
             ));
         }
 
-        for (external_path, caption) in parse_obje_external_paths(&person._raw_gedcom) {
+        for external_ref in parse_obje_external_path_assertions(&person._raw_gedcom) {
             assertions.push(build_import_assertion(
                 person.id,
                 EntityType::Person,
                 "media_ref",
-                json!({
-                    "external_path": external_path,
-                    "caption": caption,
-                }),
+                external_ref,
                 Vec::new(),
                 &proposed_by,
             ));
@@ -2897,26 +2987,23 @@ pub fn generate_import_assertions(
             ));
         }
 
-        for media_ref in parse_obje_media_refs(&family._raw_gedcom) {
+        for media_ref in parse_obje_media_ref_assertions(&family._raw_gedcom) {
             assertions.push(build_import_assertion(
                 family.id,
                 EntityType::Family,
                 "media_ref",
-                to_value(&media_ref)?,
+                media_ref,
                 Vec::new(),
                 &proposed_by,
             ));
         }
 
-        for (external_path, caption) in parse_obje_external_paths(&family._raw_gedcom) {
+        for external_ref in parse_obje_external_path_assertions(&family._raw_gedcom) {
             assertions.push(build_import_assertion(
                 family.id,
                 EntityType::Family,
                 "media_ref",
-                json!({
-                    "external_path": external_path,
-                    "caption": caption,
-                }),
+                external_ref,
                 Vec::new(),
                 &proposed_by,
             ));
@@ -3053,26 +3140,23 @@ pub fn generate_import_assertions(
             ));
         }
 
-        for media_ref in parse_obje_media_refs(&event._raw_gedcom) {
+        for media_ref in parse_obje_media_ref_assertions(&event._raw_gedcom) {
             assertions.push(build_import_assertion(
                 event.id,
                 EntityType::Event,
                 "media_ref",
-                to_value(&media_ref)?,
+                media_ref,
                 source_citations.clone(),
                 &proposed_by,
             ));
         }
 
-        for (external_path, caption) in parse_obje_external_paths(&event._raw_gedcom) {
+        for external_ref in parse_obje_external_path_assertions(&event._raw_gedcom) {
             assertions.push(build_import_assertion(
                 event.id,
                 EntityType::Event,
                 "media_ref",
-                json!({
-                    "external_path": external_path,
-                    "caption": caption,
-                }),
+                external_ref,
                 source_citations.clone(),
                 &proposed_by,
             ));
@@ -3192,26 +3276,23 @@ pub fn generate_import_assertions(
             ));
         }
 
-        for media_ref in parse_obje_media_refs(&event._raw_gedcom) {
+        for media_ref in parse_obje_media_ref_assertions(&event._raw_gedcom) {
             assertions.push(build_import_assertion(
                 event.id,
                 EntityType::Event,
                 "media_ref",
-                to_value(&media_ref)?,
+                media_ref,
                 source_citations.clone(),
                 &proposed_by,
             ));
         }
 
-        for (external_path, caption) in parse_obje_external_paths(&event._raw_gedcom) {
+        for external_ref in parse_obje_external_path_assertions(&event._raw_gedcom) {
             assertions.push(build_import_assertion(
                 event.id,
                 EntityType::Event,
                 "media_ref",
-                json!({
-                    "external_path": external_path,
-                    "caption": caption,
-                }),
+                external_ref,
                 source_citations.clone(),
                 &proposed_by,
             ));
