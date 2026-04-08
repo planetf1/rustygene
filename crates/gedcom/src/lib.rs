@@ -2487,6 +2487,88 @@ fn parse_inline_note_texts(raw_gedcom: &std::collections::BTreeMap<String, Strin
     notes
 }
 
+fn parse_association_assertions(
+    raw_gedcom: &std::collections::BTreeMap<String, String>,
+) -> Vec<Value> {
+    let mut associations = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for (key, serialized) in raw_gedcom {
+        if !key.starts_with("CUSTOM_ASSO_") {
+            continue;
+        }
+
+        for node in deserialize_serialized_subtrees(serialized) {
+            if !matches!(node.tag.as_str(), "ASSO" | "ASSOC") {
+                continue;
+            }
+
+            let related_person_id = node
+                .value
+                .as_deref()
+                .filter(|value| value.starts_with('@') && value.ends_with('@'))
+                .map(|xref| entity_id_from_xref("INDI", xref));
+
+            let relationship = node
+                .children
+                .iter()
+                .find(|child| child.tag == "RELA")
+                .and_then(|child| child.value.clone());
+
+            let note_refs: Vec<NoteRef> = node
+                .children
+                .iter()
+                .filter(|child| child.tag == "NOTE")
+                .filter_map(|child| {
+                    child.value.as_deref().and_then(|value| {
+                        if value.starts_with('@') && value.ends_with('@') {
+                            Some(NoteRef {
+                                note_id: entity_id_from_xref("NOTE", value),
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
+
+            let inline_notes: Vec<String> = node
+                .children
+                .iter()
+                .filter(|child| child.tag == "NOTE")
+                .filter_map(|child| {
+                    child.value.as_deref().and_then(|value| {
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() || (trimmed.starts_with('@') && trimmed.ends_with('@')) {
+                            None
+                        } else {
+                            Some(trimmed.to_string())
+                        }
+                    })
+                })
+                .collect();
+
+            let has_source = node.children.iter().any(|child| child.tag == "SOUR");
+
+            let payload = json!({
+                "tag": node.tag,
+                "related_person_id": related_person_id,
+                "relationship": relationship,
+                "note_refs": note_refs,
+                "inline_notes": inline_notes,
+                "has_source": has_source,
+            });
+
+            let serialized_payload = payload.to_string();
+            if seen.insert(serialized_payload) {
+                associations.push(payload);
+            }
+        }
+    }
+
+    associations
+}
+
 fn vendor_source_system_for_tag(tag: &str) -> Option<&'static str> {
     match tag {
         "_APID" | "_ATL" | "_LKID" | "_OID" | "_MSER" | "_TID" | "_CLON" | "_ENCR"
@@ -2617,6 +2699,17 @@ pub fn generate_import_assertions(
                 EntityType::Person,
                 "note",
                 to_value(&note_text)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for association in parse_association_assertions(&person._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                person.id,
+                EntityType::Person,
+                "association",
+                association,
                 Vec::new(),
                 &proposed_by,
             ));

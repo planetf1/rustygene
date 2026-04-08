@@ -65,6 +65,15 @@ Inline `NOTE @N...@` links and embedded NOTE text now generate typed
 `note_ref` and `note` assertions on owning entities (Person/Family/Event)
 while preserving existing raw GEDCOM subtree round-trip behavior.
 
+### ~~10. ASSO/ASSOC records were raw-only~~ — FIXED
+
+- **Resolved by:** `rustygene-0wf`
+
+`ASSO`/`ASSOC` links are now surfaced as typed `association` assertions on
+Person entities (including `RELA` and NOTE/source-presence metadata), while
+the original GEDCOM subtrees continue to round-trip via raw preservation and
+re-emission.
+
 ---
 
 ## Open Gaps
@@ -77,13 +86,6 @@ Root-level `OBJE` records are imported/exported as typed `Media` entities.
 Inline `OBJE` links on INDI/FAM are now mapped to `media_ref` assertions.
 Remaining gap is broader typed link parity across all owner contexts (notably
 event-level OBJE coverage and richer link metadata parity).
-
-### 10. ASSO (Association) Records Ignored
-
-- **Impact:** LOW · Phase 1B+ · **Bead: rustygene-0wf**
-
-`1 ASSO @I1@` association records are preserved and round-tripped via raw GEDCOM,
-but are not yet parsed into first-class typed association/domain records.
 
 ### 17. Vendor custom metadata tags remain unnormalized
 
