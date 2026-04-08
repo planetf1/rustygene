@@ -7,7 +7,9 @@
   import EventForm from '$lib/components/EventForm.svelte';
   import type { EventDraft } from '$lib/components/formTypes';
   import AssertionList from '$lib/components/AssertionList.svelte';
+  import BreadcrumbTrail from '$lib/components/BreadcrumbTrail.svelte';
   import EvidenceTracePanel from '$lib/components/EvidenceTracePanel.svelte';
+  import RelatedRecordsGraph from '$lib/components/RelatedRecordsGraph.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
 
   type EventDetail = {
@@ -87,6 +89,45 @@
 
   function originHref(): string {
     return `/events/${id}`;
+  }
+
+  function originLabel(): string {
+    return detail ? `event ${detail.event_type}` : 'event';
+  }
+
+  function withNavContext(target: string): string {
+    const current = `${$page.url.pathname}${$page.url.search}`;
+    const sep = target.includes('?') ? '&' : '?';
+    return `${target}${sep}from=${encodeURIComponent(originLabel())}&back=${encodeURIComponent(current)}`;
+  }
+
+  function breadcrumbItems(): Array<{ label: string; href?: string }> {
+    const items: Array<{ label: string; href?: string }> = [{ label: 'Events', href: '/events' }];
+    if (backHref && backHref !== '/events') {
+      items.push({ label: backLabel.replace('← Back to ', ''), href: backHref });
+    }
+    items.push({ label: detail?.event_type ?? 'Event' });
+    return items;
+  }
+
+  function relatedNodes(): Array<{ id: string; label: string; href: string; kind: 'person' | 'family' | 'event' | 'source' | 'citation' | 'repository' | 'media' | 'other' }> {
+    const personNodes = (detail?.participants ?? []).map((participant) => ({
+      id: `person-${participant.person_id}`,
+      label: participantName(participant.person_id),
+      href: withNavContext(`/persons/${participant.person_id}`),
+      kind: 'person' as const
+    }));
+
+    const sourceNodes = (detail?.citations ?? [])
+      .filter((citation) => citation.source_id)
+      .map((citation) => ({
+        id: `source-${citation.source_id}`,
+        label: `Source ${citation.source_id}`,
+        href: withNavContext(`/sources/${citation.source_id}`),
+        kind: 'source' as const
+      }));
+
+    return [...personNodes, ...sourceNodes].slice(0, 14);
   }
 
   function evidenceRefs(): Array<{ citation_id?: string; source_id?: string; label?: string }> {
@@ -270,6 +311,8 @@
   </main>
 {:else if detail}
   <main class="panel">
+    <BreadcrumbTrail items={breadcrumbItems()} />
+
     {#if backHref}
       <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
     {/if}
@@ -328,6 +371,10 @@
     {/if}
 
     <section>
+      <RelatedRecordsGraph centerLabel={detail.event_type} nodes={relatedNodes()} />
+    </section>
+
+    <section>
       <h2>Participants</h2>
       {#if detail.participants.length === 0}
         <p>No participants linked yet.</p>
@@ -335,7 +382,7 @@
         <ul class="list">
           {#each detail.participants as participant}
             <li>
-              <button type="button" class="linkish" on:click={() => goto(`/persons/${participant.person_id}`)}>
+              <button type="button" class="linkish" on:click={() => goto(withNavContext(`/persons/${participant.person_id}`))}>
                 {participantName(participant.person_id)}
               </button>
               <span class="muted">({participant.role})</span>

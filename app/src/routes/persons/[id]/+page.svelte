@@ -7,7 +7,9 @@
   import PersonForm from '$lib/components/PersonForm.svelte';
   import type { PersonDraft } from '$lib/components/formTypes';
   import AssertionList from '$lib/components/AssertionList.svelte';
+  import BreadcrumbTrail from '$lib/components/BreadcrumbTrail.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
+  import RelatedRecordsGraph from '$lib/components/RelatedRecordsGraph.svelte';
 
   type PersonNameAssertion = {
     assertion_id: string;
@@ -208,6 +210,54 @@
     return sourceMap.get(citationId) ?? citationId;
   }
 
+  function originHref(): string {
+    return `/persons/${id}`;
+  }
+
+  function originLabel(): string {
+    return displayName();
+  }
+
+  function withNavContext(target: string): string {
+    const current = `${$page.url.pathname}${$page.url.search}`;
+    const sep = target.includes('?') ? '&' : '?';
+    return `${target}${sep}from=${encodeURIComponent(originLabel())}&back=${encodeURIComponent(current)}`;
+  }
+
+  function breadcrumbItems(): Array<{ label: string; href?: string }> {
+    const items: Array<{ label: string; href?: string }> = [{ label: 'Persons', href: '/persons' }];
+    if (backHref && backHref !== '/persons') {
+      items.push({ label: backLabel.replace('← Back to ', ''), href: backHref });
+    }
+    items.push({ label: displayName() });
+    return items;
+  }
+
+  function relatedNodes(): Array<{ id: string; label: string; href: string; kind: 'person' | 'family' | 'event' | 'source' | 'citation' | 'repository' | 'media' | 'other' }> {
+    const familyNodes = familyRows.map((family) => ({
+      id: `family-${family.id}`,
+      label: familyLabel(family),
+      href: withNavContext(`/families/${family.id}`),
+      kind: 'family' as const
+    }));
+
+    const eventNodes = timelineRows.map((event) => ({
+      id: `event-${event.id}`,
+      label: event.event_type,
+      href: withNavContext(`/events/${event.id}`),
+      kind: 'event' as const
+    }));
+
+    const sourceNodes = flattenCitations().map((citationId) => ({
+      id: `source-${citationId}`,
+      label: citationSourceTitle(citationId),
+      href: withNavContext(`/sources/${citationId}`),
+      kind: 'source' as const
+    }));
+
+    return [...familyNodes, ...eventNodes, ...sourceNodes].slice(0, 16);
+  }
+
   function openInChart(mode: 'pedigree' | 'fan' | 'graph'): void {
     const name = displayName();
 
@@ -397,6 +447,8 @@
   </main>
 {:else if detail}
   <main class="panel">
+    <BreadcrumbTrail items={breadcrumbItems()} />
+
     {#if backHref}
       <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
     {/if}
@@ -441,6 +493,10 @@
         </button>
       </div>
     </div>
+
+    <section class="section-card">
+      <RelatedRecordsGraph centerLabel={displayName()} nodes={relatedNodes()} />
+    </section>
 
     <!-- ── Key facts ──────────────────────────────────────────── -->
     <section class="section-card">
@@ -499,7 +555,7 @@
             <ul class="inline-list">
               {#each familyRows as family (family.id)}
                 <li>
-                  <button type="button" class="linkish" on:click={() => goto(`/families/${family.id}`)}>
+                  <button type="button" class="linkish" on:click={() => goto(withNavContext(`/families/${family.id}`))}>
                     {familyLabel(family)}
                   </button>
                   <span class="fact-note">({family.your_role ?? 'related'})</span>
@@ -528,7 +584,7 @@
               {#if event.description}
                 <span class="timeline-desc">{event.description}</span>
               {/if}
-              <button type="button" class="linkish timeline-link" on:click={() => goto(`/events/${event.id}`)}>→</button>
+              <button type="button" class="linkish timeline-link" on:click={() => goto(withNavContext(`/events/${event.id}`))}>→</button>
             </li>
           {/each}
         </ul>
@@ -546,7 +602,11 @@
       {:else}
         <ul class="list">
           {#each flattenCitations() as citation}
-            <li><code>{citationSourceTitle(citation)}</code></li>
+            <li>
+              <button type="button" class="linkish" on:click={() => goto(withNavContext(`/sources/${citation}`))}>
+                {citationSourceTitle(citation)}
+              </button>
+            </li>
           {/each}
         </ul>
       {/if}
@@ -953,10 +1013,4 @@
     margin: 0;
   }
 
-  code {
-    background: #f5efff;
-    padding: 0.1rem 0.3rem;
-    border-radius: 0.35rem;
-    font-size: 0.85em;
-  }
 </style>

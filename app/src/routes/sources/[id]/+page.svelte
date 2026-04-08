@@ -4,8 +4,10 @@
   import { page } from '$app/stores';
   import { addRecentItem } from '$lib/state.svelte';
   import { api } from '$lib/api';
+  import BreadcrumbTrail from '$lib/components/BreadcrumbTrail.svelte';
   import EvidenceTracePanel from '$lib/components/EvidenceTracePanel.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
+  import RelatedRecordsGraph from '$lib/components/RelatedRecordsGraph.svelte';
 
   type Citation = {
     id: string;
@@ -64,6 +66,43 @@
 
   function originHref(): string {
     return `/sources/${id}`;
+  }
+
+  function withNavContext(target: string): string {
+    const current = `${$page.url.pathname}${$page.url.search}`;
+    const sep = target.includes('?') ? '&' : '?';
+    return `${target}${sep}from=${encodeURIComponent(detail?.title ?? 'source')}&back=${encodeURIComponent(current)}`;
+  }
+
+  function breadcrumbItems(): Array<{ label: string; href?: string }> {
+    const items: Array<{ label: string; href?: string }> = [{ label: 'Sources', href: '/sources' }];
+    if (backHref && backHref !== '/sources') {
+      items.push({ label: backLabel.replace('← Back to ', ''), href: backHref });
+    }
+    items.push({ label: detail?.title ?? 'Source' });
+    return items;
+  }
+
+  function relatedNodes(): Array<{ id: string; label: string; href: string; kind: 'person' | 'family' | 'event' | 'source' | 'citation' | 'repository' | 'media' | 'other' }> {
+    if (!detail) {
+      return [];
+    }
+
+    const repositoryNodes = detail.repository_refs.map((repo) => ({
+      id: `repo-${repo.repository_id}`,
+      label: repositoryName(repo.repository_id),
+      href: withNavContext(`/repositories/${repo.repository_id}`),
+      kind: 'repository' as const
+    }));
+
+    const citationNodes = detail.citations.map((citation) => ({
+      id: `citation-${citation.id}`,
+      label: citation.page ? `${citation.id} (p.${citation.page})` : citation.id,
+      href: withNavContext(`/citations/${citation.id}`),
+      kind: 'citation' as const
+    }));
+
+    return [...repositoryNodes, ...citationNodes].slice(0, 16);
   }
 
   function citationRefs(): Array<{ citation_id?: string; source_id?: string; label?: string }> {
@@ -185,6 +224,8 @@
   </main>
 {:else if detail}
   <main class="panel">
+    <BreadcrumbTrail items={breadcrumbItems()} />
+
     {#if backHref}
       <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
     {/if}
@@ -199,6 +240,10 @@
         <button type="button" class="danger" disabled={deleting} on:click={removeSource}>{deleting ? 'Removing…' : 'Remove source'}</button>
       </div>
     </header>
+
+    <section>
+      <RelatedRecordsGraph centerLabel={detail.title} nodes={relatedNodes()} />
+    </section>
 
     {#if editing}
       <section class="form">
@@ -225,7 +270,7 @@
         <ul class="list">
           {#each detail.repository_refs as repoRef}
             <li>
-              <a href={`/repositories/${repoRef.repository_id}`}>{repositoryName(repoRef.repository_id)}</a>
+              <button type="button" class="linkish" on:click={() => goto(withNavContext(`/repositories/${repoRef.repository_id}`))}>{repositoryName(repoRef.repository_id)}</button>
               {#if repoRef.call_number}
                 <span class="muted">(call no. {repoRef.call_number})</span>
               {/if}
@@ -348,13 +393,14 @@
     gap: 0.3rem;
   }
 
-  .list a {
+  .linkish {
+    border: 0;
+    background: transparent;
     color: #6a46dc;
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
     font-weight: 600;
-    text-decoration: none;
-  }
-
-  .list a:hover {
     text-decoration: underline;
   }
 

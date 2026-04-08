@@ -7,7 +7,9 @@
   import FamilyForm from '$lib/components/FamilyForm.svelte';
   import type { FamilyDraft } from '$lib/components/formTypes';
   import AssertionList from '$lib/components/AssertionList.svelte';
+  import BreadcrumbTrail from '$lib/components/BreadcrumbTrail.svelte';
   import EvidenceTracePanel from '$lib/components/EvidenceTracePanel.svelte';
+  import RelatedRecordsGraph from '$lib/components/RelatedRecordsGraph.svelte';
 
   type FamilyDetail = {
     id: string;
@@ -70,6 +72,52 @@
 
   function originHref(): string {
     return `/families/${id}`;
+  }
+
+  function withNavContext(target: string): string {
+    const current = `${$page.url.pathname}${$page.url.search}`;
+    const sep = target.includes('?') ? '&' : '?';
+    return `${target}${sep}from=${encodeURIComponent(familyTitle())}&back=${encodeURIComponent(current)}`;
+  }
+
+  function breadcrumbItems(): Array<{ label: string; href?: string }> {
+    const items: Array<{ label: string; href?: string }> = [{ label: 'Families', href: '/families' }];
+    if (backHref && backHref !== '/families') {
+      items.push({ label: backLabel.replace('← Back to ', ''), href: backHref });
+    }
+    items.push({ label: familyTitle() });
+    return items;
+  }
+
+  function relatedNodes(): Array<{ id: string; label: string; href: string; kind: 'person' | 'family' | 'event' | 'source' | 'citation' | 'repository' | 'media' | 'other' }> {
+    if (!detail) {
+      return [];
+    }
+
+    const partnerNodes = [detail.partner1, detail.partner2]
+      .filter(Boolean)
+      .map((person) => ({
+        id: `person-${person?.id ?? ''}`,
+        label: person?.display_name ?? 'Person',
+        href: withNavContext(`/persons/${person?.id ?? ''}`),
+        kind: 'person' as const
+      }));
+
+    const childNodes = detail.children.map((child) => ({
+      id: `person-${child.id}`,
+      label: child.display_name,
+      href: withNavContext(`/persons/${child.id}`),
+      kind: 'person' as const
+    }));
+
+    const eventNodes = detail.events.map((event) => ({
+      id: `event-${event.id}`,
+      label: event.event_type,
+      href: withNavContext(`/events/${event.id}`),
+      kind: 'event' as const
+    }));
+
+    return [...partnerNodes, ...childNodes, ...eventNodes].slice(0, 14);
   }
 
   function evidenceRefs(): Array<{ citation_id?: string; source_id?: string; label?: string }> {
@@ -272,6 +320,8 @@
   </main>
 {:else if detail}
   <main class="panel">
+    <BreadcrumbTrail items={breadcrumbItems()} />
+
     {#if backHref}
       <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
     {/if}
@@ -326,13 +376,17 @@
     {/if}
 
     <section>
+      <RelatedRecordsGraph centerLabel={familyTitle()} nodes={relatedNodes()} />
+    </section>
+
+    <section>
       <h2>💞 Partners</h2>
       <ul class="list">
         {#if detail.partner1}
-          <li><button type="button" class="linkish" on:click={() => goto(`/persons/${detail?.partner1?.id ?? ''}`)}>{detail?.partner1?.display_name}</button> (partner)</li>
+          <li><button type="button" class="linkish" on:click={() => goto(withNavContext(`/persons/${detail?.partner1?.id ?? ''}`))}>{detail?.partner1?.display_name}</button> (partner)</li>
         {/if}
         {#if detail.partner2}
-          <li><button type="button" class="linkish" on:click={() => goto(`/persons/${detail?.partner2?.id ?? ''}`)}>{detail?.partner2?.display_name}</button> (partner)</li>
+          <li><button type="button" class="linkish" on:click={() => goto(withNavContext(`/persons/${detail?.partner2?.id ?? ''}`))}>{detail?.partner2?.display_name}</button> (partner)</li>
         {/if}
         {#if !detail.partner1 && !detail.partner2}
           <li>No partners linked yet.</li>
@@ -358,7 +412,7 @@
         {:else}
           {#each detail.children as child}
             <li>
-              <button type="button" class="linkish" on:click={() => goto(`/persons/${child.id}`)}>{child.display_name}</button>
+              <button type="button" class="linkish" on:click={() => goto(withNavContext(`/persons/${child.id}`))}>{child.display_name}</button>
               <span class="muted">({child.lineage_type})</span>
               <button type="button" class="small danger" on:click={() => removeChild(child.id)}>Remove link</button>
             </li>
@@ -385,7 +439,7 @@
         <ul class="list">
           {#each detail.events as event}
             <li>
-              <button type="button" class="linkish" on:click={() => goto(`/events/${event.id}`)}>
+              <button type="button" class="linkish" on:click={() => goto(withNavContext(`/events/${event.id}`))}>
                 {event.event_type} — {event.date ?? 'No date'}
               </button>
             </li>

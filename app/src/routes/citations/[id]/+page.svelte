@@ -3,6 +3,8 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { api } from '$lib/api';
+  import BreadcrumbTrail from '$lib/components/BreadcrumbTrail.svelte';
+  import RelatedRecordsGraph from '$lib/components/RelatedRecordsGraph.svelte';
 
   type Citation = {
     id: string;
@@ -47,6 +49,42 @@
     backHref = back;
   }
 
+  function originHref(): string {
+    return `/citations/${id}`;
+  }
+
+  function withNavContext(target: string): string {
+    const current = `${$page.url.pathname}${$page.url.search}`;
+    const sep = target.includes('?') ? '&' : '?';
+    return `${target}${sep}from=${encodeURIComponent(`citation ${id}`)}&back=${encodeURIComponent(current)}`;
+  }
+
+  function breadcrumbItems(): Array<{ label: string; href?: string }> {
+    const items: Array<{ label: string; href?: string }> = [{ label: 'Sources', href: '/sources' }];
+    if (backHref && backHref !== '/sources') {
+      items.push({ label: backLabel.replace('← Back to ', ''), href: backHref });
+    }
+    items.push({ label: `Citation ${id}` });
+    return items;
+  }
+
+  function relatedNodes(): Array<{ id: string; label: string; href: string; kind: 'person' | 'family' | 'event' | 'source' | 'citation' | 'repository' | 'media' | 'other' }> {
+    if (!citation) {
+      return [];
+    }
+
+    const nodes = [
+      {
+        id: `source-${citation.source_id}`,
+        label: source?.title ?? `Source ${citation.source_id}`,
+        href: withNavContext(`/sources/${citation.source_id}`),
+        kind: 'source' as const
+      }
+    ];
+
+    return nodes;
+  }
+
   async function load(): Promise<void> {
     loading = true;
     error = '';
@@ -82,6 +120,8 @@
   </main>
 {:else if citation}
   <main class="panel">
+    <BreadcrumbTrail items={breadcrumbItems()} />
+
     {#if backHref}
       <button type="button" class="back-link" on:click={() => goto(backHref)}>{backLabel}</button>
     {/if}
@@ -91,10 +131,14 @@
         <h1>Citation {citation.id}</h1>
         <p>Confidence: <span class="badge">{confidenceLabel(citation.confidence_level ?? null)}</span></p>
       </div>
-      <button type="button" class="btn-source" on:click={() => goto(`/sources/${citation?.source_id ?? ''}`)}>
+      <button type="button" class="btn-source" on:click={() => goto(withNavContext(`/sources/${citation?.source_id ?? ''}`))}>
         Open source
       </button>
     </header>
+
+    <section class="section-card">
+      <RelatedRecordsGraph centerLabel={`Citation ${citation.id}`} nodes={relatedNodes()} />
+    </section>
 
     <section class="section-card">
       <h2 class="section-title">Source</h2>
