@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { appState, setSandboxMode } from '$lib/state.svelte';
+  import { api } from '$lib/api';
   import { page } from '$app/state';
 
   let recentOpen = true;
+  let openResearchEntryCount = 0;
 
   const navItems = [
     { href: '/persons', label: 'People' },
@@ -18,6 +21,19 @@
     { href: '/search', label: 'Search' },
     { href: '/debug', label: 'Debug' }
   ];
+
+  async function refreshResearchOpenCount(): Promise<void> {
+    try {
+      const rows = await api.get<Array<{ id: string }>>('/api/v1/research-log?status=open&limit=500&offset=0');
+      openResearchEntryCount = rows.length;
+    } catch {
+      openResearchEntryCount = 0;
+    }
+  }
+
+  onMount(() => {
+    void refreshResearchOpenCount();
+  });
 
   const chartItems = [
     { href: '/charts/pedigree', label: 'Pedigree' },
@@ -73,7 +89,12 @@
 
   <nav class="section" aria-label="Main navigation">
     {#each navItems as item}
-      <a class:selected={page.url.pathname.startsWith(item.href)} href={item.href}>{item.label}</a>
+      <a class:selected={page.url.pathname.startsWith(item.href)} href={item.href}>
+        <span>{item.label}</span>
+        {#if item.href === '/research-log' && openResearchEntryCount > 0}
+          <span class="badge" aria-label={`${openResearchEntryCount} open research log entries`}>{openResearchEntryCount}</span>
+        {/if}
+      </a>
     {/each}
   </nav>
 
@@ -171,6 +192,10 @@
     padding: 0.52rem 0.68rem;
     border-radius: 0.72rem;
     border: 1px solid transparent;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
     transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
   }
 
@@ -249,5 +274,18 @@
     color: var(--rg-muted, #64748b);
     font-size: 0.85rem;
     padding: 0.25rem 0;
+  }
+
+  .badge {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #b91c1c;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    line-height: 1;
+    padding: 0.18rem 0.4rem;
+    min-width: 1.2rem;
+    text-align: center;
+    font-weight: 700;
   }
 </style>

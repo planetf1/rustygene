@@ -28,6 +28,13 @@
     citations: Citation[];
   };
 
+  type ResearchLogEntry = {
+    id: string;
+    date: string;
+    hypothesis: string;
+    status: 'open' | 'working' | 'closed' | 'abandoned';
+  };
+
   type Repository = {
     id: string;
     name: string;
@@ -45,6 +52,7 @@
   let editing = false;
   let backLabel = '';
   let backHref = '';
+  let researchEntries: ResearchLogEntry[] = [];
 
   let title = '';
   let author = '';
@@ -137,6 +145,14 @@
       detail = sourceDetail;
       repositories = repositoryRows;
       seedFormFromDetail();
+
+      try {
+        researchEntries = await api.get<ResearchLogEntry[]>(
+          `/api/v1/research-log?entity_type=source&entity_id=${id}&limit=200&offset=0`
+        );
+      } catch {
+        researchEntries = [];
+      }
 
       addRecentItem({
         entityType: 'source',
@@ -288,6 +304,25 @@
         fromLabel={detail.title}
         fromHref={originHref()}
       />
+    </section>
+
+    <section>
+      <h2>🔎 Research log</h2>
+      {#if researchEntries.length === 0}
+        <p>No research entries linked to this source yet.</p>
+      {:else}
+        <ul class="list">
+          {#each researchEntries as entry}
+            <li>
+              <button type="button" class="linkish" on:click={() => goto(`/research-log`)}>{entry.hypothesis}</button>
+              <span class="muted">({entry.date.slice(0, 10)} • {entry.status})</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <button type="button" class="secondary" on:click={() => goto(`/research-log?entityType=source&query=${encodeURIComponent(id)}`)}>
+        View in research log
+      </button>
     </section>
 
     <section>

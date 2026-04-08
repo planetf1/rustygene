@@ -292,7 +292,7 @@ async fn research_log_create_get_update_and_filter_by_entity() {
         .put(format!("{base_url}/api/v1/research-log/{entry_id}"))
         .json(&serde_json::json!({
             "description":"Resolved with baptism source and citation",
-            "status":"resolved"
+            "status":"closed"
         }))
         .send()
         .await
@@ -308,7 +308,7 @@ async fn research_log_create_get_update_and_filter_by_entity() {
     let detail_body: Value = detail.json().await.expect("detail body");
     assert_eq!(
         detail_body.get("status").and_then(Value::as_str),
-        Some("resolved")
+        Some("closed")
     );
     assert_eq!(
         detail_body.get("description").and_then(Value::as_str),

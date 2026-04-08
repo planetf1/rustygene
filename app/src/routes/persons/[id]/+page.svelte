@@ -47,6 +47,11 @@
     your_role?: string;
   };
 
+  type ResearchLogSummaryEntry = {
+    id: string;
+    status: string;
+  };
+
   type PersonDetail = {
     id: string;
     names: PersonNameAssertion[];
@@ -85,6 +90,7 @@
   let genderEvidenceType: 'direct' | 'indirect' | 'negative' = 'direct';
   let genderError = '';
   let savingGender = false;
+  let openResearchEntries = 0;
   $: timelineRows = detail?.events ?? [];
   $: familyRows = detail?.families ?? [];
 
@@ -283,6 +289,17 @@
     void goto('/charts/graph');
   }
 
+  async function loadResearchSummary(): Promise<void> {
+    try {
+      const rows = await api.get<ResearchLogSummaryEntry[]>(
+        `/api/v1/research-log?entity_type=person&entity_id=${id}&status=open&limit=500&offset=0`
+      );
+      openResearchEntries = rows.length;
+    } catch {
+      openResearchEntries = 0;
+    }
+  }
+
   function readBackContext(): void {
     if (typeof window === 'undefined') {
       return;
@@ -406,6 +423,8 @@
         id,
         displayName
       });
+
+      await loadResearchSummary();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load person detail';
     } finally {
@@ -488,6 +507,13 @@
         <button type="button" class="btn-secondary" on:click={() => openInChart('pedigree')}>Pedigree</button>
         <button type="button" class="btn-secondary" on:click={() => openInChart('fan')}>Fan</button>
         <button type="button" class="btn-secondary" on:click={() => openInChart('graph')}>Graph</button>
+        <button
+          type="button"
+          class="btn-secondary"
+          on:click={() => goto(`/research-log?entityType=person&query=${encodeURIComponent(id)}`)}
+        >
+          Research log {openResearchEntries > 0 ? `(${openResearchEntries} open)` : ''}
+        </button>
         <button type="button" class="btn-danger" on:click={removePerson} disabled={deleting}>
           {deleting ? '…' : 'Delete'}
         </button>
@@ -564,6 +590,16 @@
             </ul>
           </dd>
         {/if}
+        <dt>Open research</dt>
+        <dd>
+          {#if openResearchEntries > 0}
+            <button type="button" class="linkish" on:click={() => goto(`/research-log?entityType=person&query=${encodeURIComponent(id)}`)}>
+              {openResearchEntries} open entries
+            </button>
+          {:else}
+            None
+          {/if}
+        </dd>
       </dl>
     </section>
 
