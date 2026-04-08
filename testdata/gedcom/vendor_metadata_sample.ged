@@ -1,0 +1,30 @@
+0 HEAD
+1 SOUR RustyGene
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Vendor /Tagged/
+1 SEX M
+1 _MSER ancestry-series-42
+1 _OID ancestry-oid-123
+1 _ATL ancestry-tree-alpha
+1 _ORIG ancestry-origin
+1 _DATE 2026-04-08
+1 OBJE
+2 FILE media/vendor-photo.jpg
+2 FORM jpg
+2 _CROP 10,20,100,200
+2 _PRIM Y
+1 BIRT
+2 DATE 1 JAN 1900
+0 @I2@ INDI
+1 NAME Partner /Tagged/
+1 SEX F
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 MARR
+2 DATE 1 JAN 1920
+1 _META family-meta-token
+0 TRLR

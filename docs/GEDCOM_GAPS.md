@@ -74,6 +74,18 @@ Person entities (including `RELA` and NOTE/source-presence metadata), while
 the original GEDCOM subtrees continue to round-trip via raw preservation and
 re-emission.
 
+### ~~17. Vendor custom metadata tags remained unnormalized~~ — FIXED
+
+- **Resolved by:** `rustygene-x22`
+
+Metadata-oriented vendor tags (including `_MSER`, `_OID`, `_ATL`, `_ORIG`,
+`_DATE`, and related custom metadata tags) now map to typed
+`vendor_metadata` assertions during import for Person/Family/Repository/Source/
+Media/Note entities while preserving raw GEDCOM subtrees for export parity.
+
+Corpus round-trip coverage now includes `testdata/gedcom/vendor_metadata_sample.ged`
+to verify both typed assertion generation and metadata tag re-emission.
+
 ---
 
 ## Open Gaps
@@ -86,14 +98,6 @@ Root-level `OBJE` records are imported/exported as typed `Media` entities.
 Inline `OBJE` links on INDI/FAM are now mapped to `media_ref` assertions.
 Remaining gap is broader typed link parity across all owner contexts (notably
 event-level OBJE coverage and richer link metadata parity).
-
-### 17. Vendor custom metadata tags remain unnormalized
-
-- **Impact:** LOW · Phase 2+ · **Bead: rustygene-x22**
-
-Metadata-oriented vendor tags (e.g. `_MSER`, `_OID`, `_ATL`, `_DSCR`, `_ORIG`,
-`_DATE`, crop geometry tags) are preserved and accounted for, but currently
-remain in `_raw_gedcom` rather than first-class domain fields.
 
 ### ~~15. torture551.ged Round-Trip Citation Drift~~ — FIXED
 

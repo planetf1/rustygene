@@ -2616,6 +2616,71 @@ fn parse_vendor_external_references(
     refs
 }
 
+fn is_vendor_metadata_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "_ATL"
+            | "_CLON"
+            | "_CREA"
+            | "_CROP"
+            | "_DATE"
+            | "_DSCR"
+            | "_ENCR"
+            | "_HGHT"
+            | "_LEFT"
+            | "_META"
+            | "_MREL"
+            | "_MSER"
+            | "_MTYPE"
+            | "_OID"
+            | "_ORIG"
+            | "_PRIM"
+            | "_SIZE"
+            | "_STYPE"
+            | "_TID"
+            | "_TOP"
+            | "_TYPE"
+            | "_USER"
+            | "_WDTH"
+    )
+}
+
+fn parse_vendor_metadata_entries(
+    raw_gedcom: &std::collections::BTreeMap<String, String>,
+) -> Vec<Value> {
+    let mut metadata = Vec::new();
+    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+
+    for value in raw_gedcom.values() {
+        for node in deserialize_serialized_subtrees(value) {
+            if !is_vendor_metadata_tag(node.tag.as_str()) {
+                continue;
+            }
+
+            let Some(raw_value) = node.value.as_deref().map(str::trim) else {
+                continue;
+            };
+
+            if raw_value.is_empty() {
+                continue;
+            }
+
+            let dedupe_key = (node.tag.clone(), raw_value.to_string());
+            if !seen.insert(dedupe_key) {
+                continue;
+            }
+
+            metadata.push(json!({
+                "source_system": vendor_source_system_for_tag(node.tag.as_str()).unwrap_or("vendor"),
+                "vendor_tag": node.tag,
+                "metadata_value": raw_value,
+            }));
+        }
+    }
+
+    metadata
+}
+
 pub fn generate_import_assertions(
     import_job_id: &str,
     persons: &[Person],
@@ -2721,6 +2786,17 @@ pub fn generate_import_assertions(
                 EntityType::Person,
                 "external_reference",
                 external_reference,
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        for vendor_metadata in parse_vendor_metadata_entries(&person._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                person.id,
+                EntityType::Person,
+                "vendor_metadata",
+                vendor_metadata,
                 source_citations.clone(),
                 &proposed_by,
             ));
@@ -2863,6 +2939,17 @@ pub fn generate_import_assertions(
                 EntityType::Family,
                 "external_reference",
                 external_reference,
+                source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        for vendor_metadata in parse_vendor_metadata_entries(&family._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                family.id,
+                EntityType::Family,
+                "vendor_metadata",
+                vendor_metadata,
                 source_citations.clone(),
                 &proposed_by,
             ));
@@ -3146,6 +3233,17 @@ pub fn generate_import_assertions(
                 &proposed_by,
             ));
         }
+
+        for vendor_metadata in parse_vendor_metadata_entries(&repository._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                repository.id,
+                EntityType::Repository,
+                "vendor_metadata",
+                vendor_metadata,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
     }
 
     for source in &source_mapping.sources {
@@ -3193,6 +3291,17 @@ pub fn generate_import_assertions(
                 EntityType::Source,
                 "repository_ref",
                 to_value(repository_ref)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for vendor_metadata in parse_vendor_metadata_entries(&source._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                source.id,
+                EntityType::Source,
+                "vendor_metadata",
+                vendor_metadata,
                 Vec::new(),
                 &proposed_by,
             ));
@@ -3267,6 +3376,17 @@ pub fn generate_import_assertions(
                 &proposed_by,
             ));
         }
+
+        for vendor_metadata in parse_vendor_metadata_entries(&media._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                media.id,
+                EntityType::Media,
+                "vendor_metadata",
+                vendor_metadata,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
     }
 
     for note in &media_note_lds_mapping.notes {
@@ -3278,6 +3398,17 @@ pub fn generate_import_assertions(
             Vec::new(),
             &proposed_by,
         ));
+
+        for vendor_metadata in parse_vendor_metadata_entries(&note._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                note.id,
+                EntityType::Note,
+                "vendor_metadata",
+                vendor_metadata,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
     }
 
     for ordinance in &media_note_lds_mapping.lds_ordinances {

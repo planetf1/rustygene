@@ -248,7 +248,7 @@ fn assertion_distribution(conn: &Connection) -> BTreeMap<(String, String), usize
 }
 
 #[test]
-fn corpus_roundtrip_hardening_for_six_vendor_fixtures() {
+fn corpus_roundtrip_hardening_for_seven_vendor_fixtures() {
     let corpus = [
         ("ancestry_sample.ged", "Ancestry"),
         ("rootsmagic_sample.ged", "RootsMagic"),
@@ -256,6 +256,7 @@ fn corpus_roundtrip_hardening_for_six_vendor_fixtures() {
         ("legacy_sample.ged", "Legacy"),
         ("paf_sample.ged", "PAF"),
         ("simpsons.ged", "Simpsons"),
+        ("vendor_metadata_sample.ged", "VendorMeta"),
     ];
 
     let mut aggregate_deferred: BTreeMap<String, usize> = BTreeMap::new();
@@ -299,9 +300,34 @@ fn corpus_roundtrip_hardening_for_six_vendor_fixtures() {
         ];
         let dist_before = assertion_distribution(&conn1);
 
+        if vendor == "VendorMeta" {
+            let vendor_metadata_count = dist_before
+                .get(&("person".to_string(), "vendor_metadata".to_string()))
+                .copied()
+                .unwrap_or(0);
+            assert!(
+                vendor_metadata_count > 0,
+                "{vendor}: expected typed person.vendor_metadata assertions"
+            );
+        }
+
         let exported = export_db_as_gedcom(&conn1);
         assert!(exported.contains("0 HEAD"));
         assert!(exported.contains("0 TRLR"));
+        if vendor == "VendorMeta" {
+            assert!(
+                exported.contains("1 _MSER ancestry-series-42"),
+                "{vendor}: expected _MSER to round-trip in export"
+            );
+            assert!(
+                exported.contains("1 _OID ancestry-oid-123"),
+                "{vendor}: expected _OID to round-trip in export"
+            );
+            assert!(
+                exported.contains("2 _CROP 10,20,100,200"),
+                "{vendor}: expected nested _CROP to round-trip in export"
+            );
+        }
 
         let mut conn2 = setup_db(&db2);
         import_gedcom_to_sqlite(&mut conn2, &format!("corpus-reimport-{vendor}"), &exported)
