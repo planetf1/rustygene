@@ -54,7 +54,12 @@ impl From<CliSearchResult> for SearchResult {
 #[command(name = "rustygene", version, about = "RustyGene CLI")]
 struct Cli {
     /// Database location
-    #[arg(long, global = true, default_value = "~/.rustygene/rustygene.db")]
+    #[arg(
+        long,
+        visible_alias = "db-path",
+        global = true,
+        default_value = "~/.rustygene/rustygene.db"
+    )]
     db: PathBuf,
 
     /// Output rendering format for command responses
@@ -128,7 +133,13 @@ enum ExportFormat {
 
 #[derive(Debug, Subcommand)]
 enum QueryCommands {
+    #[command(
+        after_help = "Examples:\n  rustygene --db-path ./family.db query person Jones\n  rustygene query person --name \"Mary Ann\"\n  rustygene query person --name Smyth --fuzzy\n  rustygene query person --birth-year-from 1800 --birth-year-to 1900 --sort-by surname"
+    )]
     Person {
+        /// Quick positional name query (enables fuzzy matching automatically)
+        #[arg(value_name = "QUERY", conflicts_with = "name")]
+        query: Option<String>,
         #[arg(long)]
         name: Option<String>,
         #[arg(long, default_value_t = false)]
@@ -1806,6 +1817,7 @@ fn query_linked_sources_for_person(conn: &Connection, id: EntityId) -> Result<Ve
 fn run_query_command(command: QueryCommands, db_path: &PathBuf, format: OutputFormat) {
     match command {
         QueryCommands::Person {
+            query,
             name,
             fuzzy,
             birth_year_from,
@@ -1820,10 +1832,13 @@ fn run_query_command(command: QueryCommands, db_path: &PathBuf, format: OutputFo
                 }
             };
 
+            let (effective_name, effective_fuzzy) =
+                resolve_person_query(query.as_deref(), name.as_deref(), fuzzy);
+
             let rows = match query_person_rows(
                 &conn,
-                name.as_deref(),
-                fuzzy,
+                effective_name,
+                effective_fuzzy,
                 birth_year_from,
                 birth_year_to,
                 sort_by,
@@ -1862,6 +1877,16 @@ fn run_query_command(command: QueryCommands, db_path: &PathBuf, format: OutputFo
             }
         }
     }
+}
+
+fn resolve_person_query<'a>(
+    positional_query: Option<&'a str>,
+    named_query: Option<&'a str>,
+    fuzzy_flag: bool,
+) -> (Option<&'a str>, bool) {
+    let effective_name = named_query.or(positional_query);
+    let effective_fuzzy = positional_query.is_some() || fuzzy_flag;
+    (effective_name, effective_fuzzy)
 }
 
 fn search_terms(text: &str) -> Vec<String> {
@@ -2550,6 +2575,7 @@ mod tests {
         Cli, CliSearchResult, Commands, ExportFormat, ImportFormat, OutputFormat, QueryCommands,
         QueryPersonSort, ResearchLogCommands, SandboxCommands, ShowCommands, StagingCommands,
         build_person_match_query, parse_entity_id_arg, preserved_or_generated_xref,
+        resolve_person_query,
         resolve_db_path,
     };
     use clap::Parser;
@@ -2633,6 +2659,7 @@ mod tests {
             Commands::Query {
                 command:
                     QueryCommands::Person {
+                        query,
                         name,
                         fuzzy,
                         birth_year_from,
@@ -2640,6 +2667,7 @@ mod tests {
                         sort_by,
                     },
             } => {
+                assert_eq!(query, None);
                 assert_eq!(name, Some("Jones".to_string()));
                 assert!(!fuzzy);
                 assert_eq!(birth_year_from, None);
@@ -2658,6 +2686,7 @@ mod tests {
             Commands::Query {
                 command:
                     QueryCommands::Person {
+                        query,
                         name,
                         fuzzy,
                         birth_year_from,
@@ -2665,6 +2694,7 @@ mod tests {
                         sort_by,
                     },
             } => {
+                assert_eq!(query, None);
                 assert_eq!(name, Some("Jon".to_string()));
                 assert!(fuzzy);
                 assert_eq!(birth_year_from, None);
@@ -2693,6 +2723,7 @@ mod tests {
             Commands::Query {
                 command:
                     QueryCommands::Person {
+                        query,
                         name,
                         fuzzy,
                         birth_year_from,
@@ -2700,6 +2731,7 @@ mod tests {
                         sort_by,
                     },
             } => {
+                assert_eq!(query, None);
                 assert_eq!(name, None);
                 assert!(!fuzzy);
                 assert_eq!(birth_year_from, Some(1800));
@@ -2708,6 +2740,57 @@ mod tests {
             }
             _ => panic!("expected query person command"),
         }
+    }
+
+    #[test]
+    fn clap_parses_query_person_positional_quick_search() {
+        let cli = Cli::parse_from(["rustygene", "query", "person", "Jones"]);
+
+        match cli.command {
+            Commands::Query {
+                command:
+                    QueryCommands::Person {
+                        query,
+                        name,
+                        fuzzy,
+                        birth_year_from,
+                        birth_year_to,
+                        sort_by,
+                    },
+            } => {
+                assert_eq!(query, Some("Jones".to_string()));
+                assert_eq!(name, None);
+                assert!(!fuzzy);
+                assert_eq!(birth_year_from, None);
+                assert_eq!(birth_year_to, None);
+                assert_eq!(sort_by, QueryPersonSort::Relevance);
+            }
+            _ => panic!("expected query person command"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_global_db_path_alias() {
+        let cli = Cli::parse_from([
+            "rustygene",
+            "--db-path",
+            "./tmp/family.db",
+            "query",
+            "person",
+            "Jones",
+        ]);
+        assert_eq!(cli.db, PathBuf::from("./tmp/family.db"));
+    }
+
+    #[test]
+    fn resolve_person_query_enables_fuzzy_for_positional_search() {
+        let (name, fuzzy) = resolve_person_query(Some("Jones"), None, false);
+        assert_eq!(name, Some("Jones"));
+        assert!(fuzzy);
+
+        let (name, fuzzy) = resolve_person_query(None, Some("Jones"), false);
+        assert_eq!(name, Some("Jones"));
+        assert!(!fuzzy);
     }
 
     #[test]
