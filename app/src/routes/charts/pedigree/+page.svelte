@@ -199,14 +199,14 @@
       }
     }
 
-    const rows = await api.get<PersonListRow[]>('/api/v1/persons?limit=1&offset=0');
-    if (rows.length === 0) {
+    const rows = await api.get<{ total: number; items: PersonListRow[] }>('/api/v1/persons?limit=1&offset=0');
+    if (rows.items.length === 0) {
       return;
     }
 
-    rootPersonId = rows[0].id;
-    rootPersonName = rows[0].display_name;
-    await loadRoot(rows[0].id, rows[0].display_name, generations);
+    rootPersonId = rows.items[0].id;
+    rootPersonName = rows.items[0].display_name;
+    await loadRoot(rows.items[0].id, rows.items[0].display_name, generations);
   }
 
   async function loadRoot(personId: string, displayName: string, depth: number): Promise<void> {
@@ -464,6 +464,10 @@
       .selectAll('g')
       .data(renderedNodes)
       .join('g')
+      .attr('class', 'node-group')
+      .attr('tabindex', 0)
+      .attr('role', 'button')
+      .attr('aria-label', (node) => `Open ${node.displayName}`)
       .attr('transform', (node) => `translate(${node.y - nodeWidth / 2}, ${node.x - nodeHeight / 2})`)
       .style('cursor', 'pointer')
       .on('mouseenter', (event, node) => {
@@ -482,7 +486,41 @@
       .on('mouseleave', () => {
         tooltipOpen = false;
       })
+      .on('focus', (_event, node) => {
+        const fullLabel = node.kind === 'linked' && node.linkedToPersonId
+          ? `Linked to ${node.linkedToPersonId}`
+          : `${node.displayName} · ${lifeLine(node)} · place: n/a`;
+        tooltipOpen = true;
+        tooltipX = 140;
+        tooltipY = 110;
+        tooltipText = fullLabel;
+      })
+      .on('blur', () => {
+        tooltipOpen = false;
+      })
       .on('click', (_event, node) => {
+        if (node.kind === 'linked' && node.linkedToPersonId) {
+          const target = nodeByPersonId.get(node.linkedToPersonId);
+          if (target) {
+            centerOnNode(target);
+            return;
+          }
+
+          void loadRoot(node.linkedToPersonId, node.displayName, generations);
+          return;
+        }
+
+        if (node.personId) {
+          openPersonDetailFromPedigree(node.personId);
+        }
+      })
+      .on('keydown', (event, node) => {
+        const key = (event as KeyboardEvent).key;
+        if (key !== 'Enter' && key !== ' ') {
+          return;
+        }
+        (event as KeyboardEvent).preventDefault();
+
         if (node.kind === 'linked' && node.linkedToPersonId) {
           const target = nodeByPersonId.get(node.linkedToPersonId);
           if (target) {
@@ -916,6 +954,11 @@
     width: 100%;
     height: 680px;
     display: block;
+  }
+
+  :global(g.node-group:focus-visible rect) {
+    stroke: #1d4ed8 !important;
+    stroke-width: 4 !important;
   }
 
   .tooltip {

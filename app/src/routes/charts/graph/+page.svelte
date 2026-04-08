@@ -126,6 +126,7 @@
   let layoutMode: LayoutMode = 'cose-bilkent';
   let contextMenu: ContextMenuState = { open: false, nodeId: '', x: 0, y: 0 };
   let edgeTooltip: TooltipState = { open: false, x: 0, y: 0, text: '' };
+  let nodeTooltip: TooltipState = { open: false, x: 0, y: 0, text: '' };
 
   const edgeIds = new Set<string>();
   const expandedNodeIds = new Set<string>();
@@ -489,7 +490,7 @@
       lastTapNodeId = nodeId;
       lastTapAt = now;
       clickDebounce = setTimeout(() => {
-        openSummaryPanel(nodeId);
+        openNodeDetail(nodeId);
       }, 220);
     });
 
@@ -508,6 +509,32 @@
         x: original.clientX - rect.left,
         y: original.clientY - rect.top
       };
+    });
+
+    cy.on('mouseover', 'node', (event) => {
+      const node = (event as { target: CytoscapeElementLike; originalEvent?: MouseEvent }).target;
+      const original = (event as { originalEvent?: MouseEvent }).originalEvent;
+      const summary = nodesById.get(node.id());
+      if (!summary || !original || !cy) {
+        return;
+      }
+
+      const container = cy.container();
+      if (!container) {
+        return;
+      }
+
+      const rect = container.getBoundingClientRect();
+      nodeTooltip = {
+        open: true,
+        x: original.clientX - rect.left,
+        y: original.clientY - rect.top,
+        text: `${summary.label} (${summary.type}) · ${lifeLabel(summary)}`
+      };
+    });
+
+    cy.on('mouseout', 'node', () => {
+      nodeTooltip = { open: false, x: 0, y: 0, text: '' };
     });
 
     cy.on('mouseover', 'edge', (event) => {
@@ -564,6 +591,28 @@
     void goto(`/persons/${personId}`);
   }
 
+  function openNodeDetail(nodeId: string): void {
+    const node = nodesById.get(nodeId);
+    if (!node) {
+      return;
+    }
+
+    const current = '/charts/graph';
+    const navSuffix = `?from=${encodeURIComponent('Relationship Graph')}&back=${encodeURIComponent(current)}`;
+
+    if (node.type === 'person') {
+      openPersonDetailFromGraph(nodeId);
+      return;
+    }
+    if (node.type === 'family') {
+      void goto(`/families/${nodeId}${navSuffix}`);
+      return;
+    }
+    if (node.type === 'event') {
+      void goto(`/events/${nodeId}${navSuffix}`);
+    }
+  }
+
   async function searchPeople(): Promise<void> {
     const query = searchInput.trim();
     if (query.length < 2) {
@@ -602,14 +651,14 @@
       }
     }
 
-    const firstPage = await api.get<PersonListRow[]>('/api/v1/persons?limit=1&offset=0');
-    if (firstPage.length === 0) {
+    const firstPage = await api.get<{ total: number; items: PersonListRow[] }>('/api/v1/persons?limit=1&offset=0');
+    if (firstPage.items.length === 0) {
       return;
     }
 
-    selectedCenterId = firstPage[0].id;
-    selectedCenterName = firstPage[0].display_name;
-    await loadGraph(firstPage[0].id, 3, firstPage[0].id);
+    selectedCenterId = firstPage.items[0].id;
+    selectedCenterName = firstPage.items[0].display_name;
+    await loadGraph(firstPage.items[0].id, 3, firstPage.items[0].id);
   }
 
   function clearGraphState(): void {
@@ -981,6 +1030,12 @@
 
   <div class="graph-wrap">
     <div bind:this={graphContainer} class="graph-canvas"></div>
+
+    {#if nodeTooltip.open}
+      <div class="edge-tooltip" style={`left:${nodeTooltip.x + 10}px;top:${nodeTooltip.y + 10}px;`}>
+        {nodeTooltip.text}
+      </div>
+    {/if}
 
     {#if edgeTooltip.open}
       <div class="edge-tooltip" style={`left:${edgeTooltip.x + 10}px;top:${edgeTooltip.y + 10}px;`}>

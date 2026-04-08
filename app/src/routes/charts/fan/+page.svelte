@@ -265,12 +265,12 @@
       }
     }
 
-    const firstPage = await api.get<PersonListRow[]>('/api/v1/persons?limit=1&offset=0');
-    if (firstPage.length === 0) {
+    const firstPage = await api.get<{ total: number; items: PersonListRow[] }>('/api/v1/persons?limit=1&offset=0');
+    if (firstPage.items.length === 0) {
       return;
     }
 
-    await loadRoot(firstPage[0].id, firstPage[0].display_name, generations, false);
+    await loadRoot(firstPage.items[0].id, firstPage.items[0].display_name, generations, false);
   }
 
   function persistRoot(id: string, name: string): void {
@@ -380,6 +380,18 @@
       tooltipX = event.clientX - rect.left;
       tooltipY = event.clientY - rect.top;
     }
+  }
+
+  function onArcFocus(node: ArcDatum): void {
+    tooltipNode = node;
+    tooltipOpen = true;
+    tooltipX = centerX + 12;
+    tooltipY = centerY - 12;
+  }
+
+  function onArcBlur(): void {
+    tooltipOpen = false;
+    tooltipNode = null;
   }
 
   function onArcLeave(): void {
@@ -571,6 +583,8 @@
             on:mouseenter={(event) => onArcHover(event, arc)}
             on:mousemove={(event) => onArcHover(event, arc)}
             on:mouseleave={onArcLeave}
+            on:focus={() => onArcFocus(arc)}
+            on:blur={onArcBlur}
             on:click={() => onArcClick(arc)}
             on:keydown={(event) => onArcKeydown(event, arc)}
           />
@@ -762,6 +776,12 @@
 
   .clickable {
     cursor: pointer;
+  }
+
+  .clickable:focus-visible {
+    outline: none;
+    stroke: #1d4ed8;
+    stroke-width: 3px;
   }
 
   .root-text {
