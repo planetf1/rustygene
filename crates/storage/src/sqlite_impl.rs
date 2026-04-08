@@ -62,9 +62,24 @@ struct ResearchRowData {
 }
 
 impl SqliteBackend {
+    /// Apply performance and concurrency PRAGMAs to a connection.
+    /// Must be called immediately after opening before any queries are run.
+    fn configure_connection(conn: &Connection) {
+        // WAL mode allows concurrent readers alongside a single writer.
+        // This is essential when multiple HTTP requests hit the backend simultaneously.
+        let _ = conn.execute_batch("
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA busy_timeout = 5000;
+            PRAGMA cache_size = -8192;
+            PRAGMA foreign_keys = ON;
+        ");
+    }
+
     #[tracing::instrument(skip(connection))]
     pub fn new(connection: Connection) -> Self {
         tracing::debug!("opened sqlite backend connection");
+        Self::configure_connection(&connection);
         Self {
             connection: Arc::new(Mutex::new(connection)),
             db_path: None,
@@ -75,6 +90,7 @@ impl SqliteBackend {
     /// The path is used to derive the backup directory (`<db_dir>/backups/`).
     pub fn new_with_path(connection: Connection, path: std::path::PathBuf) -> Self {
         tracing::debug!(db_path = %path.display(), "opened sqlite backend connection");
+        Self::configure_connection(&connection);
         Self {
             connection: Arc::new(Mutex::new(connection)),
             db_path: Some(path),

@@ -11,7 +11,7 @@ use rustygene_core::assertion::{AssertionStatus, EvidenceType};
 use rustygene_core::person::{Person, PersonName};
 use rustygene_core::types::{ActorRef, EntityId, Gender};
 use rustygene_storage::{
-    EntityType, FieldAssertion, JsonAssertion, Pagination, StorageError, StorageErrorCode,
+    EntityType, FieldAssertion, JsonAssertion, StorageError, StorageErrorCode,
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -74,31 +74,112 @@ async fn list_persons(
     State(state): State<AppState>,
     Query(query): Query<PersonsQuery>,
 ) -> Result<Json<PersonListResponse>, ApiError> {
-    // Load all persons so we can sort/filter in-process (SQLite JSON blob storage).
-    let all_persons = state
-        .storage
-        .list_persons(Pagination {
-            limit: u32::MAX,
-            offset: 0,
-        })
-        .await?;
+    // Use a single SQL query to fetch persons with aggregated assertion counts and
+    // birth/death years, avoiding N+1 queries for each person.
+    let backend = state.sqlite_backend.clone().ok_or_else(|| {
+        ApiError::InternalError("list_persons requires sqlite backend".to_string())
+    })?;
 
-    let mut response: Vec<PersonResponse> = Vec::with_capacity(all_persons.len());
-    for person in all_persons {
+    struct PersonRow {
+        id: String,
+        data: String,
+        assertion_counts_json: Option<String>,
+        birth_year: Option<i32>,
+        death_year: Option<i32>,
+    }
+
+    let rows: Vec<PersonRow> = backend.with_connection(|conn| {
+        // Aggregate assertion field counts and birth/death years in pure SQL.
+        // assertions JSON blob: we GROUP BY entity_id and aggregate field counts.
+        // events: join to pick out birth/death event years.
+        let sql = "
+            SELECT
+                p.id,
+                p.data,
+                (
+                    SELECT json_group_object(field, cnt)
+                    FROM (
+                        SELECT field, COUNT(*) as cnt
+                        FROM assertions
+                        WHERE entity_id = p.id AND sandbox_id IS NULL
+                        GROUP BY field
+                    )
+                ) AS assertion_counts_json,
+                (
+                    SELECT json_extract(e.data, '$.date.date.year')
+                    FROM events e
+                    JOIN event_log el ON el.event_id = e.id
+                    WHERE el.person_id = p.id
+                      AND json_extract(e.data, '$.event_type') = 'birth'
+                    LIMIT 1
+                ) AS birth_year,
+                (
+                    SELECT json_extract(e.data, '$.date.date.year')
+                    FROM events e
+                    JOIN event_log el ON el.event_id = e.id
+                    WHERE el.person_id = p.id
+                      AND json_extract(e.data, '$.event_type') = 'death'
+                    LIMIT 1
+                ) AS death_year
+            FROM persons p
+            WHERE p.sandbox_id IS NULL
+            ORDER BY p.id
+        ";
+
+        let mut stmt = conn.prepare(sql).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("prepare list_persons query failed: {e}"),
+        })?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(PersonRow {
+                id: row.get(0)?,
+                data: row.get(1)?,
+                assertion_counts_json: row.get(2)?,
+                birth_year: row.get(3)?,
+                death_year: row.get(4)?,
+            })
+        }).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("list_persons query failed: {e}"),
+        })?
+        .filter_map(|r| r.ok())
+        .collect::<Vec<_>>();
+
+        Ok(rows)
+    })?;
+
+    // Build the response, parsing person display names from JSON blobs.
+    let mut response: Vec<PersonResponse> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let person: rustygene_core::person::Person = match serde_json::from_str(&row.data) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
         let display_name = display_name_for_person(&person);
-        let assertions = state
-            .storage
-            .list_assertion_records_for_entity(person.id)
-            .await?;
-        let assertion_counts = assertion_counts(&assertions);
-        let events = state.storage.list_events_for_person(person.id).await?;
-        let (birth_year, death_year) = event_years(&events);
+
+        // Parse assertion counts from aggregated JSON
+        let assertion_counts: BTreeMap<String, usize> = row.assertion_counts_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.as_object().cloned())
+            .map(|obj| {
+                obj.into_iter()
+                    .filter_map(|(k, v)| v.as_u64().map(|n| (k, n as usize)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let id = match Uuid::parse_str(&row.id).map(EntityId) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
 
         response.push(PersonResponse {
-            id: person.id,
+            id,
             display_name,
-            birth_year,
-            death_year,
+            birth_year: row.birth_year,
+            death_year: row.death_year,
             assertion_counts,
         });
     }
@@ -140,6 +221,7 @@ async fn list_persons(
 
     Ok(Json(PersonListResponse { total, items }))
 }
+
 
 async fn create_person(
     State(state): State<AppState>,
@@ -595,39 +677,9 @@ fn display_name_for_person(person: &Person) -> String {
     }
 }
 
-fn assertion_counts(assertions: &[FieldAssertion]) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
-    for record in assertions {
-        *counts.entry(record.field.clone()).or_insert(0) += 1;
-    }
-    counts
-}
 
-fn event_years(events: &[rustygene_core::event::Event]) -> (Option<i32>, Option<i32>) {
-    let mut birth_year = None;
-    let mut death_year = None;
 
-    for event in events {
-        let year = match event.date.as_ref() {
-            Some(rustygene_core::types::DateValue::Exact { date, .. })
-            | Some(rustygene_core::types::DateValue::Before { date, .. })
-            | Some(rustygene_core::types::DateValue::After { date, .. })
-            | Some(rustygene_core::types::DateValue::About { date, .. })
-            | Some(rustygene_core::types::DateValue::Tolerance { date, .. }) => Some(date.year),
-            Some(rustygene_core::types::DateValue::Range { from, .. }) => Some(from.year),
-            Some(rustygene_core::types::DateValue::Quarter { year, .. }) => Some(*year),
-            Some(rustygene_core::types::DateValue::Textual { .. }) | None => None,
-        };
 
-        match event.event_type {
-            rustygene_core::event::EventType::Birth if birth_year.is_none() => birth_year = year,
-            rustygene_core::event::EventType::Death if death_year.is_none() => death_year = year,
-            _ => {}
-        }
-    }
-
-    (birth_year, death_year)
-}
 
 fn name_assertions(assertions: &[FieldAssertion]) -> Vec<PersonNameAssertion> {
     assertions
