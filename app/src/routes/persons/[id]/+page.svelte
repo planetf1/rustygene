@@ -391,18 +391,55 @@
 
       const citationIds = citationTokensFromNames(personDetail.names);
       if (citationIds.length > 0) {
-        const ids = [...new Set(citationIds)];
-        const sourceRows = await Promise.all(
-          ids.map(async (citationId) => {
-            try {
-              const source = await api.get<SourceListItem>(`/api/v1/sources/${citationId}`);
-              return [citationId, source.title] as const;
-            } catch {
-              return [citationId, citationId] as const;
-            }
-          })
-        );
-        sourceMap = new Map(sourceRows);
+        const uniqueCitationIds = [...new Set(citationIds)];
+
+        // Fetch citation records (concurrency-capped at 5) to resolve source_ids
+        const CONCURRENCY = 5;
+        type CitationRecord = { id: string; source_id: string };
+        const citationRecords: Array<[string, string]> = [];
+
+        for (let i = 0; i < uniqueCitationIds.length; i += CONCURRENCY) {
+          const batch = uniqueCitationIds.slice(i, i + CONCURRENCY);
+          const results = await Promise.all(
+            batch.map(async (citationId) => {
+              try {
+                const citation = await api.get<CitationRecord>(`/api/v1/citations/${citationId}`);
+                return [citationId, citation.source_id] as [string, string];
+              } catch {
+                return [citationId, ''] as [string, string];
+              }
+            })
+          );
+          citationRecords.push(...results);
+        }
+
+        // Collect unique source IDs to look up titles
+        const sourceIdsByCitation = new Map(citationRecords);
+        const uniqueSourceIds = [...new Set(citationRecords.map(([, sid]) => sid).filter(Boolean))];
+
+        const sourceTitles = new Map<string, string>();
+        for (let i = 0; i < uniqueSourceIds.length; i += CONCURRENCY) {
+          const batch = uniqueSourceIds.slice(i, i + CONCURRENCY);
+          const results = await Promise.all(
+            batch.map(async (sourceId) => {
+              try {
+                const source = await api.get<SourceListItem>(`/api/v1/sources/${sourceId}`);
+                return [sourceId, source.title] as [string, string];
+              } catch {
+                return [sourceId, sourceId] as [string, string];
+              }
+            })
+          );
+          results.forEach(([sid, title]) => sourceTitles.set(sid, title));
+        }
+
+        // Build final map: citation_id → source title
+        const entries: Array<[string, string]> = uniqueCitationIds.map((citationId) => {
+          const sourceId = sourceIdsByCitation.get(citationId) ?? '';
+          const title = sourceTitles.get(sourceId) ?? citationId;
+          return [citationId, title];
+        });
+        sourceMap = new Map(entries);
       } else {
         sourceMap = new Map();
       }

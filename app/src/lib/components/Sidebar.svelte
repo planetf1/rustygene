@@ -24,8 +24,17 @@
 
   async function refreshResearchOpenCount(): Promise<void> {
     try {
-      const rows = await api.get<Array<{ id: string }>>('/api/v1/research-log?status=open&limit=500&offset=0');
-      openResearchEntryCount = rows.length;
+      const result = await api.get<{ total: number } | Array<{ id: string }>>('/api/v1/research-log?status=open&limit=1&offset=0');
+      // Handle both paginated ({total}) and array response shapes
+      if (result && !Array.isArray(result) && typeof (result as {total: number}).total === 'number') {
+        openResearchEntryCount = (result as {total: number}).total;
+      } else if (Array.isArray(result)) {
+        // Fallback: if API returns plain array, fetch with higher limit but cap display
+        const all = await api.get<Array<{ id: string }>>('/api/v1/research-log?status=open&limit=100&offset=0');
+        openResearchEntryCount = all.length;
+      } else {
+        openResearchEntryCount = 0;
+      }
     } catch {
       openResearchEntryCount = 0;
     }
