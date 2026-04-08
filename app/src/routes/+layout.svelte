@@ -193,6 +193,47 @@
     transition: transform 120ms ease, filter 120ms ease;
   }
 
+  :global(.content .btn-primary),
+  :global(.content .action-primary) {
+    background: linear-gradient(135deg, var(--rg-primary), var(--rg-secondary));
+    color: #fff;
+    border: 0;
+    font-weight: 700;
+  }
+
+  :global(.content .btn-secondary),
+  :global(.content .action-secondary),
+  :global(.content .ghost),
+  :global(.content .secondary),
+  :global(.content .btn-page) {
+    background: #ffffff;
+    color: #4b3a85;
+    border: 1px solid #d8cbf5;
+    box-shadow: none;
+    font-weight: 600;
+  }
+
+  :global(.content .btn-danger),
+  :global(.content .action-danger),
+  :global(.content .danger) {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: #fff;
+    border: 0;
+    font-weight: 700;
+  }
+
+  :global(.content table.table-compact th),
+  :global(.content table.table-compact td) {
+    padding: 0.42rem 0.58rem;
+    line-height: 1.24;
+  }
+
+  :global(.content table.table-compact thead th) {
+    font-size: 0.76rem;
+    letter-spacing: 0.025em;
+    text-transform: uppercase;
+  }
+
   :global(.content button:not(.overlay):hover) {
     transform: translateY(-1px);
     filter: brightness(1.02);

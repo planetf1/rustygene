@@ -160,7 +160,7 @@
 <main class="panel">
   <header class="header">
     <h1>Events</h1>
-    <button type="button" on:click={() => (showCreate = true)}>New event</button>
+    <button type="button" class="btn-primary" on:click={() => (showCreate = true)}>New event</button>
   </header>
 
   <div class="filters">
@@ -194,7 +194,7 @@
   {#if loading}
     <p>Loading events…</p>
   {:else}
-    <table>
+    <table class="table-compact">
       <thead>
         <tr>
           <th><button type="button" class="sort-head" on:click={() => toggleSort('event_type')}>Type {sortIndicator('event_type')}</button></th>
@@ -224,7 +224,7 @@
     </table>
 
     {#if hasMore}
-      <button type="button" class="load-more" disabled={loadingMore} on:click={() => loadPage(false)}>
+      <button type="button" class="btn-secondary load-more" disabled={loadingMore} on:click={() => loadPage(false)}>
         {loadingMore ? 'Loading…' : 'Load more'}
       </button>
     {/if}
@@ -338,7 +338,7 @@
     background: #fdf7ff;
   }
 
-  button {
+  .btn-primary {
     background: #2563eb;
     color: #fff;
     border: 0;
@@ -346,6 +346,12 @@
     padding: 0.45rem 0.7rem;
     cursor: pointer;
     width: fit-content;
+  }
+
+  .btn-secondary {
+    background: #ffffff;
+    color: #334155;
+    border: 1px solid #cbd5e1;
   }
 
   .load-more {

@@ -118,7 +118,7 @@
   {#if loading}
     <p class="loading-msg">Loading persons…</p>
   {:else}
-    <table>
+    <table class="table-compact">
       <thead>
         <tr>
           <th class="sortable" on:click={() => toggleSort('name')}>
