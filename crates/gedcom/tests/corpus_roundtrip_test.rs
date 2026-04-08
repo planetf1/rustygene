@@ -355,7 +355,37 @@ fn corpus_roundtrip_simpsons_ged_diagnostic() {
 }
 
 #[test]
-#[ignore] // Torture551 event duplication bug documented in GEDCOM_GAPS.md #15
+fn corpus_roundtrip_torture551_event_count_regression() {
+    let input = read_gedcom_fixture("torture551.ged");
+    let db1 = temp_db_path("torture551-db1");
+    let db2 = temp_db_path("torture551-db2");
+
+    let mut conn1 = setup_db(&db1);
+    let _report1 = import_gedcom_to_sqlite(&mut conn1, "corpus-import-torture551", &input)
+        .expect("import torture551 fixture");
+
+    let expected_event_count = count_table_rows(&conn1, "events");
+
+    let exported = export_db_as_gedcom(&conn1);
+    assert!(exported.contains("0 HEAD"));
+    assert!(exported.contains("0 TRLR"));
+
+    let mut conn2 = setup_db(&db2);
+    import_gedcom_to_sqlite(&mut conn2, "corpus-reimport-torture551", &exported)
+        .expect("re-import exported torture551");
+
+    let actual_event_count = count_table_rows(&conn2, "events");
+    assert_eq!(
+        actual_event_count, expected_event_count,
+        "Torture551: row count mismatch for table events: expected {expected_event_count}, got {actual_event_count}"
+    );
+
+    let _ = std::fs::remove_file(&db1);
+    let _ = std::fs::remove_file(&db2);
+}
+
+#[test]
+#[ignore] // Broader torture551 round-trip fidelity still has citation drift; tracked separately.
 fn corpus_roundtrip_torture551_ged_diagnostic() {
     let input = read_gedcom_fixture("torture551.ged");
     let db1 = temp_db_path("torture551-db1");

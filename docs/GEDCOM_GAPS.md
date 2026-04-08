@@ -86,24 +86,23 @@ Metadata-oriented vendor tags (e.g. `_MSER`, `_OID`, `_ATL`, `_DSCR`, `_ORIG`,
 `_DATE`, crop geometry tags) are preserved and accounted for, but currently
 remain in `_raw_gedcom` rather than first-class domain fields.
 
-### 15. torture551.ged Round-Trip Event Duplication
+### 15. torture551.ged Round-Trip Citation Drift (event duplication fixed)
 
-**Impact: MEDIUM** · Phase 1B Corpus Hardening · **Bead: rustygene-buh**
+**Impact: MEDIUM** · Phase 1B Corpus Hardening · **Bead: rustygene-p0k**
 
 `torture551.ged` has documented (torturous) edge cases in GEDCOM structure.
-During round-trip testing (import → export → re-import), the event count
-increases from 71 to 75 (4 extra events created). This suggests:
-- Event references are being duplicated during export (e.g., same event
-  referenced in multiple contexts and exported separately)
-- Possible interaction with CHAN tags or complex citation/association structures
-- `simpsons.ged` round-trip works correctly, so the bug is specific to
-  torture551's edge cases.
+After the `rustygene-jqk` fix, round-trip event count now remains stable.
+However, full round-trip diagnostics still show citation drift:
 
-**Workaround:** `torture551.ged` is deferred from the corpus round-trip test
-harness until the export logic can be debugged. `corpus_roundtrip_test.rs` includes
-a separate diagnostic test `corpus_roundtrip_torture551_ged_diagnostic` for
-isolated investigation. `simpsons.ged` can be added to the corpus array without
-issue.
+- citations row count changes from 58 to 45 after import → export → re-import
+- this indicates some `SOUR` linkage/citation context is not being re-emitted
+  with full fidelity in torture551 edge-case paths
+- `simpsons.ged` round-trip remains stable, so this appears fixture-specific
+  to torture551 complexity
+
+**Workaround:** `corpus_roundtrip_torture551_event_count_regression` is active,
+while full-row-count diagnostic `corpus_roundtrip_torture551_ged_diagnostic`
+remains ignored pending the citation-drift fix.
 
 ---
 

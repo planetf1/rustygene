@@ -3805,6 +3805,9 @@ pub fn person_to_indi_node_with_policy(
             e.participants
                 .iter()
                 .any(|p| p.person_id == person.id && matches!(p.role, EventRole::Principal))
+                // Family-origin events are emitted by `family_to_fam_node`; emitting them
+                // here as INDI events duplicates them on round-trip import.
+                && !e._raw_gedcom.contains_key("FAM_XREF")
         }) {
             let Some(tag) = event_type_to_indi_tag(&event.event_type) else {
                 continue;
@@ -4006,11 +4009,17 @@ pub fn family_to_fam_node(
         });
     }
 
-    // Emit family-level events (MARR, DIV, etc.) for events where BOTH of this
-    // family's partners are participants. Using an OR (any-partner) filter would
-    // incorrectly match marriage events from a different family when a person has
-    // been married more than once.
+    // Emit family-level events (MARR, DIV, etc.). Prefer explicit provenance
+    // linking via FAM_XREF (set during import), and fall back to participant
+    // heuristics for events without provenance metadata.
     for event in events.iter().filter(|e| {
+        if let Some(fam_xref) = e._raw_gedcom.get("FAM_XREF") {
+            if family.original_xref.as_deref() == Some(fam_xref.as_str()) || fam_xref == xref {
+                return true;
+            }
+            return false;
+        }
+
         let has_p1 = family
             .partner1_id
             .is_some_and(|p1| e.participants.iter().any(|p| p.person_id == p1));
