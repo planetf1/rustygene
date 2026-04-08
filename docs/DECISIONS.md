@@ -60,6 +60,7 @@ INITIAL_SPEC ("Family / Relationship / Event Invariants"). The single-table
 design with JSON-field discrimination created implicit type contracts that were
 error-prone and conflated two semantically distinct structures.
 **Decision:** Split `Family` and `Relationship` into separate dedicated tables:
+
 - `families` table: Stores only `Family` rows (grouping containers with partner refs, child links)
 - `family_relationships` table: Stores `Relationship` rows (pairwise semantic edges)
 The separation formalizes the architectural distinction at the schema level.

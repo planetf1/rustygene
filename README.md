@@ -69,7 +69,7 @@ cargo run -p rustygene-cli -- export --format gedcom --output out.ged
 
 ## Architecture
 
-```
+```text
 crates/core/       Pure domain model (assertions, entities, validation)
 crates/storage/    SQLite persistence (CRUD, audit log, search index)
 crates/gedcom/     GEDCOM 5.5.1 import/export pipeline

@@ -12,19 +12,23 @@ Last reviewed: 2026-04-08.
 ## Resolved Gaps (kept for history)
 
 ### ~~1. Person Events Not Exported to INDI Nodes~~ — FIXED
+
 `person_to_indi_node_with_policy` now accepts `&[Event]` and `&[Place]` and
 emits BIRT/DEAT/BURI/CHR/BAPM and other event tags. Gate test verifies
 event-type distribution round-trip.
 
 ### ~~2. Family Events Not Exported to FAM Nodes~~ — FIXED
+
 `family_to_fam_node` now accepts `&[Event]` and `&[Place]` and emits MARR/DIV
 and other family event tags.
 
 ### ~~5. Repository (REPO) Records Not Handled~~ — FIXED
+
 REPO records are imported and exported. Gate test verifies repository count
 round-trip.
 
 ### ~~3. Inline Citation Round-Trip~~ — FIXED
+
 Inline `SOUR` citations (`2 SOUR @Sx@` within INDI/FAM event subrecords) now
 round-trip correctly. Import maps citations into `Citation` entities with
 `CitationRef` linkages, and export re-emits inline `SOUR` subtrees on event
@@ -32,6 +36,7 @@ records. Synthetic end-to-end coverage verifies `PAGE`, `QUAY`, and `DATA/TEXT`
 mapping plus citation count preservation across import → export → re-import.
 
 ### ~~6. Phase 1B GEDCOM Corpus Hardening~~ — IN PROGRESS (baseline in place)
+
 `crates/gedcom/tests/corpus_roundtrip_test.rs` now runs import/export/re-import
 against five vendor fixtures (Ancestry, RootsMagic, Gramps, Legacy, PAF),
 checks round-trip row and assertion-distribution stability, and validates that
@@ -58,7 +63,7 @@ fidelity.
 
 ### 8. NOTE Records Not Stored
 
-**Impact: LOW** · Phase 1B
+- **Impact:** LOW · Phase 1B
 
 Stand-alone `NOTE @N1@` records and inline `1 NOTE` subrecords are absorbed by
 the raw GEDCOM fallback. They survive round-trip via `_raw_gedcom` but are not
@@ -66,7 +71,7 @@ typed entities.
 
 ### 9. Multimedia (OBJE) Coverage is Root-Level Only
 
-**Impact: LOW** · Phase 1B
+- **Impact:** LOW · Phase 1B
 
 Root-level `OBJE` records are imported/exported as typed `Media` entities.
 Inline `OBJE` links on other records are currently deferred/counted but not yet
@@ -74,13 +79,13 @@ mapped into explicit `MediaRef` link structures.
 
 ### 10. ASSO (Association) Records Ignored
 
-**Impact: LOW** · Phase 1B+
+- **Impact:** LOW · Phase 1B+
 
 `1 ASSO @I1@` association records are not parsed or stored.
 
 ### 17. Vendor custom metadata tags remain unnormalized
 
-**Impact: LOW** · Phase 2+
+- **Impact:** LOW · Phase 2+
 
 Metadata-oriented vendor tags (e.g. `_MSER`, `_OID`, `_ATL`, `_DSCR`, `_ORIG`,
 `_DATE`, crop geometry tags) are preserved and accounted for, but currently
@@ -88,7 +93,7 @@ remain in `_raw_gedcom` rather than first-class domain fields.
 
 ### 15. torture551.ged Round-Trip Citation Drift (event duplication fixed)
 
-**Impact: MEDIUM** · Phase 1B Corpus Hardening · **Bead: rustygene-p0k**
+- **Impact:** MEDIUM · Phase 1B Corpus Hardening · **Bead: rustygene-p0k**
 
 `torture551.ged` has documented (torturous) edge cases in GEDCOM structure.
 After the `rustygene-jqk` fix, round-trip event count now remains stable.
@@ -110,7 +115,7 @@ remains ignored pending the citation-drift fix.
 
 ### 11. xref IDs Not Preserved
 
-**Impact: MEDIUM**
+- **Impact:** MEDIUM
 
 Original xref identifiers (`@I23@`, `@F5@`, `@S2@`) are not preserved across
 import/export. The exporter assigns sequential UUIDs as xrefs (`@I<uuid>@`),
@@ -140,7 +145,7 @@ non-default values (e.g., AKA, MARRIED, custom), with regression coverage.
 The following issues were discovered and fixed during Phase 8.2:
 
 | Issue | Fix |
-|---|---|
+| --- | --- |
 | `DateValue::Textual` serde serialization failure | Changed to struct variant `Textual { value: String }` |
 | Family/Relationship table collision on export | `load_family_entities()` filters by `relationship_type IS NULL` |
 | Snapshot rebuild "Invalid column type Integer" | `CAST(value AS TEXT)` in assertions snapshot query |
@@ -177,7 +182,7 @@ covered by tests.
 Previously tracked as gaps, now implemented:
 
 | Item | Old Bead | Resolution |
-|---|---|---|
+| --- | --- | --- |
 | Person event import (BIRT, DEAT, etc.) | `rustygene-46m` | Events parsed from INDI records into Event entities |
 | Event export (person + family) | `rustygene-ed8` | `person_to_indi_node_with_policy` and `family_to_fam_node` now accept and emit event subrecords |
 
@@ -188,9 +193,9 @@ The following improvements are deferred to a later phase:
 1. **ASSO record import**: Store witness/association links.
 2. **xref alias table**: Optionally preserve original xref IDs across
    import/export.
-4. **Storage integration tests** (bead `rustygene-41z`): Cover Place, Note,
+3. **Storage integration tests** (bead `rustygene-41z`): Cover Place, Note,
    Media, and LDS entity CRUD paths.
-5. **CLI show/query expansion** (bead `rustygene-c7h`): Add commands for
+4. **CLI show/query expansion** (bead `rustygene-c7h`): Add commands for
    Source, Citation, Repository, Note, and Media entities.
-6. **HEAD metadata parity**: Preserve/import/export submitter (`SUBM`) metadata
+5. **HEAD metadata parity**: Preserve/import/export submitter (`SUBM`) metadata
    when represented in domain models.

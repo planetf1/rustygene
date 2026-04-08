@@ -24,6 +24,17 @@ jobs:
     - name: Set up Rust Cache
       uses: Swatinem/rust-cache@v2
 
+    - name: Lint Markdown (tracked docs)
+      uses: DavidAnson/markdownlint-cli2-action@v20
+      with:
+        globs: |
+          README.md
+          docs/GEDCOM_GAPS.md
+          docs/DECISIONS.md
+          docs/UI_STYLE_CHECKLIST.md
+          docs/UX_QUALITY_GATES.md
+          .github/pull_request_template.md
+
     - name: Check Formatting
       run: cargo fmt --all -- --check
 
