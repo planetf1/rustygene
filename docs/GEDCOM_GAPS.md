@@ -57,17 +57,17 @@ now mapped to explicit `external_reference` assertions on Person/Family
 entities during import, while still preserving raw subtrees for round-trip
 fidelity.
 
+### ~~8. Inline NOTE links were raw-only~~ — FIXED
+
+- **Resolved by:** `rustygene-gwx`
+
+Inline `NOTE @N...@` links and embedded NOTE text now generate typed
+`note_ref` and `note` assertions on owning entities (Person/Family/Event)
+while preserving existing raw GEDCOM subtree round-trip behavior.
+
 ---
 
 ## Open Gaps
-
-### 8. Inline NOTE links are not yet typed note_ref assertions
-
-- **Impact:** MEDIUM · Phase 1B · **Bead: rustygene-gwx**
-
-Root-level `NOTE @N...@` records are imported/exported as typed `Note` entities.
-However, many inline `NOTE` links/subrecords are still carried via `_raw_gedcom`
-rather than surfaced as first-class `note_ref` assertions on owner entities.
 
 ### 9. Multimedia (OBJE) Coverage is Root-Level Only
 

@@ -12,7 +12,7 @@ use rustygene_core::assertion::{
 };
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
 use rustygene_core::evidence::{
-    Citation, CitationRef, Media, MediaRef, Note, NoteType, Repository, RepositoryRef,
+    Citation, CitationRef, Media, MediaRef, Note, NoteRef, NoteType, Repository, RepositoryRef,
     RepositoryType, Source,
 };
 use rustygene_core::family::{
@@ -2423,6 +2423,70 @@ fn parse_obje_external_paths(
     paths
 }
 
+fn parse_note_refs(raw_gedcom: &std::collections::BTreeMap<String, String>) -> Vec<NoteRef> {
+    let mut refs = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for (key, serialized) in raw_gedcom {
+        if !key.contains("NOTE_") {
+            continue;
+        }
+
+        for node in deserialize_serialized_subtrees(serialized) {
+            if node.tag != "NOTE" {
+                continue;
+            }
+
+            let Some(value) = node.value.as_deref() else {
+                continue;
+            };
+
+            if !(value.starts_with('@') && value.ends_with('@')) {
+                continue;
+            }
+
+            let note_id = entity_id_from_xref("NOTE", value);
+            if seen.insert(note_id) {
+                refs.push(NoteRef { note_id });
+            }
+        }
+    }
+
+    refs
+}
+
+fn parse_inline_note_texts(raw_gedcom: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+    let mut notes = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for (key, serialized) in raw_gedcom {
+        if !key.contains("NOTE_") {
+            continue;
+        }
+
+        for node in deserialize_serialized_subtrees(serialized) {
+            if node.tag != "NOTE" {
+                continue;
+            }
+
+            let Some(value) = node.value.as_deref() else {
+                continue;
+            };
+
+            let trimmed = value.trim();
+            if trimmed.is_empty() || (trimmed.starts_with('@') && trimmed.ends_with('@')) {
+                continue;
+            }
+
+            if seen.insert(trimmed.to_string()) {
+                notes.push(trimmed.to_string());
+            }
+        }
+    }
+
+    notes
+}
+
 fn vendor_source_system_for_tag(tag: &str) -> Option<&'static str> {
     match tag {
         "_APID" | "_ATL" | "_LKID" | "_OID" | "_MSER" | "_TID" | "_CLON" | "_ENCR"
@@ -2531,6 +2595,28 @@ pub fn generate_import_assertions(
                     "external_path": external_path,
                     "caption": caption,
                 }),
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for note_ref in parse_note_refs(&person._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                person.id,
+                EntityType::Person,
+                "note_ref",
+                to_value(&note_ref)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for note_text in parse_inline_note_texts(&person._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                person.id,
+                EntityType::Person,
+                "note",
+                to_value(&note_text)?,
                 Vec::new(),
                 &proposed_by,
             ));
@@ -2656,6 +2742,28 @@ pub fn generate_import_assertions(
             ));
         }
 
+        for note_ref in parse_note_refs(&family._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                family.id,
+                EntityType::Family,
+                "note_ref",
+                to_value(&note_ref)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for note_text in parse_inline_note_texts(&family._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                family.id,
+                EntityType::Family,
+                "note",
+                to_value(&note_text)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
         for external_reference in parse_vendor_external_references(&family._raw_gedcom) {
             assertions.push(build_import_assertion(
                 family.id,
@@ -2754,6 +2862,28 @@ pub fn generate_import_assertions(
             ));
         }
 
+        for note_ref in parse_note_refs(&event._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "note_ref",
+                to_value(&note_ref)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for note_text in parse_inline_note_texts(&event._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "note",
+                to_value(&note_text)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
         for participant in &event.participants {
             let participation_value = json!({
                 "event_id": event.id,
@@ -2842,6 +2972,28 @@ pub fn generate_import_assertions(
                 "description",
                 to_value(description)?,
                 source_citations.clone(),
+                &proposed_by,
+            ));
+        }
+
+        for note_ref in parse_note_refs(&event._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "note_ref",
+                to_value(&note_ref)?,
+                Vec::new(),
+                &proposed_by,
+            ));
+        }
+
+        for note_text in parse_inline_note_texts(&event._raw_gedcom) {
+            assertions.push(build_import_assertion(
+                event.id,
+                EntityType::Event,
+                "note",
+                to_value(&note_text)?,
+                Vec::new(),
                 &proposed_by,
             ));
         }
