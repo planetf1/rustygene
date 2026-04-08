@@ -21,13 +21,34 @@
   type SortField = 'event_type' | 'date' | 'principal' | 'confidence';
   type SortDirection = 'asc' | 'desc';
 
+  type EventListState = {
+    sortField: SortField;
+    sortDirection: SortDirection;
+    typeFilter: string;
+    personFilter: string;
+    fromYear: string;
+    toYear: string;
+    pageSize: number;
+  };
+
+  const EVENT_LIST_STATE_KEY = 'rg:list:events:v1';
+  const defaultEventState: EventListState = {
+    sortField: 'date',
+    sortDirection: 'desc',
+    typeFilter: '',
+    personFilter: '',
+    fromYear: '',
+    toYear: '',
+    pageSize: 50
+  };
+
   let rows: EventRow[] = [];
   let filteredRows: EventRow[] = [];
   let loading = false;
   let loadingMore = false;
   let error = '';
   let offset = 0;
-  const pageSize = 50;
+  let pageSize = 50;
   let hasMore = true;
   let showCreate = false;
   let people: PersonOption[] = [];
@@ -40,6 +61,60 @@
   let personFilter = '';
   let fromYear = '';
   let toYear = '';
+
+  function restoreListState(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const raw = localStorage.getItem(EVENT_LIST_STATE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    try {
+      const state = JSON.parse(raw) as Partial<EventListState>;
+      sortField = (state.sortField as SortField) ?? defaultEventState.sortField;
+      sortDirection = state.sortDirection === 'asc' ? 'asc' : 'desc';
+      typeFilter = state.typeFilter ?? defaultEventState.typeFilter;
+      personFilter = state.personFilter ?? defaultEventState.personFilter;
+      fromYear = state.fromYear ?? defaultEventState.fromYear;
+      toYear = state.toYear ?? defaultEventState.toYear;
+      pageSize = [25, 50, 100, 250].includes(state.pageSize ?? -1)
+        ? (state.pageSize as number)
+        : defaultEventState.pageSize;
+    } catch {
+      // ignore malformed saved state
+    }
+  }
+
+  function persistListState(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const state: EventListState = {
+      sortField,
+      sortDirection,
+      typeFilter,
+      personFilter,
+      fromYear,
+      toYear,
+      pageSize
+    };
+    localStorage.setItem(EVENT_LIST_STATE_KEY, JSON.stringify(state));
+  }
+
+  function resetListView(): void {
+    sortField = defaultEventState.sortField;
+    sortDirection = defaultEventState.sortDirection;
+    typeFilter = defaultEventState.typeFilter;
+    personFilter = defaultEventState.personFilter;
+    fromYear = defaultEventState.fromYear;
+    toYear = defaultEventState.toYear;
+    pageSize = defaultEventState.pageSize;
+    void loadPage(true);
+  }
 
   function applyFilters(): void {
     const base = rows.filter((event) => {
@@ -113,6 +188,10 @@
     return sortDirection === 'asc' ? '↑' : '↓';
   }
 
+  function onPageSizeChange(): void {
+    void loadPage(true);
+  }
+
   async function loadPeople(): Promise<void> {
     people = await api.get<PersonOption[]>('/api/v1/persons?limit=500&offset=0');
     personNameById.clear();
@@ -150,8 +229,10 @@
   }
 
   $: typeFilter, personFilter, fromYear, toYear, applyFilters();
+  $: sortField, sortDirection, typeFilter, personFilter, fromYear, toYear, pageSize, persistListState();
 
   onMount(async () => {
+    restoreListState();
     await loadPeople();
     await loadPage(true);
   });
@@ -185,6 +266,18 @@
       To year
       <input bind:value={toYear} placeholder="e.g. 1900" />
     </label>
+    <label>
+      Page size
+      <select bind:value={pageSize} on:change={onPageSizeChange}>
+        <option value={25}>25</option>
+        <option value={50}>50</option>
+        <option value={100}>100</option>
+        <option value={250}>250</option>
+      </select>
+    </label>
+    <div class="filters-actions">
+      <button type="button" class="btn-secondary" on:click={resetListView}>Reset view</button>
+    </div>
   </div>
 
   {#if error}
@@ -268,8 +361,13 @@
 
   .filters {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 0.6rem;
+  }
+
+  .filters-actions {
+    display: flex;
+    align-items: end;
   }
 
   label {

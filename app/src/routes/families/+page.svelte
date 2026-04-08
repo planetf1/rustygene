@@ -14,6 +14,23 @@
 
   type SortField = 'family' | 'marriage_year' | 'children';
 
+  type FamilyListState = {
+    searchText: string;
+    page: number;
+    pageSize: number;
+    sortField: SortField;
+    sortDir: 'asc' | 'desc';
+  };
+
+  const FAMILY_LIST_STATE_KEY = 'rg:list:families:v1';
+  const defaultFamilyState: FamilyListState = {
+    searchText: '',
+    page: 0,
+    pageSize: 50,
+    sortField: 'family',
+    sortDir: 'asc'
+  };
+
   let families: FamilyRow[] = [];
   let total = 0;
   let loading = false;
@@ -87,7 +104,58 @@
     return sortDir === 'asc' ? ' ▲' : ' ▼';
   }
 
+  function restoreListState(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const raw = localStorage.getItem(FAMILY_LIST_STATE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    try {
+      const state = JSON.parse(raw) as Partial<FamilyListState>;
+      searchText = state.searchText ?? defaultFamilyState.searchText;
+      page = Number.isInteger(state.page) ? Math.max(0, state.page as number) : defaultFamilyState.page;
+      pageSize = [25, 50, 100, 250].includes(state.pageSize ?? -1)
+        ? (state.pageSize as number)
+        : defaultFamilyState.pageSize;
+      sortField = (state.sortField as SortField) ?? defaultFamilyState.sortField;
+      sortDir = state.sortDir === 'desc' ? 'desc' : 'asc';
+    } catch {
+      // ignore malformed saved state
+    }
+  }
+
+  function persistListState(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const state: FamilyListState = {
+      searchText,
+      page,
+      pageSize,
+      sortField,
+      sortDir
+    };
+    localStorage.setItem(FAMILY_LIST_STATE_KEY, JSON.stringify(state));
+  }
+
+  function resetListView(): void {
+    searchText = defaultFamilyState.searchText;
+    page = defaultFamilyState.page;
+    pageSize = defaultFamilyState.pageSize;
+    sortField = defaultFamilyState.sortField;
+    sortDir = defaultFamilyState.sortDir;
+    void loadPage(true);
+  }
+
+  $: searchText, page, pageSize, sortField, sortDir, persistListState();
+
   onMount(async () => {
+    restoreListState();
     await loadPage();
   });
 </script>
@@ -115,6 +183,7 @@
         <option value={250}>250</option>
       </select>
     </label>
+    <button type="button" class="btn-secondary" on:click={resetListView}>Reset view</button>
   </div>
 
   {#if error}

@@ -14,6 +14,23 @@
 
   type SortField = 'name' | 'birth_year' | 'death_year' | 'assertion_count';
 
+  type PersonListState = {
+    searchText: string;
+    page: number;
+    pageSize: number;
+    sortField: SortField;
+    sortDir: 'asc' | 'desc';
+  };
+
+  const PERSON_LIST_STATE_KEY = 'rg:list:persons:v1';
+  const defaultPersonState: PersonListState = {
+    searchText: '',
+    page: 0,
+    pageSize: 50,
+    sortField: 'name',
+    sortDir: 'asc'
+  };
+
   let people: PersonRow[] = [];
   let total = 0;
   let error = '';
@@ -83,7 +100,60 @@
     void fetchPage(true);
   }
 
-  onMount(async () => { await fetchPage(); });
+  function restoreListState(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const raw = localStorage.getItem(PERSON_LIST_STATE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    try {
+      const state = JSON.parse(raw) as Partial<PersonListState>;
+      searchText = state.searchText ?? defaultPersonState.searchText;
+      page = Number.isInteger(state.page) ? Math.max(0, state.page as number) : defaultPersonState.page;
+      pageSize = [25, 50, 100, 250].includes(state.pageSize ?? -1)
+        ? (state.pageSize as number)
+        : defaultPersonState.pageSize;
+      sortField = (state.sortField as SortField) ?? defaultPersonState.sortField;
+      sortDir = state.sortDir === 'desc' ? 'desc' : 'asc';
+    } catch {
+      // ignore malformed saved state
+    }
+  }
+
+  function persistListState(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const state: PersonListState = {
+      searchText,
+      page,
+      pageSize,
+      sortField,
+      sortDir
+    };
+    localStorage.setItem(PERSON_LIST_STATE_KEY, JSON.stringify(state));
+  }
+
+  function resetListView(): void {
+    searchText = defaultPersonState.searchText;
+    page = defaultPersonState.page;
+    pageSize = defaultPersonState.pageSize;
+    sortField = defaultPersonState.sortField;
+    sortDir = defaultPersonState.sortDir;
+    void fetchPage(true);
+  }
+
+  $: searchText, page, pageSize, sortField, sortDir, persistListState();
+
+  onMount(async () => {
+    restoreListState();
+    await fetchPage();
+  });
 </script>
 
 <main class="panel">
@@ -109,6 +179,7 @@
         <option value={250}>250</option>
       </select>
     </label>
+    <button type="button" class="btn-secondary" on:click={resetListView}>Reset view</button>
   </div>
 
   {#if error}
