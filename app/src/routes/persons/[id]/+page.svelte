@@ -93,9 +93,10 @@
   let openResearchEntries = 0;
   $: timelineRows = detail?.events ?? [];
   $: familyRows = detail?.families ?? [];
+  $: flatCitations = flattenCitations(detail);
 
-  function flattenCitations(): string[] {
-    const names = detail?.names ?? [];
+  function flattenCitations(personDetail: PersonDetail | null): string[] {
+    const names = personDetail?.names ?? [];
     const values = names.flatMap((name) => name.sources ?? []);
     if (values.length === 0) {
       return [];
@@ -254,7 +255,7 @@
       kind: 'event' as const
     }));
 
-    const sourceNodes = flattenCitations().map((citationId) => ({
+    const sourceNodes = flattenCitations(detail).map((citationId) => ({
       id: `source-${citationId}`,
       label: citationSourceTitle(citationId),
       href: withNavContext(`/sources/${citationId}`),
@@ -482,17 +483,7 @@
           {#if detail.names[0]?.confidence}
             <span class="badge badge-confidence">Confidence {Math.round(detail.names[0].confidence * 100)}%</span>
           {/if}
-          {#each (() => {
-            const pts = [
-              detail.names.length > 0,
-              !!birthEvent(),
-              !!deathEvent(),
-              detail.gender_assertions.length > 0,
-              flattenCitations().length > 0
-            ];
-            const score = pts.filter(Boolean).length;
-            return [{ score, total: pts.length }];
-          })() as c}
+          {#each [{ score: [detail.names.length > 0, !!birthEvent(), !!deathEvent(), detail.gender_assertions.length > 0, flatCitations.length > 0].filter(Boolean).length, total: 5 }] as c}
             <span class="badge badge-completeness {c.score === c.total ? 'badge-complete' : c.score > 2 ? 'badge-partial' : 'badge-low'}">
               {c.score}/{c.total} fields
             </span>
@@ -631,13 +622,13 @@
     <details class="section-card">
       <summary class="section-title section-toggle">
         Sources &amp; evidence
-        <span class="count-badge">{flattenCitations().length}</span>
+        <span class="count-badge">{flatCitations.length}</span>
       </summary>
-      {#if flattenCitations().length === 0}
+      {#if flatCitations.length === 0}
         <p class="section-empty">No citations linked yet — add evidence to strengthen this profile.</p>
       {:else}
         <ul class="list">
-          {#each flattenCitations() as citation}
+          {#each flatCitations as citation (citation)}
             <li>
               <button type="button" class="linkish" on:click={() => goto(withNavContext(`/sources/${citation}`))}>
                 {citationSourceTitle(citation)}

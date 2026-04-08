@@ -93,6 +93,7 @@
   }
 
   function assertionCount(row: PersonRow): number {
+    if (!row.assertion_counts) return 0;
     return Object.values(row.assertion_counts).reduce((sum, v) => sum + v, 0);
   }
 
@@ -210,7 +211,7 @@
         {#if people.length === 0}
           <tr><td colspan="4" class="empty">No persons found.</td></tr>
         {:else}
-          {#each people as person}
+          {#each people as person (person.id)}
             <tr on:click={() => goto(`/persons/${person.id}`)}>
               <td>{person.display_name}</td>
               <td>{person.birth_year ?? '—'}</td>
