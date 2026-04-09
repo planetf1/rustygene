@@ -4,6 +4,7 @@ use reqwest::StatusCode;
 use rusqlite::Connection;
 use rustygene_api::{start_server, AppState};
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
+use rustygene_core::evidence::CitationRef;
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
 use rustygene_core::person::{NameType, Person, PersonName, Surname, SurnameOrigin};
 use rustygene_core::types::{ActorRef, Calendar, DateValue, EntityId, FuzzyDate, Gender};
@@ -469,6 +470,80 @@ async fn list_persons_includes_aggregated_assertion_counts_and_event_years() {
             .get("gender")
             .and_then(serde_json::Value::as_u64),
         Some(1)
+    );
+
+    server.shutdown().await.expect("shutdown server");
+}
+
+#[tokio::test]
+async fn person_assertions_endpoint_deduplicates_duplicate_citation_refs() {
+    let backend = in_memory_backend();
+
+    let person = Person {
+        id: EntityId::new(),
+        names: Vec::new(),
+        gender: Gender::Unknown,
+        living: false,
+        private: false,
+        original_xref: None,
+        _raw_gedcom: Default::default(),
+    };
+    backend.create_person(&person).await.expect("create person");
+
+    let duplicated_ref = CitationRef {
+        citation_id: EntityId::new(),
+        note: Some("same-source".to_string()),
+    };
+
+    backend
+        .create_assertion(
+            person.id,
+            EntityType::Person,
+            "occupation",
+            &JsonAssertion {
+                id: EntityId::new(),
+                value: serde_json::json!("Carpenter"),
+                confidence: 0.9,
+                status: AssertionStatus::Confirmed,
+                evidence_type: EvidenceType::Direct,
+                source_citations: vec![duplicated_ref.clone(), duplicated_ref],
+                proposed_by: ActorRef::User("test".to_string()),
+                created_at: chrono::Utc::now(),
+                reviewed_at: None,
+                reviewed_by: None,
+            },
+        )
+        .await
+        .expect("create assertion with duplicate citation refs");
+
+    let state = AppState::with_default_cors(backend, 0).expect("build app state");
+    let server = start_server(state, 0).await.expect("start server");
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "http://{}/api/v1/persons/{}/assertions",
+            server.local_addr, person.id
+        ))
+        .send()
+        .await
+        .expect("get person assertions");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await.expect("parse assertions response");
+    let occupation_assertions = body
+        .get("occupation")
+        .and_then(serde_json::Value::as_array)
+        .expect("occupation assertions array");
+    assert_eq!(occupation_assertions.len(), 1);
+
+    let sources = occupation_assertions[0]
+        .get("sources")
+        .and_then(serde_json::Value::as_array)
+        .expect("sources array");
+    assert_eq!(
+        sources.len(),
+        1,
+        "duplicate citation refs should be collapsed in API response"
     );
 
     server.shutdown().await.expect("shutdown server");

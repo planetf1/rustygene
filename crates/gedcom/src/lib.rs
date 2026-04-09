@@ -2248,10 +2248,12 @@ fn citations_for_root(
     owner_tag: &str,
     owner_xref: Option<&str>,
 ) -> Vec<CitationRef> {
-    refs.iter()
+    dedupe_citation_refs(
+        refs.iter()
         .filter(|entry| entry.owner_tag == owner_tag && entry.owner_xref.as_deref() == owner_xref)
         .map(|entry| entry.citation_ref.clone())
-        .collect()
+        .collect(),
+    )
 }
 
 fn citations_for_node(
@@ -2260,14 +2262,26 @@ fn citations_for_node(
     root_xref: Option<&str>,
     owner_tag: &str,
 ) -> Vec<CitationRef> {
-    refs.iter()
+    dedupe_citation_refs(
+        refs.iter()
         .filter(|entry| {
             entry.root_tag == root_tag
                 && entry.root_xref.as_deref() == root_xref
                 && entry.owner_tag == owner_tag
         })
         .map(|entry| entry.citation_ref.clone())
-        .collect()
+        .collect(),
+    )
+}
+
+fn dedupe_citation_refs(citation_refs: Vec<CitationRef>) -> Vec<CitationRef> {
+    let mut unique = Vec::with_capacity(citation_refs.len());
+    for citation_ref in citation_refs {
+        if !unique.contains(&citation_ref) {
+            unique.push(citation_ref);
+        }
+    }
+    unique
 }
 
 fn date_value_to_json(date: &DateValue) -> Value {
@@ -5487,6 +5501,56 @@ mod tests {
         assert_eq!(mapped.citations.len(), 1);
         assert_eq!(mapped.citations[0].source_id, mapped.sources[0].id);
         assert_eq!(mapped.citations[0].page.as_deref(), Some("p.12"));
+    }
+
+    #[test]
+    fn citations_for_root_deduplicates_identical_refs() {
+        let citation_id = EntityId::new();
+        let citation_ref = CitationRef {
+            citation_id,
+            note: Some("same".to_string()),
+        };
+        let refs = vec![
+            EntityCitationRef {
+                owner_tag: "INDI".to_string(),
+                owner_xref: Some("@I1@".to_string()),
+                citation_ref: citation_ref.clone(),
+            },
+            EntityCitationRef {
+                owner_tag: "INDI".to_string(),
+                owner_xref: Some("@I1@".to_string()),
+                citation_ref,
+            },
+        ];
+
+        let deduped = citations_for_root(&refs, "INDI", Some("@I1@"));
+        assert_eq!(deduped.len(), 1);
+    }
+
+    #[test]
+    fn citations_for_node_deduplicates_identical_refs() {
+        let citation_id = EntityId::new();
+        let citation_ref = CitationRef {
+            citation_id,
+            note: Some("same".to_string()),
+        };
+        let refs = vec![
+            NodeCitationRef {
+                root_tag: "INDI".to_string(),
+                root_xref: Some("@I1@".to_string()),
+                owner_tag: "BIRT".to_string(),
+                citation_ref: citation_ref.clone(),
+            },
+            NodeCitationRef {
+                root_tag: "INDI".to_string(),
+                root_xref: Some("@I1@".to_string()),
+                owner_tag: "BIRT".to_string(),
+                citation_ref,
+            },
+        ];
+
+        let deduped = citations_for_node(&refs, "INDI", Some("@I1@"), "BIRT");
+        assert_eq!(deduped.len(), 1);
     }
 
     #[test]

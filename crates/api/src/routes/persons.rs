@@ -510,7 +510,7 @@ async fn get_person_assertions(
                 status: record.assertion.status.clone(),
                 confidence: record.assertion.confidence,
                 evidence_type: record.assertion.evidence_type.clone(),
-                sources: record.assertion.source_citations.clone(),
+                sources: dedupe_citation_refs(record.assertion.source_citations),
             });
     }
 
@@ -882,4 +882,16 @@ fn json_assertion<T: serde::Serialize>(
         reviewed_at: None,
         reviewed_by: None,
     })
+}
+
+fn dedupe_citation_refs(
+    citation_refs: Vec<rustygene_core::evidence::CitationRef>,
+) -> Vec<rustygene_core::evidence::CitationRef> {
+    let mut unique = Vec::with_capacity(citation_refs.len());
+    for citation_ref in citation_refs {
+        if !unique.contains(&citation_ref) {
+            unique.push(citation_ref);
+        }
+    }
+    unique
 }
