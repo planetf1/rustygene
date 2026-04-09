@@ -456,9 +456,9 @@ pub fn build_router(state: AppState) -> Router {
 
     // TODO (bead ahk): Also register the /ready route here once the handler
     // is implemented (see `ready_handler` note at the bottom of this file):
-    //     .route("/api/v1/ready", get(ready_handler))
     Router::new()
         .route("/api/v1/health", get(health_handler))
+        .route("/api/v1/ready", get(ready_handler))
         .nest("/api/v1/persons", routes::persons::router())
         .nest("/api/v1/families", routes::families::router())
         .nest(
@@ -560,6 +560,34 @@ async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
     })
+}
+
+/// # Readiness probe — `GET /api/v1/ready`
+async fn ready_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Some(backend) = &state.sqlite_backend {
+        backend
+            .with_connection(|conn| {
+                conn.execute_batch("SELECT 1").map_err(|e| {
+                    rustygene_storage::StorageError {
+                        code: rustygene_storage::StorageErrorCode::Backend,
+                        message: format!("readiness check failed: {e}"),
+                    }
+                })
+            })
+            .map_err(|err| ApiError::Unavailable {
+                message: format!("database not ready: {}", err.message),
+                details: None,
+            })?;
+    } else {
+        return Err(ApiError::Unavailable {
+            message: "sqlite backend not initialised; check RUSTYGENE_DB_PATH is set".to_string(),
+            details: None,
+        });
+    }
+
+    Ok(Json(serde_json::json!({ "status": "ready" })))
 }
 
 // ---------------------------------------------------------------------------

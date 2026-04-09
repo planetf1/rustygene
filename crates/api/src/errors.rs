@@ -106,6 +106,10 @@ pub enum ApiError {
         message: String,
         details: Option<serde_json::Value>,
     },
+    Unavailable {
+        message: String,
+        details: Option<serde_json::Value>,
+    },
     StorageError(StorageError),
 }
 
@@ -142,7 +146,8 @@ impl ApiError {
             | Self::BadRequest { details: d, .. }
             | Self::Unauthorized { details: d, .. }
             | Self::Forbidden { details: d, .. }
-            | Self::InternalError { details: d, .. } => {
+            | Self::InternalError { details: d, .. }
+            | Self::Unavailable { details: d, .. } => {
                 *d = Some(details);
             }
             Self::StorageError(_) => {} // StorageError doesn't support details yet
@@ -157,7 +162,8 @@ impl ApiError {
             | Self::BadRequest { message, .. }
             | Self::Unauthorized { message, .. }
             | Self::Forbidden { message, .. }
-            | Self::InternalError { message, .. } => message.clone(),
+            | Self::InternalError { message, .. }
+            | Self::Unavailable { message, .. } => message.clone(),
             Self::StorageError(err) => err.message.clone(),
         }
     }
@@ -170,6 +176,7 @@ impl ApiError {
             Self::Unauthorized { .. } => "unauthorized",
             Self::Forbidden { .. } => "forbidden",
             Self::InternalError { .. } => "internal",
+            Self::Unavailable { .. } => "unavailable",
             Self::StorageError(err) => match err.code {
                 StorageErrorCode::NotFound => "not_found",
                 StorageErrorCode::Conflict => "conflict",
@@ -186,7 +193,8 @@ impl ApiError {
             | Self::BadRequest { details, .. }
             | Self::Unauthorized { details, .. }
             | Self::Forbidden { details, .. }
-            | Self::InternalError { details, .. } => details.clone(),
+            | Self::InternalError { details, .. }
+            | Self::Unavailable { details, .. } => details.clone(),
             Self::StorageError(_) => None,
         }
     }
@@ -199,6 +207,7 @@ impl ApiError {
             Self::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
             Self::Forbidden { .. } => StatusCode::FORBIDDEN,
             Self::InternalError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Unavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::StorageError(err) => match err.code {
                 StorageErrorCode::NotFound => StatusCode::NOT_FOUND,
                 StorageErrorCode::Conflict => StatusCode::CONFLICT,
