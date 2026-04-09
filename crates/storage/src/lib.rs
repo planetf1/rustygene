@@ -162,13 +162,13 @@ pub struct JsonExportManifest {
     pub entity_counts: BTreeMap<String, usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct JsonExportResult {
     pub manifest: JsonExportManifest,
     pub output_path: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct JsonImportReport {
     pub manifest: JsonExportManifest,
     pub entities_imported_by_type: BTreeMap<String, usize>,

@@ -407,6 +407,10 @@ impl AppState {
     }
 }
 
+/// Response body for `GET /api/v1/health`.
+/// Bead `ahk` splits liveness from readiness:
+/// - **`/health`** (this handler) answers "is the process alive?" → always 200.
+/// - **`/ready`** (NEW, see below) answers "is the DB ready?" → 200 or 503.
 #[derive(Debug, Clone, Serialize)]
 struct HealthResponse {
     status: &'static str,
@@ -454,6 +458,9 @@ pub fn build_router(state: AppState) -> Router {
         .allow_headers(AllowHeaders::any())
         .allow_origin(AllowOrigin::list(allowed_origins));
 
+    // TODO (bead ahk): Also register the /ready route here once the handler
+    // is implemented (see `ready_handler` note at the bottom of this file):
+    //     .route("/api/v1/ready", get(ready_handler))
     Router::new()
         .route("/api/v1/health", get(health_handler))
         .nest("/api/v1/persons", routes::persons::router())
@@ -544,6 +551,13 @@ pub async fn start_server(state: AppState, port: u16) -> Result<ServerHandle, Ap
     })
 }
 
+/// # Liveness probe — `GET /api/v1/health`
+///
+/// Returns 200 as long as the HTTP process is running, regardless of whether
+/// the database is accessible.  Kubernetes / container runtimes use this to
+/// decide whether to *restart* the pod.
+///
+/// **Bead `ahk` — this handler is complete; do not add DB checks here.**
 async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
     let _ = state;
     Json(HealthResponse {
@@ -551,3 +565,78 @@ async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
         version: env!("CARGO_PKG_VERSION"),
     })
 }
+
+// ---------------------------------------------------------------------------
+// TODO (bead `ahk`): Implement `GET /api/v1/ready` — Readiness probe
+// ---------------------------------------------------------------------------
+//
+// A readiness probe answers: "is the server ready to serve traffic?"
+// It must check that the SQLite storage layer is usable (e.g. migrations have
+// run, the DB file is readable/writable).
+//
+// Contract required by bead `ahk`:
+//   200 OK  + `{ "status": "ready" }` when the DB is available.
+//   503     + standard error envelope when the DB is not yet ready:
+//             `{ "error": { "type": "unavailable",
+//                           "message": "database not ready: <reason>",
+//                           "details": null } }`
+//
+// Implementation sketch:
+// ```rust
+// async fn ready_handler(
+//     State(state): State<AppState>,
+// ) -> Result<Json<serde_json::Value>, ApiError> {
+//     // Attempt a cheap DB operation such as `PRAGMA integrity_check`
+//     // or a trivial `SELECT 1` to confirm the connection is viable.
+//     if let Some(backend) = &state.sqlite_backend {
+//         backend
+//             .with_connection(|conn| {
+//                 conn.execute_batch("SELECT 1").map_err(|e| {
+//                     rustygene_storage::StorageError {
+//                         code: rustygene_storage::StorageErrorCode::Backend,
+//                         message: format!("readiness check failed: {e}"),
+//                     }
+//                 })
+//             })
+//             .map_err(ApiError::from)?;
+//     } else {
+//         return Err(ApiError::InternalError(
+//             "sqlite backend not initialised; check RUSTYGENE_DB_PATH is set".into(),
+//         ));
+//     }
+//     Ok(Json(serde_json::json!({ "status": "ready" })))
+// }
+// ```
+//
+// After implementing:
+// 1. Register the route in `build_router` (see TODO comment above).
+// 2. Write an integration test that:
+//    a. Starts the server with a valid backend → asserts GET /api/v1/ready → 200.
+//    b. Starts the server without a backend (None) → asserts 503 with the
+//       standard error envelope shape.
+// 3. Run `cargo test -p rustygene-api` and confirm it passes.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// TODO (bead `ahk`): Improve startup diagnostics
+// ---------------------------------------------------------------------------
+//
+// Currently, if `RUSTYGENE_DB_PATH` is not set or the given path is not
+// writable, the API silently starts with `sqlite_backend: None` and any
+// attempt to use storage returns a generic "sqlite backend not available"
+// error.  Operators waste time guessing what is wrong.
+//
+// Required changes (bead `ahk`):
+// 1. In the binary entry-point (`crates/api/src/bin/`), validate critical
+//    config at startup:
+//      - `RUSTYGENE_DB_PATH` is set and the directory exists/is writable.
+//      - SQLite can open the file (run `PRAGMA user_version` or similar).
+//      - Pending migrations complete successfully.
+//    If any check fails, print an actionable message to **stderr** and exit
+//    with a non-zero code, e.g.:
+//      `[FATAL] Cannot open database at /data/rustygene.db: Permission denied.
+//              Fix: ensure the process user has read-write access to /data/.
+//              Exiting.`
+// 2. Do NOT suppress the error and continue — that turns a config mistake
+//    into a confusing runtime failure minutes later.
+// ---------------------------------------------------------------------------
