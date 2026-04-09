@@ -807,3 +807,76 @@ async fn list_persons_sql_filter_sort_and_pagination_work() {
 
     server.shutdown().await.ok();
 }
+
+#[tokio::test]
+async fn list_persons_q_filter_reports_total_before_pagination() {
+    let backend = in_memory_backend();
+
+    let make_person = |given: &str, surname: &str| Person {
+        id: EntityId::new(),
+        names: vec![PersonName {
+            name_type: NameType::Birth,
+            date_range: None,
+            given_names: given.to_string(),
+            call_name: None,
+            surnames: vec![Surname {
+                value: surname.to_string(),
+                origin_type: SurnameOrigin::Patrilineal,
+                connector: None,
+            }],
+            prefix: None,
+            suffix: None,
+            sort_as: None,
+        }],
+        gender: Gender::Unknown,
+        living: false,
+        private: false,
+        original_xref: None,
+        _raw_gedcom: Default::default(),
+    };
+
+    backend
+        .create_person(&make_person("Alice", "Smith"))
+        .await
+        .expect("create smith 1");
+    backend
+        .create_person(&make_person("Bob", "Smith"))
+        .await
+        .expect("create smith 2");
+    backend
+        .create_person(&make_person("Carol", "Jones"))
+        .await
+        .expect("create jones");
+
+    let state = AppState::with_default_cors(backend, 0).expect("build app state");
+    let server = start_server(state, 0).await.expect("start server");
+    let client = reqwest::Client::new();
+
+    let resp: serde_json::Value = client
+        .get(format!(
+            "http://{}/api/v1/persons?q=Smith&limit=1&offset=0&sort=name&dir=asc",
+            server.local_addr
+        ))
+        .send()
+        .await
+        .expect("request filtered persons")
+        .json()
+        .await
+        .expect("parse filtered persons");
+
+    assert_eq!(resp["total"].as_u64(), Some(2), "total should be pre-pagination");
+    assert_eq!(
+        resp["items"].as_array().map(|v| v.len()),
+        Some(1),
+        "limit=1 should return one row"
+    );
+    let first_name = resp["items"][0]["display_name"]
+        .as_str()
+        .expect("display_name string");
+    assert!(
+        first_name.to_ascii_lowercase().contains("smith"),
+        "filtered row must match q=Smith, got {first_name}"
+    );
+
+    server.shutdown().await.ok();
+}

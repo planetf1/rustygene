@@ -157,7 +157,7 @@
   });
 </script>
 
-<main class="panel">
+<main class="panel" data-testid="persons-page">
   <header class="header">
     <h1>Persons</h1>
     <button type="button" class="btn-primary" on:click={() => (showCreatePanel = true)}>+ New Person</button>
@@ -170,10 +170,16 @@
       placeholder="Search by name…"
       type="search"
       class="search-input"
+      data-testid="persons-search-input"
     />
     <label class="page-size-label">
       Show
-      <select bind:value={pageSize} on:change={onPageSizeChange} class="page-size-select">
+      <select
+        bind:value={pageSize}
+        on:change={onPageSizeChange}
+        class="page-size-select"
+        data-testid="persons-page-size-select"
+      >
         <option value={25}>25</option>
         <option value={50}>50</option>
         <option value={100}>100</option>
@@ -212,8 +218,8 @@
           <tr><td colspan="4" class="empty">No persons found.</td></tr>
         {:else}
           {#each people as person (person.id)}
-            <tr on:click={() => goto(`/persons/${person.id}`)}>
-              <td>{person.display_name}</td>
+            <tr on:click={() => goto(`/persons/${person.id}`)} data-testid="person-row" data-person-id={person.id}>
+              <td data-testid="person-display-name">{person.display_name}</td>
               <td>{person.birth_year ?? '—'}</td>
               <td>{person.death_year ?? '—'}</td>
               <td>{assertionCount(person)}</td>

@@ -160,7 +160,7 @@
   });
 </script>
 
-<main class="panel">
+<main class="panel" data-testid="families-page">
   <header class="header">
     <h1>Families</h1>
     <button type="button" class="btn-primary" on:click={() => (showCreate = true)}>+ New family</button>
@@ -173,6 +173,7 @@
       placeholder="Search by partner name…"
       type="search"
       class="search-input"
+      data-testid="families-search-input"
     />
     <label class="page-size-label">
       Show
@@ -206,10 +207,10 @@
           <tr><td colspan="3" class="empty">No families found.</td></tr>
         {:else}
           {#each families as family}
-            <tr on:click={() => goto(`/families/${family.id}`)}>
+            <tr on:click={() => goto(`/families/${family.id}`)} data-testid="family-row" data-family-id={family.id}>
               <td>{familyLabel(family)}</td>
               <td>{marriageYear(family)}</td>
-              <td>{family.children.length}</td>
+              <td data-testid="family-children-count">{family.children.length}</td>
             </tr>
           {/each}
         {/if}

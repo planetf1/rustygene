@@ -314,7 +314,7 @@
 {#if loading}
   <p>Loading family profile…</p>
 {:else if error}
-  <main class="panel">
+  <main class="panel" data-testid="family-detail-page">
     <h1>🏡 Family profile</h1>
     <p class="error">{error}</p>
   </main>
@@ -404,7 +404,7 @@
       </div>
     </section>
 
-    <section>
+    <section data-testid="family-children-section">
       <h2>🧒 Children</h2>
       <ul class="list">
         {#if detail.children.length === 0}
@@ -412,7 +412,12 @@
         {:else}
           {#each detail.children as child}
             <li>
-              <button type="button" class="linkish" on:click={() => goto(withNavContext(`/persons/${child.id}`))}>{child.display_name}</button>
+              <button
+                type="button"
+                class="linkish"
+                data-testid="family-child-name"
+                on:click={() => goto(withNavContext(`/persons/${child.id}`))}
+              >{child.display_name}</button>
               <span class="muted">({child.lineage_type})</span>
               <button type="button" class="small danger" on:click={() => removeChild(child.id)}>Remove link</button>
             </li>
