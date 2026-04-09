@@ -71,6 +71,10 @@ pub fn router() -> Router<AppState> {
         .route("/:id/families", get(get_person_families))
 }
 
+/// List persons with pagination, sorting, and name filtering.
+///
+/// Returns a summaries of persons, including display name, birth/death years,
+/// and assertion counts. This handler uses optimized SQL to avoid N+1 queries.
 async fn list_persons(
     State(state): State<AppState>,
     Query(query): Query<PersonsQuery>,
@@ -335,6 +339,10 @@ fn extract_event_year(event: &Event) -> Option<i32> {
     }
 }
 
+/// Create a new person entity with an initial name and optional gender.
+///
+/// This creates a bare Person record and populates initial confirmed assertions
+/// for the provided name and gender fields.
 async fn create_person(
     State(state): State<AppState>,
     Json(request): Json<CreatePersonRequest>,
@@ -384,6 +392,9 @@ async fn create_person(
     ))
 }
 
+/// Fetch full details for a specific person by unique ID.
+///
+/// Includes names, timeline events, gender assertions, and family memberships.
 async fn get_person(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -406,6 +417,7 @@ async fn get_person(
     }))
 }
 
+/// Update a person's core data by adding a new name or gender assertion.
 async fn update_person(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -450,6 +462,7 @@ async fn update_person(
     Ok(Json(CreatedPersonResponse { id: person_id }))
 }
 
+/// Delete a person entity and all associated assertions.
 async fn delete_person(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -461,6 +474,7 @@ async fn delete_person(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// List all assertions (claims) recorded for a specific person.
 async fn get_person_assertions(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -491,6 +505,7 @@ async fn get_person_assertions(
     Ok(Json(grouped))
 }
 
+/// Propose a new assertion for a person (e.g., a new name, occupation, or birth fact).
 async fn create_person_assertion(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -541,6 +556,7 @@ async fn create_person_assertion(
     ))
 }
 
+/// Update an existing assertion's status, confidence, or preferred flag.
 async fn update_person_assertion(
     State(state): State<AppState>,
     Path((id, assertion_id)): Path<(String, String)>,

@@ -48,6 +48,9 @@ pub fn router() -> Router<AppState> {
         .route("/:id/assertions", get(get_family_assertions))
 }
 
+/// List families with pagination, search, and sorting.
+///
+/// Returns a list of families, including partner summaries and child counts.
 async fn list_families(
     State(state): State<AppState>,
     Query(query): Query<FamiliesQuery>,
@@ -187,6 +190,10 @@ async fn list_families(
     Ok(Json(FamilyListResponse { total, items }))
 }
 
+/// Create a new family unit linking partners and children.
+///
+/// This creates a Family record and also creates a Relationship record
+/// if both partners are specified.
 async fn create_family(
     State(state): State<AppState>,
     Json(request): Json<CreateFamilyRequest>,
@@ -235,6 +242,9 @@ async fn create_family(
     ))
 }
 
+/// Fetch details for a specific family.
+///
+/// Includes partner names, children, marriage/event summaries, and assertion counts.
 async fn get_family(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -297,6 +307,7 @@ async fn get_family(
     }))
 }
 
+/// Update a family's partners or children.
 async fn update_family(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -333,6 +344,7 @@ async fn update_family(
     Ok(Json(serde_json::json!({ "id": family_id })))
 }
 
+/// Delete a family entity.
 async fn delete_family(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -343,6 +355,7 @@ async fn delete_family(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// List all assertions (claims) recorded for a specific family.
 async fn get_family_assertions(
     State(state): State<AppState>,
     Path(id): Path<String>,

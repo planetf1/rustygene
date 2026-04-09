@@ -54,6 +54,7 @@ pub fn router() -> Router<AppState> {
         .route("/:id/participants/:pid", delete(remove_participant))
 }
 
+/// List genealogical events with optional pagination.
 async fn list_events(
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
@@ -98,6 +99,7 @@ async fn list_events(
     Ok(Json(response))
 }
 
+/// Create a new event (e.g., Birth, Death, Marriage).
 async fn create_event(
     State(state): State<AppState>,
     Json(request): Json<CreateEventRequest>,
@@ -124,6 +126,7 @@ async fn create_event(
     ))
 }
 
+/// Fetch details for a specific event by ID.
 async fn get_event(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -159,6 +162,7 @@ async fn get_event(
     }))
 }
 
+/// Update an event's type, date, place, or description.
 async fn update_event(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -186,6 +190,7 @@ async fn update_event(
     Ok(Json(serde_json::json!({ "id": event_id })))
 }
 
+/// Delete an event entity.
 async fn delete_event(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -196,6 +201,7 @@ async fn delete_event(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Add a person as a participant in an event with a specific role.
 async fn add_participant(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -226,6 +232,7 @@ async fn add_participant(
     Ok((StatusCode::CREATED, Json(serde_json::json!({}))))
 }
 
+/// Remove a person from an event's participant list.
 async fn remove_participant(
     State(state): State<AppState>,
     Path((id, pid)): Path<(String, String)>,
@@ -243,6 +250,7 @@ async fn remove_participant(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// List all assertions (claims) recorded for a specific event.
 async fn get_event_assertions(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -273,6 +281,7 @@ async fn get_event_assertions(
     Ok(Json(grouped))
 }
 
+/// Propose a new assertion for an event (e.g., a new date or place).
 async fn create_event_assertion(
     State(state): State<AppState>,
     Path(id): Path<String>,

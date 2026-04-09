@@ -16,6 +16,14 @@ impl EntityId {
     }
 }
 
+impl FromStr for EntityId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Uuid::from_str(s).map(EntityId)
+    }
+}
+
 impl Default for EntityId {
     fn default() -> Self {
         Self::new()

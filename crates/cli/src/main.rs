@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rusqlite::Connection;
@@ -54,9 +55,17 @@ impl From<CliSearchResult> for SearchResult {
 }
 
 #[derive(serde::Serialize)]
-struct CliError {
+struct CliErrorInner {
+    #[serde(rename = "type")]
+    r#type: String,
     message: String,
-    code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
+}
+
+#[derive(serde::Serialize)]
+struct CliError {
+    error: CliErrorInner,
     #[serde(skip)]
     exit_code: i32,
 }
@@ -64,19 +73,26 @@ struct CliError {
 impl CliError {
     fn internal(msg: impl Into<String>) -> Self {
         Self {
-            message: msg.into(),
-            code: "INTERNAL_ERROR".to_string(),
+            error: CliErrorInner {
+                r#type: "internal".to_string(),
+                message: msg.into(),
+                details: None,
+            },
             exit_code: 1,
         }
     }
 
     fn user(msg: impl Into<String>) -> Self {
         Self {
-            message: msg.into(),
-            code: "USAGE_ERROR".to_string(),
+            error: CliErrorInner {
+                r#type: "usage".to_string(),
+                message: msg.into(),
+                details: None,
+            },
             exit_code: 2,
         }
     }
+
 }
 
 enum CliResponse {
@@ -98,7 +114,7 @@ struct Cli {
         visible_alias = "db-path",
         global = true,
         default_value = "~/.rustygene/rustygene.db",
-        env = "RUSTYGENE_DB"
+        env = "RUSTYGENE_DB_PATH"
     )]
     db: PathBuf,
 
@@ -255,19 +271,19 @@ enum QueryPersonSort {
 
 #[derive(Debug, Subcommand)]
 enum ShowCommands {
-    Person { id: String },
-    Family { id: String },
-    Event { id: String },
-    Source { id: String },
-    Citation { id: String },
-    Repository { id: String },
-    Note { id: String },
-    Media { id: String },
+    Person { id: EntityId },
+    Family { id: EntityId },
+    Event { id: EntityId },
+    Source { id: EntityId },
+    Citation { id: EntityId },
+    Repository { id: EntityId },
+    Note { id: EntityId },
+    Media { id: EntityId },
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 struct QueryPersonRow {
-    id: String,
+    id: EntityId,
     preferred_name: Option<String>,
     birth_date: Option<String>,
     death_date: Option<String>,
@@ -286,15 +302,15 @@ struct AssertionView {
 struct ShowPersonOutput {
     person: Person,
     assertions_by_field: BTreeMap<String, Vec<AssertionView>>,
-    linked_event_ids: Vec<String>,
-    linked_family_ids: Vec<String>,
-    linked_source_ids: Vec<String>,
+    linked_event_ids: Vec<EntityId>,
+    linked_family_ids: Vec<EntityId>,
+    linked_source_ids: Vec<EntityId>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct ShowFamilyOutput {
     family: Family,
-    linked_event_ids: Vec<String>,
+    linked_event_ids: Vec<EntityId>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -316,18 +332,18 @@ enum ResearchLogCommands {
 
         /// ID of the person this search relates to
         #[arg(short, long)]
-        person: Option<String>,
+        person: Option<EntityId>,
 
         /// ID of the repository where the search was performed
         #[arg(long)]
-        repository: Option<String>,
+        repository: Option<EntityId>,
     },
 
     /// List research log entries with optional filters
     List {
         /// Filter by specific person ID
         #[arg(short, long)]
-        person: Option<String>,
+        person: Option<EntityId>,
 
         /// Filter by specific outcome
         #[arg(short, long, value_enum)]
@@ -349,7 +365,7 @@ enum SandboxCommands {
 
         /// Optional parent sandbox ID for hierarchical branches
         #[arg(short, long)]
-        parent: Option<String>,
+        parent: Option<EntityId>,
     },
 
     /// List all defined sandboxes
@@ -359,11 +375,11 @@ enum SandboxCommands {
     Compare {
         /// Sandbox ID
         #[arg(short, long)]
-        sandbox: String,
+        sandbox: EntityId,
 
         /// Entity ID to compare
         #[arg(short, long)]
-        entity: String,
+        entity: EntityId,
 
         /// Entity type (person, family, etc.)
         #[arg(long, value_enum, default_value_t = SandboxEntityType::Person)]
@@ -417,7 +433,7 @@ enum StagingCommands {
     Accept {
         /// Assertion ID
         #[arg(index = 1)]
-        id: String,
+        id: EntityId,
 
         /// Name of the person performing the review
         #[arg(short, long)]
@@ -428,7 +444,7 @@ enum StagingCommands {
     Reject {
         /// Assertion ID
         #[arg(index = 1)]
-        id: String,
+        id: EntityId,
 
         /// Name of the person performing the review
         #[arg(short, long)]
@@ -560,7 +576,7 @@ fn render_result(result: Result<CliResponse, CliError>, format: OutputFormat) {
         Err(err) => {
             match format {
                 OutputFormat::Text => {
-                    eprintln!("error: {}", err.message);
+                    eprintln!("error: {}", err.error.message);
                 }
                 OutputFormat::Json => {
                     eprintln!("{}", serde_json::to_string_pretty(&err).unwrap());
@@ -635,22 +651,22 @@ struct PersonMergeRecord {
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct MergeMatchRow {
-    incoming_person_id: String,
-    matched_person_id: String,
+    incoming_person_id: EntityId,
+    matched_person_id: EntityId,
     key: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct MergeAmbiguousRow {
-    incoming_person_id: String,
-    candidate_person_ids: Vec<String>,
+    incoming_person_id: EntityId,
+    candidate_person_ids: Vec<EntityId>,
     key: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct MergePlan {
     matches: Vec<MergeMatchRow>,
-    new_person_ids: Vec<String>,
+    new_person_ids: Vec<EntityId>,
     ambiguous: Vec<MergeAmbiguousRow>,
 }
 
@@ -793,25 +809,25 @@ fn build_merge_plan(existing: &[PersonMergeRecord], incoming: &[PersonMergeRecor
 
     for incoming_person in incoming {
         if incoming_person.key.trim_matches('|').is_empty() {
-            plan.new_person_ids.push(incoming_person.id.to_string());
+            plan.new_person_ids.push(incoming_person.id);
             continue;
         }
 
         match existing_by_key.get(&incoming_person.key) {
             None => {
-                plan.new_person_ids.push(incoming_person.id.to_string());
+                plan.new_person_ids.push(incoming_person.id);
             }
             Some(matches) if matches.len() == 1 => {
                 plan.matches.push(MergeMatchRow {
-                    incoming_person_id: incoming_person.id.to_string(),
-                    matched_person_id: matches[0].id.to_string(),
+                    incoming_person_id: incoming_person.id,
+                    matched_person_id: matches[0].id,
                     key: incoming_person.key.clone(),
                 });
             }
             Some(matches) => {
                 plan.ambiguous.push(MergeAmbiguousRow {
-                    incoming_person_id: incoming_person.id.to_string(),
-                    candidate_person_ids: matches.iter().map(|p| p.id.to_string()).collect(),
+                    incoming_person_id: incoming_person.id,
+                    candidate_person_ids: matches.iter().map(|p| p.id).collect(),
                     key: incoming_person.key.clone(),
                 });
             }
@@ -903,9 +919,9 @@ fn run_import_command(
                 })?;
 
                 let plan = build_merge_plan(&existing, &incoming);
-                let incoming_by_id: BTreeMap<String, PersonMergeRecord> = incoming
+                let incoming_by_id: BTreeMap<EntityId, PersonMergeRecord> = incoming
                     .into_iter()
-                    .map(|r| (r.id.to_string(), r))
+                    .map(|r| (r.id, r))
                     .collect();
 
                 let runtime = tokio::runtime::Builder::new_current_thread()
@@ -919,7 +935,7 @@ fn run_import_command(
                 let mut assertions_added_to_matches = 0usize;
 
                 for new_id in &plan.new_person_ids {
-                    let Some(incoming_person) = incoming_by_id.get(new_id) else {
+                    let Some(incoming_person) = incoming_by_id.get(&new_id) else {
                         continue;
                     };
                     runtime
@@ -965,8 +981,7 @@ fn run_import_command(
                     else {
                         continue;
                     };
-                    let target_id = parse_entity_id_arg(&matched.matched_person_id)
-                        .map_err(CliError::internal)?;
+                    let target_id = matched.matched_person_id;
 
                     for (field, value) in &incoming_person.assertions {
                         let assertion = rustygene_storage::JsonAssertion {
@@ -1024,7 +1039,7 @@ fn run_import_command(
                     text.push_str(&format!(
                         "  ambiguous incoming={} candidates={} key={}\n",
                         a.incoming_person_id,
-                        a.candidate_person_ids.join(","),
+                        a.candidate_person_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                         a.key
                     ));
                 }
@@ -1367,7 +1382,7 @@ fn run_show_command(
 
     match command {
         ShowCommands::Person { id } => {
-            let id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let id = id;
             let output = build_show_person_output(&conn, id).map_err(CliError::internal)?;
 
             let mut text = format!("person: {}\nassertions:\n", output.person.id);
@@ -1382,15 +1397,15 @@ fn run_show_command(
             }
             text.push_str(&format!(
                 "linked events: {}\n",
-                output.linked_event_ids.join(",")
+                output.linked_event_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
             ));
             text.push_str(&format!(
                 "linked families: {}\n",
-                output.linked_family_ids.join(",")
+                output.linked_family_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
             ));
             text.push_str(&format!(
                 "linked sources: {}\n",
-                output.linked_source_ids.join(",")
+                output.linked_source_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
             ));
 
             Ok(CliResponse::Both {
@@ -1401,7 +1416,7 @@ fn run_show_command(
             })
         }
         ShowCommands::Family { id } => {
-            let id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let id = id;
             let output = build_show_family_output(&conn, id).map_err(CliError::internal)?;
 
             let mut text = format!("family: {}\n", output.family.id);
@@ -1410,7 +1425,7 @@ fn run_show_command(
             text.push_str(&format!("children: {}\n", output.family.child_links.len()));
             text.push_str(&format!(
                 "linked events: {}\n",
-                output.linked_event_ids.join(",")
+                output.linked_event_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
             ));
 
             Ok(CliResponse::Both {
@@ -1421,7 +1436,7 @@ fn run_show_command(
             })
         }
         ShowCommands::Event { id } => {
-            let id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let id = id;
             let output = build_show_event_output(&conn, id).map_err(CliError::internal)?;
 
             let mut text = format!("event: {}\n", output.event.id);
@@ -1436,7 +1451,7 @@ fn run_show_command(
             })
         }
         ShowCommands::Source { id } => {
-            let id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let id = id;
             let source: Source = load_entity_from_table(&conn, "sources", id, "source")
                 .map_err(CliError::internal)?;
 
@@ -1460,7 +1475,7 @@ fn run_show_command(
             })
         }
         ShowCommands::Citation { id } => {
-            let id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let id = id;
             let citation: Citation = load_entity_from_table(&conn, "citations", id, "citation")
                 .map_err(CliError::internal)?;
 
@@ -1480,7 +1495,7 @@ fn run_show_command(
             })
         }
         ShowCommands::Repository { id } => {
-            let id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let id = id;
             let repository: Repository =
                 load_entity_from_table(&conn, "repositories", id, "repository")
                     .map_err(CliError::internal)?;
@@ -1498,7 +1513,7 @@ fn run_show_command(
             })
         }
         ShowCommands::Note { id } => {
-            let id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let id = id;
             let note: Note = load_entity_from_table(&conn, "notes", id, "note")
                 .map_err(CliError::internal)?;
 
@@ -1514,7 +1529,7 @@ fn run_show_command(
             })
         }
         ShowCommands::Media { id } => {
-            let id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let id = id;
             let media: Media = load_entity_from_table(&conn, "media", id, "media")
                 .map_err(CliError::internal)?;
 
@@ -1607,9 +1622,9 @@ fn build_show_person_output(conn: &Connection, id: EntityId) -> Result<ShowPerso
     Ok(ShowPersonOutput {
         person,
         assertions_by_field,
-        linked_event_ids,
-        linked_family_ids,
-        linked_source_ids,
+        linked_event_ids: linked_event_ids.into_iter().filter_map(|s| EntityId::from_str(&s).ok()).collect(),
+        linked_family_ids: linked_family_ids.into_iter().filter_map(|s| EntityId::from_str(&s).ok()).collect(),
+        linked_source_ids: linked_source_ids.into_iter().filter_map(|s| EntityId::from_str(&s).ok()).collect(),
     })
 }
 
@@ -1644,7 +1659,7 @@ fn build_show_family_output(conn: &Connection, id: EntityId) -> Result<ShowFamil
 
     Ok(ShowFamilyOutput {
         family,
-        linked_event_ids: linked_event_ids.into_iter().collect(),
+        linked_event_ids: linked_event_ids.into_iter().filter_map(|s| EntityId::from_str(&s).ok()).collect(),
     })
 }
 
@@ -2060,7 +2075,7 @@ fn query_person_rows(
 
             let rank: f64 = row.get(4)?;
             Ok(QueryPersonRow {
-                id: row.get::<_, String>(0)?,
+                id: EntityId::from_str(&row.get::<_, String>(0)?).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 preferred_name: parse_value(row.get::<_, Option<String>>(1)?)?,
                 birth_date: parse_value(row.get::<_, Option<String>>(2)?)?,
                 death_date: parse_value(row.get::<_, Option<String>>(3)?)?,
@@ -2089,17 +2104,9 @@ fn run_research_log_command(
             person,
             repository,
         } => {
-            let person_ref = person
-                .as_deref()
-                .map(parse_entity_id_arg)
-                .transpose()
-                .map_err(CliError::user)?;
+            let person_ref = person;
 
-            let repository_ref = repository
-                .as_deref()
-                .map(parse_entity_id_arg)
-                .transpose()
-                .map_err(CliError::user)?;
+            let repository_ref = repository;
 
             let entry = ResearchLogEntry {
                 id: EntityId::new(),
@@ -2129,11 +2136,7 @@ fn run_research_log_command(
             })
         }
         ResearchLogCommands::List { person, result } => {
-            let person_ref = person
-                .as_deref()
-                .map(parse_entity_id_arg)
-                .transpose()
-                .map_err(CliError::user)?;
+            let person_ref = person;
 
             let filter = ResearchLogFilter {
                 person_ref,
@@ -2194,11 +2197,7 @@ fn run_sandbox_command(
             description,
             parent,
         } => {
-            let parent_sandbox = parent
-                .as_deref()
-                .map(parse_entity_id_arg)
-                .transpose()
-                .map_err(CliError::user)?;
+            let parent_sandbox = parent;
 
             let sandbox = Sandbox {
                 id: EntityId::new(),
@@ -2251,8 +2250,8 @@ fn run_sandbox_command(
             entity,
             entity_type,
         } => {
-            let sandbox_id = parse_entity_id_arg(&sandbox).map_err(CliError::user)?;
-            let entity_id = parse_entity_id_arg(&entity).map_err(CliError::user)?;
+            let sandbox_id = sandbox;
+            let entity_id = entity;
 
             let diffs = runtime
                 .block_on(backend.compare_sandbox_vs_trunk(
@@ -2342,7 +2341,7 @@ fn run_staging_command(
             })
         }
         StagingCommands::Accept { id, reviewer } => {
-            let proposal_id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let proposal_id = id;
 
             runtime
                 .block_on(backend.accept_staging_proposal(proposal_id, &reviewer))
@@ -2360,7 +2359,7 @@ fn run_staging_command(
             reviewer,
             reason,
         } => {
-            let proposal_id = parse_entity_id_arg(&id).map_err(CliError::user)?;
+            let proposal_id = id;
 
             runtime
                 .block_on(backend.reject_staging_proposal(
@@ -2380,13 +2379,6 @@ fn run_staging_command(
     }
 }
 
-fn parse_entity_id_arg(raw: &str) -> Result<EntityId, String> {
-    serde_json::from_str::<EntityId>(&format!("\"{}\"", raw)).map_err(|e| {
-        format!(
-            "invalid person id: '{raw}' is not a valid UUID (expected format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx): {e}"
-        )
-    })
-}
 
 fn resolve_db_path(path: &Path) -> PathBuf {
     let path_str = path.to_string_lossy();
@@ -2411,7 +2403,7 @@ mod tests {
         QueryPersonSort, ResearchLogCommands, SandboxCommands, ShowCommands, StagingCommands,
     };
     use super::{
-        build_person_match_query, parse_entity_id_arg, preserved_or_generated_xref,
+        build_person_match_query, preserved_or_generated_xref,
         resolve_db_path, resolve_person_query,
     };
     use clap::Parser;
@@ -2433,11 +2425,6 @@ mod tests {
         assert_eq!(resolved, PathBuf::from(home).join(".rustygene/test.db"));
     }
 
-    #[test]
-    fn parse_entity_id_arg_accepts_uuid() {
-        let id = parse_entity_id_arg("550e8400-e29b-41d4-a716-446655440000").expect("parse id");
-        assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
-    }
 
     #[test]
     fn clap_parses_research_log_add() {
