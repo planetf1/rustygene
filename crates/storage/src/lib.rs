@@ -339,6 +339,20 @@ pub trait Storage {
         assertion_id: EntityId,
         status: AssertionStatus,
     ) -> Result<(), StorageError>;
+    async fn update_assertion_confidence(
+        &self,
+        assertion_id: EntityId,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        confidence: f64,
+    ) -> Result<(), StorageError>;
+    async fn set_assertion_preferred(
+        &self,
+        assertion_id: EntityId,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        preferred: bool,
+    ) -> Result<(), StorageError>;
     async fn create_assertion_in_sandbox(
         &self,
         entity_id: EntityId,

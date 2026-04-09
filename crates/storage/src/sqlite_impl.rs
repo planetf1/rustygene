@@ -2795,6 +2795,125 @@ impl Storage for SqliteBackend {
         Ok(())
     }
 
+    async fn update_assertion_confidence(
+        &self,
+        assertion_id: EntityId,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        confidence: f64,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("begin confidence update transaction failed: {e}"),
+        })?;
+
+        let rows = tx
+            .execute(
+                "UPDATE assertions SET confidence = ? WHERE id = ? AND entity_id = ?",
+                rusqlite::params![
+                    confidence,
+                    assertion_id.to_string(),
+                    entity_id.to_string()
+                ],
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("update assertion confidence failed: {e}"),
+            })?;
+
+        if rows == 0 {
+            return Err(StorageError {
+                code: StorageErrorCode::NotFound,
+                message: format!("assertion not found for entity: {assertion_id}"),
+            });
+        }
+
+        Self::recompute_entity_snapshot_tx(&tx, entity_id, entity_type)?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("commit confidence update failed: {e}"),
+        })?;
+
+        Ok(())
+    }
+
+    async fn set_assertion_preferred(
+        &self,
+        assertion_id: EntityId,
+        entity_id: EntityId,
+        entity_type: EntityType,
+        preferred: bool,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("begin preferred update transaction failed: {e}"),
+        })?;
+
+        // Look up the field so we can clear other preferred assertions for same field.
+        let found: Option<String> = tx
+            .query_row(
+                "SELECT field FROM assertions WHERE id = ? AND entity_id = ?",
+                rusqlite::params![assertion_id.to_string(), entity_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("lookup assertion for preferred update failed: {e}"),
+            })?;
+
+        let field = found.ok_or(StorageError {
+            code: StorageErrorCode::NotFound,
+            message: format!("assertion not found for entity: {assertion_id}"),
+        })?;
+
+        if preferred {
+            tx.execute(
+                "UPDATE assertions
+                 SET preferred = 0
+                 WHERE entity_id = ? AND field = ? AND id != ? AND sandbox_id IS NULL",
+                rusqlite::params![entity_id.to_string(), field, assertion_id.to_string()],
+            )
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("clear existing preferred assertions failed: {e}"),
+            })?;
+        }
+
+        tx.execute(
+            "UPDATE assertions SET preferred = ? WHERE id = ? AND entity_id = ?",
+            rusqlite::params![
+                if preferred { 1i64 } else { 0i64 },
+                assertion_id.to_string(),
+                entity_id.to_string()
+            ],
+        )
+        .map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("set assertion preferred flag failed: {e}"),
+        })?;
+
+        Self::recompute_entity_snapshot_tx(&tx, entity_id, entity_type)?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("commit preferred update failed: {e}"),
+        })?;
+
+        Ok(())
+    }
+
     async fn create_assertion_in_sandbox(
         &self,
         entity_id: EntityId,

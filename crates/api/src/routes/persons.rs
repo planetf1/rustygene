@@ -6,7 +6,6 @@ use axum::response::IntoResponse;
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use chrono::Utc;
-use rusqlite::OptionalExtension;
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
 use rustygene_core::event::{Event, EventType};
 use rustygene_core::person::{Person, PersonName};
@@ -590,40 +589,15 @@ async fn update_person_assertion(
             ));
         }
 
-        let backend = state.sqlite_backend.clone().ok_or_else(|| {
-            ApiError::InternalError("assertion updates require sqlite backend".to_string())
-        })?;
-
-        backend.with_connection(|conn| {
-            let tx = conn.transaction().map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("begin assertion update transaction failed: {e}"),
-            })?;
-
-            let rows = tx
-                .execute(
-                    "UPDATE assertions SET confidence = ? WHERE id = ? AND entity_id = ?",
-                    rusqlite::params![confidence, assertion_id.to_string(), person_id.to_string()],
-                )
-                .map_err(|e| StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: format!("update assertion confidence failed: {e}"),
-                })?;
-
-            if rows == 0 {
-                return Err(StorageError {
-                    code: StorageErrorCode::NotFound,
-                    message: format!("assertion not found for person: {assertion_id}"),
-                });
-            }
-
-            tx.commit().map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("commit assertion confidence failed: {e}"),
-            })?;
-
-            Ok(())
-        })?;
+        state
+            .storage
+            .update_assertion_confidence(
+                assertion_id,
+                person_id,
+                rustygene_storage::EntityType::Person,
+                confidence,
+            )
+            .await?;
     }
 
     if let Some(status_raw) = request.status.as_deref() {
@@ -646,66 +620,15 @@ async fn update_person_assertion(
     }
 
     if let Some(preferred) = request.preferred {
-        let backend = state.sqlite_backend.clone().ok_or_else(|| {
-            ApiError::InternalError("assertion updates require sqlite backend".to_string())
-        })?;
-
-        backend.with_connection(|conn| {
-            let tx = conn.transaction().map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("begin preferred update transaction failed: {e}"),
-            })?;
-
-            let found: Option<String> = tx
-                .query_row(
-                    "SELECT field FROM assertions WHERE id = ? AND entity_id = ?",
-                    rusqlite::params![assertion_id.to_string(), person_id.to_string()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: format!("lookup assertion for preferred update failed: {e}"),
-                })?;
-
-            let field = found.ok_or(StorageError {
-                code: StorageErrorCode::NotFound,
-                message: format!("assertion not found for person: {assertion_id}"),
-            })?;
-
-            if preferred {
-                tx.execute(
-                    "UPDATE assertions
-                     SET preferred = 0
-                     WHERE entity_id = ? AND field = ? AND id != ? AND sandbox_id IS NULL",
-                    rusqlite::params![person_id.to_string(), field, assertion_id.to_string()],
-                )
-                .map_err(|e| StorageError {
-                    code: StorageErrorCode::Backend,
-                    message: format!("clear existing preferred assertions failed: {e}"),
-                })?;
-            }
-
-            tx.execute(
-                "UPDATE assertions SET preferred = ? WHERE id = ? AND entity_id = ?",
-                rusqlite::params![
-                    if preferred { 1 } else { 0 },
-                    assertion_id.to_string(),
-                    person_id.to_string()
-                ],
+        state
+            .storage
+            .set_assertion_preferred(
+                assertion_id,
+                person_id,
+                rustygene_storage::EntityType::Person,
+                preferred,
             )
-            .map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("set assertion preferred flag failed: {e}"),
-            })?;
-
-            tx.commit().map_err(|e| StorageError {
-                code: StorageErrorCode::Backend,
-                message: format!("commit preferred update failed: {e}"),
-            })?;
-
-            Ok(())
-        })?;
+            .await?;
     }
 
     state.publish_entity_updated("person", person_id, "user");

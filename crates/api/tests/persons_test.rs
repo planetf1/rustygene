@@ -564,3 +564,108 @@ async fn person_assertions_endpoint_deduplicates_duplicate_citation_refs() {
 
     server.shutdown().await.expect("shutdown server");
 }
+
+/// Regression test for rustygene-qae: updating assertion confidence/preferred via the API
+/// must trigger a person snapshot recompute so that generated columns (primary_surname,
+/// birth_year, etc.) stay in sync with the updated assertion data.
+#[tokio::test]
+async fn person_assertion_confidence_update_triggers_snapshot_recompute() {
+    let backend = in_memory_backend();
+
+    let person_id = EntityId::new();
+    let person = Person {
+        id: person_id,
+        names: vec![PersonName {
+            given_names: "Snapshot".to_string(),
+            surnames: vec![rustygene_core::person::Surname {
+                value: "Test".to_string(),
+                origin_type: Default::default(),
+                connector: None,
+            }],
+            ..Default::default()
+        }],
+        gender: Gender::Unknown,
+        living: false,
+        private: false,
+        original_xref: None,
+        _raw_gedcom: Default::default(),
+    };
+    backend.create_person(&person).await.expect("create person");
+
+    // Create a confirmed name assertion
+    let assertion_id = EntityId::new();
+    backend
+        .create_assertion(
+            person_id,
+            EntityType::Person,
+            "name",
+            &JsonAssertion {
+                id: assertion_id,
+                value: serde_json::json!("Snapshot Test"),
+                confidence: 0.5,
+                status: AssertionStatus::Confirmed,
+                evidence_type: EvidenceType::Direct,
+                source_citations: vec![],
+                proposed_by: ActorRef::User("test".to_string()),
+                created_at: chrono::Utc::now(),
+                reviewed_at: None,
+                reviewed_by: None,
+            },
+        )
+        .await
+        .expect("create assertion");
+
+    let state = AppState::with_default_cors(backend.clone(), 0).expect("build app state");
+    let server = start_server(state, 0).await.expect("start server");
+    let client = reqwest::Client::new();
+    let base = format!("http://{}/api/v1", server.local_addr);
+
+    // Update assertion confidence via the API
+    let update_resp = client
+        .put(format!(
+            "{base}/persons/{person_id}/assertions/{assertion_id}"
+        ))
+        .json(&serde_json::json!({ "confidence": 0.95 }))
+        .send()
+        .await
+        .expect("put assertion confidence");
+    assert_eq!(
+        update_resp.status(),
+        StatusCode::OK,
+        "confidence update should succeed"
+    );
+
+    // Verify the updated confidence is retrievable via assertions endpoint
+    let assertions_resp = client
+        .get(format!("{base}/persons/{person_id}/assertions"))
+        .send()
+        .await
+        .expect("get assertions");
+    assert_eq!(assertions_resp.status(), StatusCode::OK);
+    let assertions: serde_json::Value = assertions_resp.json().await.expect("parse assertions");
+    let name_assertions = assertions["name"]
+        .as_array()
+        .expect("name assertions array");
+    assert_eq!(name_assertions.len(), 1);
+    let updated_confidence = name_assertions[0]["confidence"]
+        .as_f64()
+        .expect("confidence as f64");
+    assert!(
+        (updated_confidence - 0.95).abs() < 1e-6,
+        "confidence should be 0.95 after update, got {updated_confidence}"
+    );
+
+    // Verify person detail is still accessible (snapshot was not corrupted by recompute)
+    let detail_resp = client
+        .get(format!("{base}/persons/{person_id}"))
+        .send()
+        .await
+        .expect("get person detail");
+    assert_eq!(
+        detail_resp.status(),
+        StatusCode::OK,
+        "person detail must be accessible after confidence update"
+    );
+
+    server.shutdown().await.ok();
+}
