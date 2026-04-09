@@ -88,8 +88,8 @@ enum CliResponse {
     name = "rustygene",
     version,
     about = "RustyGene CLI - A semantic genealogy tool prioritizing evidence and assertions",
-    long_about = "RustyGene is a genealogical data management system that implements a 'be-it-so' assertion-based model. It tracks genealogy as a series of documented assertions with confidence scores rather than a collection of static facts.",
-    after_help = "EXAMPLES:\n  rustygene import --format gedcom ./tree.ged\n  rustygene query person --name \"Mary Ann\" --fuzzy\n  rustygene show person 550e8400-e29b-41d4-a716-446655440000\n  rustygene export --format json --output ./dump"
+    long_about = "RustyGene CLI is a genealogical data management system that implements a 'be-it-so' assertion-based model. It tracks genealogy as a series of documented assertions with confidence scores rather than a collection of static facts.",
+    after_help = "Examples:\n  rustygene import --format gedcom ./tree.ged\n  rustygene query person --name \"Mary Ann\" --fuzzy\n  rustygene show person 550e8400-e29b-41d4-a716-446655440000\n  rustygene export --format json --output ./dump"
 )]
 struct Cli {
     /// Local SQLite database path. Created if it doesn't exist.
@@ -120,6 +120,9 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Import genealogical data from external formats (GEDCOM, etc.)
+    #[command(
+        after_help = "Examples:\n  rustygene import --format gedcom ./tree.ged\n  rustygene import --format json ./export.json --merge"
+    )]
     Import {
         /// Format of the input file
         #[arg(short, long, value_enum, value_name = "IMPORT_FORMAT")]
@@ -138,6 +141,9 @@ enum Commands {
     },
 
     /// Export the assertion database to external formats
+    #[command(
+        after_help = "Examples:\n  rustygene export --format json --output ./dump\n  rustygene export --format gedcom --redact-living"
+    )]
     Export {
         /// Format of the output file(s)
         #[arg(short, long, value_enum, value_name = "EXPORT_FORMAT")]
@@ -211,7 +217,7 @@ enum ExportFormat {
 enum QueryCommands {
     /// Search for persons by name and/or dates
     #[command(
-        after_help = "EXAMPLES:\n  rustygene query person \"Mary Ann\"\n  rustygene query person --name Smyth --fuzzy\n  rustygene query person --birth-year-from 1800 --sort-by surname"
+        after_help = "Examples:\n  rustygene query person Jones\n  rustygene query person \"Mary Ann\"\n  rustygene query person --name Smyth --fuzzy\n  rustygene query person --birth-year-from 1800 --sort-by surname"
     )]
     Person {
         /// Quick positional name query (enables fuzzy matching automatically)

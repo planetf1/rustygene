@@ -1,6 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
+mod common;
+
+
 use reqwest::StatusCode;
 use rusqlite::Connection;
 use rustygene_api::{start_server, AppState};
@@ -115,7 +118,7 @@ async fn places_crud_lifecycle() {
         .send()
         .await
         .expect("get deleted place");
-    assert_eq!(gone_resp.status(), StatusCode::NOT_FOUND);
+    common::assert_api_error(gone_resp, StatusCode::NOT_FOUND, "not_found").await;
 
     server.shutdown().await.expect("shutdown server");
 }
@@ -138,7 +141,7 @@ async fn create_place_requires_at_least_one_name() {
         .send()
         .await
         .expect("create place no names");
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    common::assert_api_error(resp, StatusCode::BAD_REQUEST, "validation").await;
 
     server.shutdown().await.expect("shutdown server");
 }

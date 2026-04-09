@@ -7,6 +7,7 @@ use rustygene_api::{start_server, AppState, ServerHandle};
 use rustygene_storage::run_migrations;
 use rustygene_storage::sqlite_impl::SqliteBackend;
 use serde::Deserialize;
+use serde_json::Value;
 
 pub struct TestServer {
     pub server: ServerHandle,
@@ -90,4 +91,18 @@ pub async fn wait_for_import_completion(harness: &TestServer, job_id: &str) {
     }
 
     panic!("import did not complete within timeout");
+}
+
+pub async fn assert_api_error(
+    response: reqwest::Response,
+    expected_status: StatusCode,
+    expected_type: &str,
+) {
+    assert_eq!(response.status(), expected_status);
+    let body: serde_json::Value = response.json().await.expect("parse error body");
+    let error = body.get("error").expect("error field missing");
+    assert_eq!(
+        error.get("type").and_then(|t| t.as_str()),
+        Some(expected_type)
+    );
 }

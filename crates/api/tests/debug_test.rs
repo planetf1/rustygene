@@ -1,6 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
+mod common;
+
+
 use reqwest::StatusCode;
 use rusqlite::Connection;
 use rustygene_api::{start_server, AppState};
@@ -70,7 +73,7 @@ async fn debug_endpoints_unavailable_when_state_disables_them() {
         .await
         .expect("call disabled debug deps");
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    common::assert_api_error(response, StatusCode::NOT_FOUND, "not_found").await;
 
     server.shutdown().await.expect("shutdown server");
 }

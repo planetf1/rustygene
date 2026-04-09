@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+mod common;
+
+
 use reqwest::StatusCode;
 use rusqlite::Connection;
 use rustygene_api::{start_server, AppState};
@@ -199,7 +202,7 @@ async fn search_empty_query_returns_bad_request() {
         .await
         .expect("search request");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    common::assert_api_error(response, StatusCode::BAD_REQUEST, "validation").await;
 
     server.shutdown().await.expect("shutdown server");
 }

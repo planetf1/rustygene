@@ -323,11 +323,7 @@ async fn crud_roundtrip_for_person_family_event_source_repository_note_media() {
             .send()
             .await
             .expect("get after delete");
-        assert_eq!(
-            get_after_delete.status(),
-            StatusCode::NOT_FOUND,
-            "expected 404 after deleting {route}/{id}"
-        );
+        common::assert_api_error(get_after_delete, StatusCode::NOT_FOUND, "not_found").await;
     }
 
     harness.shutdown().await;
@@ -487,7 +483,7 @@ async fn relationship_integrity_cross_entity_openapi_and_headers() {
         .send()
         .await
         .expect("empty search");
-    assert_eq!(empty_search.status(), StatusCode::BAD_REQUEST);
+    common::assert_api_error(empty_search, StatusCode::BAD_REQUEST, "validation").await;
 
     harness.shutdown().await;
 }

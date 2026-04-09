@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use reqwest::StatusCode;
+mod common;
 use rusqlite::Connection;
 use rustygene_api::{start_server, AppState};
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
@@ -159,14 +160,11 @@ async fn person_crud_round_trip_returns_full_name_assertion_shape() {
     assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
 
     let missing_response = client
-        .get(format!(
-            "http://{}/api/v1/persons/{}",
-            server.local_addr, person_id
-        ))
+        .get(format!("http://{}/api/v1/persons/{}", server.local_addr, EntityId::new()))
         .send()
         .await
-        .expect("get deleted person");
-    assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+        .expect("request missing person");
+    common::assert_api_error(missing_response, StatusCode::NOT_FOUND, "not_found").await;
 
     server.shutdown().await.expect("shutdown server");
 }

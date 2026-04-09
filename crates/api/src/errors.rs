@@ -31,7 +31,7 @@
 //!    from `"error": "<string>"` to `"error": { … }`.  In serde terms, wrap
 //!    the current flat struct in a newtype/single-field struct:
 //!
-//!    ```rust
+//!    ```rust,ignore
 //!    #[derive(Debug, Serialize)]
 //!    struct ApiErrorInner {
 //!        r#type: &'static str,    // serde rename to "type" – use #[serde(rename = "type")]
