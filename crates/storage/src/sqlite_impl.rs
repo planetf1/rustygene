@@ -170,6 +170,27 @@ impl SqliteBackend {
         Ok(rebuilt)
     }
 
+    pub fn rebuild_search_index(&self) -> Result<(), StorageError> {
+        let mut conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {}", e),
+        })?;
+
+        let tx = conn.transaction().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction begin failed: {}", e),
+        })?;
+
+        Self::rebuild_search_index_tx(&tx)?;
+
+        tx.commit().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Transaction commit failed: {}", e),
+        })?;
+
+        Ok(())
+    }
+
     pub fn export_json_dump(&self, mode: JsonExportMode) -> Result<JsonExportResult, StorageError> {
         let conn = self.connection.lock().map_err(|e| StorageError {
             code: StorageErrorCode::Backend,

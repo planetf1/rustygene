@@ -116,9 +116,18 @@ async fn find_person_id_by_query(client: &reqwest::Client, base_url: &str, query
         .and_then(serde_json::Value::as_array)
         .expect("results array");
 
+    let needle = query.replace("%20", " ").to_ascii_lowercase();
+
     results
         .iter()
-        .find_map(|result| result.get("entity_id").and_then(serde_json::Value::as_str))
+        .find(|result| {
+            result
+                .get("display_name")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|name| name.to_ascii_lowercase().contains(&needle))
+        })
+        .or_else(|| results.first())
+        .and_then(|result| result.get("entity_id").and_then(serde_json::Value::as_str))
         .expect("at least one person match")
         .to_string()
 }

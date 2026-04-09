@@ -638,6 +638,7 @@ fn run_gedcom_import(
     let report = backend.with_connection(|conn| {
         import_gedcom_to_sqlite(conn, &job_id.to_string(), text).map_err(map_gedcom_import_error)
     })?;
+    backend.rebuild_search_index().map_err(ApiError::from)?;
 
     let entities_imported = report
         .entities_created_by_type
@@ -676,6 +677,7 @@ fn run_gedcom_import(
     }
 
     let mut log_messages = vec!["GEDCOM parsing complete.".to_string()];
+    log_messages.push("Rebuilt search index from imported assertions.".to_string());
     log_messages.push(format!(
         "Imported entities by type: {}",
         format_counts_inline(&entities_imported_by_type)
@@ -711,6 +713,7 @@ fn run_gramps_import(
 
     let report = gramps::import_gramps_xml_to_sqlite(backend, &job_id.to_string(), text)
         .map_err(|err| ApiError::InternalError(format!("Gramps import failed: {err}")))?;
+    backend.rebuild_search_index().map_err(ApiError::from)?;
 
     let entities_imported = report
         .entities_created_by_type
@@ -724,6 +727,7 @@ fn run_gramps_import(
         .collect::<BTreeMap<_, _>>();
 
     let mut log_messages = vec!["Gramps XML parsing complete.".to_string()];
+    log_messages.push("Rebuilt search index from imported assertions.".to_string());
     log_messages.push(format!(
         "Imported entities by type: {}",
         format_counts_inline(&entities_imported_by_type)
