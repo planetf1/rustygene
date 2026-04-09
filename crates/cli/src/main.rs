@@ -51,7 +51,12 @@ impl From<CliSearchResult> for SearchResult {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "rustygene", version, about = "RustyGene CLI")]
+#[command(
+    name = "rustygene",
+    version,
+    about = "RustyGene CLI",
+    after_help = "Examples:\n  rustygene import --format gedcom ./testdata/gedcom/kennedy.ged\n  rustygene query person --name \"Mary Ann\" --fuzzy\n  rustygene export --format json --output ./out"
+)]
 struct Cli {
     /// Database location
     #[arg(
@@ -72,6 +77,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    #[command(
+        after_help = "Examples:\n  rustygene import --format gedcom ./testdata/gedcom/kennedy.ged\n  rustygene import --format gedcom --merge ./incoming.ged\n  rustygene import --format json ./exports"
+    )]
     Import {
         #[arg(long = "format", value_enum)]
         import_format: ImportFormat,
@@ -83,6 +91,9 @@ enum Commands {
         #[arg(long)]
         job_id: Option<String>,
     },
+    #[command(
+        after_help = "Examples:\n  rustygene export --format json --output ./dump\n  rustygene export --format gedcom --output ./tree.ged\n  rustygene export --format gedcom --redact-living"
+    )]
     Export {
         #[arg(long = "format", value_enum)]
         export_format: ExportFormat,
@@ -423,7 +434,7 @@ fn main() {
 }
 
 fn init_tracing() -> Result<WorkerGuard, String> {
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
     let log_format = std::env::var("RUSTYGENE_LOG_FORMAT").unwrap_or_default();
     let json_logs = log_format.eq_ignore_ascii_case("json");
 
@@ -2552,8 +2563,11 @@ fn run_staging_command(command: StagingCommands, backend: &SqliteBackend, format
 }
 
 fn parse_entity_id_arg(raw: &str) -> Result<EntityId, String> {
-    serde_json::from_str::<EntityId>(&format!("\"{}\"", raw))
-        .map_err(|e| format!("{} ({})", raw, e))
+    serde_json::from_str::<EntityId>(&format!("\"{}\"", raw)).map_err(|e| {
+        format!(
+            "'{raw}' is not a valid UUID (expected format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx): {e}"
+        )
+    })
 }
 
 fn resolve_db_path(path: &Path) -> PathBuf {

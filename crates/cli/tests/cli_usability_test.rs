@@ -14,7 +14,10 @@ fn top_level_help_lists_navigation_commands() {
         .stdout(predicate::str::contains("query"))
         .stdout(predicate::str::contains("show"))
         .stdout(predicate::str::contains("--db <DB>"))
-        .stdout(predicate::str::contains("--output-format <FORMAT>"));
+        .stdout(predicate::str::contains("--output-format <FORMAT>"))
+        .stdout(predicate::str::contains("import --format gedcom"))
+        .stdout(predicate::str::contains("query person --name"))
+        .stdout(predicate::str::contains("export --format json"));
 }
 
 #[test]
@@ -28,6 +31,31 @@ fn query_person_help_contains_examples_for_humans_and_agents() {
         .stdout(predicate::str::contains("query person Jones"))
         .stdout(predicate::str::contains("--fuzzy"))
         .stdout(predicate::str::contains("--birth-year-from"));
+}
+
+#[test]
+fn import_help_contains_common_workflow_examples() {
+    let mut cmd = Command::cargo_bin("rustygene-cli").expect("binary exists");
+    cmd.args(["import", "--help"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains("import --format gedcom"))
+        .stdout(predicate::str::contains("--merge"))
+        .stdout(predicate::str::contains("import --format json"));
+}
+
+#[test]
+fn export_help_contains_common_workflow_examples() {
+    let mut cmd = Command::cargo_bin("rustygene-cli").expect("binary exists");
+    cmd.args(["export", "--help"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains("export --format json --output"))
+        .stdout(predicate::str::contains("--redact-living"));
 }
 
 #[test]
@@ -57,7 +85,9 @@ fn show_person_invalid_uuid_is_human_readable() {
 
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("invalid person id"));
+        .stderr(predicate::str::contains("invalid person id"))
+        .stderr(predicate::str::contains("is not a valid UUID"))
+        .stderr(predicate::str::contains("expected format"));
 }
 
 #[test]
