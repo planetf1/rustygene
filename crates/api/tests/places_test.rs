@@ -116,6 +116,8 @@ async fn places_crud_lifecycle() {
         .await
         .expect("get deleted place");
     assert_eq!(gone_resp.status(), StatusCode::NOT_FOUND);
+
+    server.shutdown().await.expect("shutdown server");
 }
 
 #[tokio::test]
@@ -137,4 +139,6 @@ async fn create_place_requires_at_least_one_name() {
         .await
         .expect("create place no names");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    server.shutdown().await.expect("shutdown server");
 }
