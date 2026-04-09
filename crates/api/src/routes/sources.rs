@@ -34,6 +34,12 @@ struct UpsertSourceRequest {
     repository_refs: Vec<RepositoryRef>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SourceDetailQuery {
+    #[serde(default)]
+    include_citations: Option<bool>,
+}
+
 #[derive(Debug, Serialize)]
 struct SourceDetailResponse {
     id: EntityId,
@@ -42,7 +48,8 @@ struct SourceDetailResponse {
     publication_info: Option<String>,
     abbreviation: Option<String>,
     repository_refs: Vec<RepositoryRef>,
-    citations: Vec<Citation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    citations: Option<Vec<Citation>>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -109,19 +116,27 @@ async fn create_source(
 async fn get_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<SourceDetailQuery>,
 ) -> Result<Json<SourceDetailResponse>, ApiError> {
     let source_id = parse_entity_id(&id)?;
     let source = state.storage.get_source(source_id).await?;
-    let citations = state
-        .storage
-        .list_citations(Pagination {
-            limit: 1_000,
-            offset: 0,
-        })
-        .await?
-        .into_iter()
-        .filter(|citation| citation.source_id == source_id)
-        .collect::<Vec<_>>();
+
+    let citations = if query.include_citations.unwrap_or(false) {
+        Some(
+            state
+                .storage
+                .list_citations(Pagination {
+                    limit: 1_000,
+                    offset: 0,
+                })
+                .await?
+                .into_iter()
+                .filter(|citation| citation.source_id == source_id)
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
 
     Ok(Json(SourceDetailResponse {
         id: source.id,

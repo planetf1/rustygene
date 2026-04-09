@@ -160,6 +160,122 @@ async fn source_and_citation_round_trip_links_citation_to_assertion() {
 }
 
 #[tokio::test]
+async fn source_detail_omits_citations_by_default_and_includes_when_requested() {
+    let backend = in_memory_backend();
+    let state = AppState::with_default_cors_sqlite(backend, 0).expect("build app state");
+    let server = start_server(state, 0).await.expect("start server");
+
+    let client = reqwest::Client::new();
+    let base_url = format!("http://{}", server.local_addr);
+
+    let person = client
+        .post(format!("{base_url}/api/v1/persons"))
+        .json(&serde_json::json!({
+            "given_names": ["Jane"],
+            "surnames": [{"value": "Tester", "origin_type": "patrilineal", "connector": null}],
+            "gender": "female"
+        }))
+        .send()
+        .await
+        .expect("create person");
+    assert_eq!(person.status(), StatusCode::CREATED);
+    let person_body: serde_json::Value = person.json().await.expect("person body");
+    let person_id = person_body
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("person id");
+
+    let assertion = client
+        .post(format!("{base_url}/api/v1/persons/{person_id}/assertions"))
+        .json(&serde_json::json!({
+            "field": "occupation",
+            "value": "Teacher"
+        }))
+        .send()
+        .await
+        .expect("create assertion");
+    assert_eq!(assertion.status(), StatusCode::CREATED);
+    let assertion_body: serde_json::Value = assertion.json().await.expect("assertion body");
+    let assertion_id = assertion_body
+        .get("assertion_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("assertion id");
+
+    let source = client
+        .post(format!("{base_url}/api/v1/sources"))
+        .json(&serde_json::json!({
+            "title": "Test Source",
+            "repository_refs": []
+        }))
+        .send()
+        .await
+        .expect("create source");
+    assert_eq!(source.status(), StatusCode::CREATED);
+    let source_body: serde_json::Value = source.json().await.expect("source body");
+    let source_id = source_body
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("source id");
+
+    let citation = client
+        .post(format!("{base_url}/api/v1/citations"))
+        .json(&serde_json::json!({
+            "source_id": source_id,
+            "assertion_id": assertion_id,
+            "citation_note": "detail",
+            "page": "7"
+        }))
+        .send()
+        .await
+        .expect("create citation");
+    assert_eq!(citation.status(), StatusCode::CREATED);
+    let citation_body: serde_json::Value = citation.json().await.expect("citation body");
+    let citation_id = citation_body
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("citation id");
+
+    let source_detail_default = client
+        .get(format!("{base_url}/api/v1/sources/{source_id}"))
+        .send()
+        .await
+        .expect("source detail default");
+    assert_eq!(source_detail_default.status(), StatusCode::OK);
+    let source_detail_default_body: serde_json::Value =
+        source_detail_default.json().await.expect("source detail default body");
+    assert!(
+        source_detail_default_body.get("citations").is_none(),
+        "citations should be omitted by default to avoid over-fetching"
+    );
+
+    let source_detail_with_citations = client
+        .get(format!(
+            "{base_url}/api/v1/sources/{source_id}?include_citations=true"
+        ))
+        .send()
+        .await
+        .expect("source detail include citations");
+    assert_eq!(source_detail_with_citations.status(), StatusCode::OK);
+    let source_detail_with_citations_body: serde_json::Value = source_detail_with_citations
+        .json()
+        .await
+        .expect("source detail include citations body");
+    let citations = source_detail_with_citations_body
+        .get("citations")
+        .and_then(serde_json::Value::as_array)
+        .expect("citations array when include_citations=true");
+    assert_eq!(citations.len(), 1);
+    assert_eq!(
+        citations[0]
+            .get("id")
+            .and_then(serde_json::Value::as_str),
+        Some(citation_id)
+    );
+
+    server.shutdown().await.expect("shutdown server");
+}
+
+#[tokio::test]
 async fn repository_linked_to_source_round_trip() {
     let backend = in_memory_backend();
     let state = AppState::with_default_cors_sqlite(backend, 0).expect("build app state");
