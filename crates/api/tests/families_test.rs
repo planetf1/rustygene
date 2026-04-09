@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use reqwest::StatusCode;
 use rusqlite::Connection;
+use rustygene_api::{start_server, AppState};
 use rustygene_core::family::{ChildLink, Family, PartnerLink, Relationship, RelationshipType};
 use rustygene_core::person::{Person, PersonName, Surname};
 use rustygene_core::types::{EntityId, Gender};
@@ -214,4 +216,88 @@ async fn family_principle2_linking_creates_relationship() {
     });
 
     assert!(found.is_some(), "Couple relationship should exist");
+}
+
+/// Regression test for rustygene-0dx: family children must show real display names,
+/// not "Person {uuid}" fallbacks. Previously the children lookup only searched
+/// partner1/partner2 person objects, so child names were always the fallback string.
+#[tokio::test]
+async fn family_api_children_show_display_names_not_uuid() {
+    let backend = in_memory_backend();
+    let state = AppState::with_default_cors(backend.clone(), 0).expect("build app state");
+    let server = start_server(state, 0).await.expect("start server");
+    let client = reqwest::Client::new();
+    let base = format!("http://{}/api/v1", server.local_addr);
+
+    // Create persons via storage directly so we control the IDs
+    let parent1_id = create_test_person(&backend, "John", "Senior").await;
+    let parent2_id = create_test_person(&backend, "Jane", "Senior").await;
+    let child_id = create_test_person(&backend, "Alice", "Senior").await;
+
+    // Create family via the API with the child included
+    let create_body = serde_json::json!({
+        "partner1_id": parent1_id,
+        "partner2_id": parent2_id,
+        "partner_link": "married",
+        "child_ids": [child_id]
+    });
+    let create_resp = client
+        .post(format!("{base}/families"))
+        .json(&create_body)
+        .send()
+        .await
+        .expect("create family");
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    let created: serde_json::Value = create_resp.json().await.expect("parse create response");
+    let family_id = created["id"].as_str().expect("family id");
+
+    // --- Test GET /api/v1/families/{id} ---
+    let detail_resp = client
+        .get(format!("{base}/families/{family_id}"))
+        .send()
+        .await
+        .expect("get family detail");
+    assert_eq!(detail_resp.status(), StatusCode::OK);
+    let detail: serde_json::Value = detail_resp.json().await.expect("parse detail response");
+
+    let children = detail["children"].as_array().expect("children array");
+    assert_eq!(children.len(), 1, "expected one child");
+    let child_name = children[0]["display_name"].as_str().expect("display_name");
+    assert!(
+        child_name.contains("Alice") || child_name.contains("Senior"),
+        "child display_name should contain the person's real name, got: {child_name}"
+    );
+    assert!(
+        !child_name.starts_with("Person "),
+        "child display_name must not be the UUID fallback, got: {child_name}"
+    );
+
+    // --- Test GET /api/v1/families (list) ---
+    let list_resp = client
+        .get(format!("{base}/families"))
+        .send()
+        .await
+        .expect("list families");
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let list: serde_json::Value = list_resp.json().await.expect("parse list response");
+    let items = list["items"].as_array().expect("items array");
+    let family_in_list = items
+        .iter()
+        .find(|f| f["id"].as_str() == Some(family_id))
+        .expect("family in list");
+    let list_children = family_in_list["children"].as_array().expect("children");
+    assert_eq!(list_children.len(), 1);
+    let list_child_name = list_children[0]["display_name"]
+        .as_str()
+        .expect("display_name in list");
+    assert!(
+        list_child_name.contains("Alice") || list_child_name.contains("Senior"),
+        "list child display_name should contain real name, got: {list_child_name}"
+    );
+    assert!(
+        !list_child_name.starts_with("Person "),
+        "list child display_name must not be the UUID fallback, got: {list_child_name}"
+    );
+
+    server.shutdown().await.ok();
 }

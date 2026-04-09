@@ -78,6 +78,7 @@ async fn list_families(
             .storage
             .list_assertion_records_for_entity(family.id)
             .await?;
+        let child_names = fetch_child_display_names(&state, &family.child_links).await;
 
         let detail = FamilyDetailResponse {
             id: family.id,
@@ -93,29 +94,13 @@ async fn list_families(
             children: family
                 .child_links
                 .iter()
-                .filter_map(|child| {
-                    vec![&partner1, &partner2]
-                        .into_iter()
-                        .find_map(|p| {
-                            p.as_ref().and_then(|person| {
-                                if person.id == child.child_id {
-                                    Some(super::super::models::families::ChildSummary {
-                                        id: child.child_id,
-                                        display_name: display_name_for_person(person),
-                                        lineage_type: format!("{:?}", child.lineage_type),
-                                    })
-                                } else {
-                                    None
-                                }
-                            })
-                        })
-                        .or_else(|| {
-                            Some(super::super::models::families::ChildSummary {
-                                id: child.child_id,
-                                display_name: format!("Person {}", child.child_id),
-                                lineage_type: format!("{:?}", child.lineage_type),
-                            })
-                        })
+                .map(|child| super::super::models::families::ChildSummary {
+                    id: child.child_id,
+                    display_name: child_names
+                        .get(&child.child_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("Person {}", child.child_id)),
+                    lineage_type: format!("{:?}", child.lineage_type),
                 })
                 .collect(),
             events: events
@@ -270,6 +255,7 @@ async fn get_family(
         .storage
         .list_assertion_records_for_entity(family_id)
         .await?;
+    let child_names = fetch_child_display_names(&state, &family.child_links).await;
 
     Ok(Json(FamilyDetailResponse {
         id: family.id,
@@ -285,29 +271,13 @@ async fn get_family(
         children: family
             .child_links
             .iter()
-            .filter_map(|child| {
-                vec![&partner1, &partner2]
-                    .into_iter()
-                    .find_map(|p| {
-                        p.as_ref().and_then(|person| {
-                            if person.id == child.child_id {
-                                Some(super::super::models::families::ChildSummary {
-                                    id: child.child_id,
-                                    display_name: display_name_for_person(person),
-                                    lineage_type: format!("{:?}", child.lineage_type),
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .or_else(|| {
-                        Some(super::super::models::families::ChildSummary {
-                            id: child.child_id,
-                            display_name: format!("Person {}", child.child_id),
-                            lineage_type: format!("{:?}", child.lineage_type),
-                        })
-                    })
+            .map(|child| super::super::models::families::ChildSummary {
+                id: child.child_id,
+                display_name: child_names
+                    .get(&child.child_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Person {}", child.child_id)),
+                lineage_type: format!("{:?}", child.lineage_type),
             })
             .collect(),
         events: events
@@ -414,6 +384,21 @@ async fn fetch_family_events(_state: &AppState, _family: &Family) -> Result<Vec<
     // For now, return empty - this would need filtering logic
     // In a real implementation, we'd query events where participants include the partners
     Ok(Vec::new())
+}
+
+/// Fetch display names for all children in a family's child_links.
+/// Returns a map from EntityId → display_name. Missing persons are omitted.
+async fn fetch_child_display_names(
+    state: &AppState,
+    child_links: &[ChildLink],
+) -> std::collections::HashMap<EntityId, String> {
+    let mut names = std::collections::HashMap::with_capacity(child_links.len());
+    for link in child_links {
+        if let Ok(person) = state.storage.get_person(link.child_id).await {
+            names.insert(link.child_id, display_name_for_person(&person));
+        }
+    }
+    names
 }
 
 fn display_name_for_person(person: &rustygene_core::person::Person) -> String {
