@@ -257,6 +257,11 @@ pub trait Storage {
     async fn delete_family(&self, id: EntityId) -> Result<(), StorageError>;
     async fn list_families(&self, pagination: Pagination) -> Result<Vec<Family>, StorageError>;
 
+        async fn list_events_for_persons_batch(
+            &self,
+            person_ids: &[EntityId],
+        ) -> Result<std::collections::HashMap<EntityId, Vec<Event>>, StorageError>;
+
     async fn create_relationship(&self, relationship: &Relationship) -> Result<(), StorageError>;
     async fn get_relationship(&self, id: EntityId) -> Result<Relationship, StorageError>;
     async fn update_relationship(&self, relationship: &Relationship) -> Result<(), StorageError>;

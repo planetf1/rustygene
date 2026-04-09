@@ -2117,6 +2117,72 @@ impl Storage for SqliteBackend {
         Ok(events)
     }
 
+    async fn list_events_for_persons_batch(
+        &self,
+        person_ids: &[EntityId],
+    ) -> Result<std::collections::HashMap<EntityId, Vec<Event>>, StorageError> {
+        if person_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let id_strings: Vec<String> = person_ids.iter().map(|id| id.0.to_string()).collect();
+        let placeholders = (1..=id_strings.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let sql = format!(
+            "SELECT data FROM events e
+             WHERE EXISTS (
+                 SELECT 1 FROM json_each(e.data, '$.participants') p
+                 WHERE json_extract(p.value, '$.person_id') IN ({placeholders})
+             )"
+        );
+
+        let conn = self.connection.lock().map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Mutex lock failed: {e}"),
+        })?;
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| StorageError {
+            code: StorageErrorCode::Backend,
+            message: format!("Prepare batch events query failed: {e}"),
+        })?;
+
+        let raw_rows: Vec<String> = stmt
+            .query_map(rusqlite::params_from_iter(&id_strings), |row| row.get(0))
+            .map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Batch events query failed: {e}"),
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let person_id_set: std::collections::HashSet<String> =
+            id_strings.into_iter().collect();
+
+        let mut result: std::collections::HashMap<EntityId, Vec<Event>> =
+            std::collections::HashMap::new();
+
+        for raw in raw_rows {
+            let event: Event = serde_json::from_str(&raw).map_err(|e| StorageError {
+                code: StorageErrorCode::Serialization,
+                message: format!("Event JSON parse failed: {e}"),
+            })?;
+            for participant in &event.participants {
+                let pid_str = participant.person_id.0.to_string();
+                if person_id_set.contains(&pid_str) {
+                    result
+                        .entry(participant.person_id)
+                        .or_default()
+                        .push(event.clone());
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     // Family
     async fn create_family(&self, family: &Family) -> Result<(), StorageError> {
         let data = Self::serialize(family)?;

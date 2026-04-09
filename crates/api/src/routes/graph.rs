@@ -565,23 +565,28 @@ async fn collect_summaries_for_ids(
     state: &AppState,
     ids: impl Iterator<Item = EntityId>,
 ) -> Result<HashMap<EntityId, PersonSummary>, ApiError> {
-    let mut summaries = HashMap::new();
-    for id in ids {
-        let person = match state.storage.get_person(id).await {
-            Ok(person) => person,
-            Err(_) => continue,
-        };
-        let events = state
-            .storage
-            .list_events_for_person(id)
-            .await
-            .unwrap_or_default();
-        let (birth_year, death_year) = event_years(&events);
+    let id_vec: Vec<EntityId> = ids.collect();
+    if id_vec.is_empty() {
+        return Ok(HashMap::new());
+    }
 
+    let (persons_map, events_map) = tokio::try_join!(
+        state.storage.get_persons_batch(&id_vec),
+        state.storage.list_events_for_persons_batch(&id_vec),
+    )?;
+
+    let mut summaries = HashMap::with_capacity(id_vec.len());
+    for id in id_vec {
+        let Some(person) = persons_map.get(&id) else {
+            continue;
+        };
+        let empty = Vec::new();
+        let events = events_map.get(&id).unwrap_or(&empty);
+        let (birth_year, death_year) = event_years(events);
         summaries.insert(
             id,
             PersonSummary {
-                display_name: person_display_name(&person),
+                display_name: person_display_name(person),
                 birth_year,
                 death_year,
             },
