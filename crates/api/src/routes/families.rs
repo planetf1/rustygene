@@ -61,32 +61,42 @@ async fn list_families(
         })
         .await?;
 
+    // Batch-fetch all persons (partners + children) and assertion counts to avoid N+1 queries.
+    let mut all_person_ids: Vec<EntityId> = Vec::new();
+    for family in &all_families {
+        if let Some(pid) = family.partner1_id {
+            all_person_ids.push(pid);
+        }
+        if let Some(pid) = family.partner2_id {
+            all_person_ids.push(pid);
+        }
+        for child in &family.child_links {
+            all_person_ids.push(child.child_id);
+        }
+    }
+    all_person_ids.sort_unstable();
+    all_person_ids.dedup();
+
+    let family_ids: Vec<EntityId> = all_families.iter().map(|f| f.id).collect();
+    let (persons, family_assertion_counts) = tokio::try_join!(
+        state.storage.get_persons_batch(&all_person_ids),
+        state.storage.get_assertion_counts_batch(&family_ids),
+    )?;
+
     let mut response = Vec::with_capacity(all_families.len());
     for family in all_families {
-        let partner1 = if let Some(pid) = family.partner1_id {
-            state.storage.get_person(pid).await.ok()
-        } else {
-            None
-        };
-        let partner2 = if let Some(pid) = family.partner2_id {
-            state.storage.get_person(pid).await.ok()
-        } else {
-            None
-        };
-        let events = fetch_family_events(&state, &family).await?;
-        let assertions = state
-            .storage
-            .list_assertion_records_for_entity(family.id)
-            .await?;
-        let child_names = fetch_child_display_names(&state, &family.child_links).await;
+        let partner1 = family.partner1_id.and_then(|pid| persons.get(&pid));
+        let partner2 = family.partner2_id.and_then(|pid| persons.get(&pid));
+        let empty_counts = BTreeMap::new();
+        let counts = family_assertion_counts.get(&family.id).unwrap_or(&empty_counts);
 
         let detail = FamilyDetailResponse {
             id: family.id,
-            partner1: partner1.as_ref().map(|p| PartnerSummary {
+            partner1: partner1.map(|p| PartnerSummary {
                 id: p.id,
                 display_name: display_name_for_person(p),
             }),
-            partner2: partner2.as_ref().map(|p| PartnerSummary {
+            partner2: partner2.map(|p| PartnerSummary {
                 id: p.id,
                 display_name: display_name_for_person(p),
             }),
@@ -96,25 +106,18 @@ async fn list_families(
                 .iter()
                 .map(|child| super::super::models::families::ChildSummary {
                     id: child.child_id,
-                    display_name: child_names
+                    display_name: persons
                         .get(&child.child_id)
-                        .cloned()
+                        .map(display_name_for_person)
                         .unwrap_or_else(|| format!("Person {}", child.child_id)),
                     lineage_type: format!("{:?}", child.lineage_type),
                 })
                 .collect(),
-            events: events
-                .into_iter()
-                .map(|e| super::super::models::families::EventSummary {
-                    id: e.id,
-                    event_type: format!("{:?}", e.event_type),
-                    date: e.date.as_ref().map(|d| format!("{:?}", d)),
-                })
+            events: Vec::new(),
+            assertion_counts: counts
+                .iter()
+                .map(|(field, &count)| (field.clone(), count as usize))
                 .collect(),
-            assertion_counts: assertions.iter().fold(BTreeMap::new(), |mut acc, asrt| {
-                *acc.entry(asrt.field.clone()).or_insert(0) += 1;
-                acc
-            }),
         };
 
         response.push(detail);

@@ -657,18 +657,24 @@ async fn get_person_families(
 
     let families = state.storage.list_families_for_person(person_id).await?;
 
+    // Collect all partner IDs for a single batch fetch.
+    let mut partner_ids: Vec<rustygene_core::types::EntityId> = Vec::new();
+    for family in &families {
+        if let Some(pid) = family.partner1_id {
+            partner_ids.push(pid);
+        }
+        if let Some(pid) = family.partner2_id {
+            partner_ids.push(pid);
+        }
+    }
+    partner_ids.sort_unstable();
+    partner_ids.dedup();
+    let persons = state.storage.get_persons_batch(&partner_ids).await?;
+
     let mut response = Vec::with_capacity(families.len());
     for family in families {
-        let partner1 = if let Some(pid) = family.partner1_id {
-            state.storage.get_person(pid).await.ok()
-        } else {
-            None
-        };
-        let partner2 = if let Some(pid) = family.partner2_id {
-            state.storage.get_person(pid).await.ok()
-        } else {
-            None
-        };
+        let partner1 = family.partner1_id.and_then(|pid| persons.get(&pid));
+        let partner2 = family.partner2_id.and_then(|pid| persons.get(&pid));
 
         let your_role = if family.partner1_id == Some(person_id) {
             "partner1".to_string()
@@ -682,18 +688,14 @@ async fn get_person_families(
 
         response.push(super::super::models::families::FamilySummaryForPerson {
             id: family.id,
-            partner1: partner1
-                .as_ref()
-                .map(|p| super::super::models::families::PartnerSummary {
-                    id: p.id,
-                    display_name: display_name_for_person(p),
-                }),
-            partner2: partner2
-                .as_ref()
-                .map(|p| super::super::models::families::PartnerSummary {
-                    id: p.id,
-                    display_name: display_name_for_person(p),
-                }),
+            partner1: partner1.map(|p| super::super::models::families::PartnerSummary {
+                id: p.id,
+                display_name: display_name_for_person(p),
+            }),
+            partner2: partner2.map(|p| super::super::models::families::PartnerSummary {
+                id: p.id,
+                display_name: display_name_for_person(p),
+            }),
             your_role,
         });
     }

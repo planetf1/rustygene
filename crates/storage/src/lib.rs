@@ -233,6 +233,17 @@ pub trait Storage {
     async fn update_person(&self, person: &Person) -> Result<(), StorageError>;
     async fn delete_person(&self, id: EntityId) -> Result<(), StorageError>;
     async fn list_persons(&self, pagination: Pagination) -> Result<Vec<Person>, StorageError>;
+        async fn get_persons_batch(
+            &self,
+            ids: &[EntityId],
+        ) -> Result<std::collections::HashMap<EntityId, Person>, StorageError>;
+        async fn get_assertion_counts_batch(
+            &self,
+            entity_ids: &[EntityId],
+        ) -> Result<
+            std::collections::HashMap<EntityId, std::collections::BTreeMap<String, u32>>,
+            StorageError,
+        >;
     async fn list_families_for_person(
         &self,
         person_id: EntityId,

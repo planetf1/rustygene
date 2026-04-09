@@ -1894,6 +1894,110 @@ impl Storage for SqliteBackend {
         Ok(persons)
     }
 
+        async fn get_persons_batch(
+            &self,
+            ids: &[EntityId],
+        ) -> Result<std::collections::HashMap<EntityId, Person>, StorageError> {
+            if ids.is_empty() {
+                return Ok(std::collections::HashMap::new());
+            }
+            let placeholders = (0..ids.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
+            let sql = format!("SELECT data FROM persons WHERE id IN ({})", placeholders);
+            let id_strings: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+            let conn = self.connection.lock().map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+            let rows: Vec<String> = conn
+                .prepare(&sql)
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Prepare failed: {}", e),
+                })?
+                .query_map(rusqlite::params_from_iter(id_strings.iter()), |row| {
+                    row.get(0)
+                })
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Query failed: {}", e),
+                })?
+                .collect::<SqliteResult<Vec<_>>>()
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Collect failed: {}", e),
+                })?;
+            let mut result = std::collections::HashMap::with_capacity(rows.len());
+            for s in rows {
+                let v: Value = serde_json::from_str(&s).map_err(|e| StorageError {
+                    code: StorageErrorCode::Serialization,
+                    message: format!("JSON parse failed: {}", e),
+                })?;
+                let person: Person = Self::deserialize(&v)?;
+                result.insert(person.id, person);
+            }
+            Ok(result)
+        }
+
+        async fn get_assertion_counts_batch(
+            &self,
+            entity_ids: &[EntityId],
+        ) -> Result<
+            std::collections::HashMap<EntityId, std::collections::BTreeMap<String, u32>>,
+            StorageError,
+        > {
+            if entity_ids.is_empty() {
+                return Ok(std::collections::HashMap::new());
+            }
+            let placeholders = (0..entity_ids.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT entity_id, field, COUNT(*) FROM assertions \
+                 WHERE entity_id IN ({}) AND sandbox_id IS NULL \
+                 GROUP BY entity_id, field",
+                placeholders
+            );
+            let id_strings: Vec<String> = entity_ids.iter().map(|id| id.to_string()).collect();
+            let conn = self.connection.lock().map_err(|e| StorageError {
+                code: StorageErrorCode::Backend,
+                message: format!("Mutex lock failed: {}", e),
+            })?;
+            let rows: Vec<(String, String, u32)> = conn
+                .prepare(&sql)
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Prepare failed: {}", e),
+                })?
+                .query_map(rusqlite::params_from_iter(id_strings.iter()), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u32>(2)?,
+                    ))
+                })
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Query failed: {}", e),
+                })?
+                .collect::<SqliteResult<Vec<_>>>()
+                .map_err(|e| StorageError {
+                    code: StorageErrorCode::Backend,
+                    message: format!("Collect failed: {}", e),
+                })?;
+            let mut result: std::collections::HashMap<
+                EntityId,
+                std::collections::BTreeMap<String, u32>,
+            > = std::collections::HashMap::new();
+            for (entity_id_str, field, count) in rows {
+                let entity_id = EntityId(
+                    uuid::Uuid::parse_str(&entity_id_str).map_err(|e| StorageError {
+                        code: StorageErrorCode::Serialization,
+                        message: format!("Invalid UUID in assertion entity_id: {}", e),
+                    })?,
+                );
+                result.entry(entity_id).or_default().insert(field, count);
+            }
+            Ok(result)
+        }
+
     #[tracing::instrument(skip(self), fields(person_id = %person_id))]
     async fn list_families_for_person(
         &self,
