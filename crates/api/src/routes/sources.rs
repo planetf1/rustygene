@@ -8,9 +8,8 @@ use rustygene_core::evidence::{Citation, RepositoryRef, Source};
 use rustygene_core::types::EntityId;
 use rustygene_storage::Pagination;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -81,9 +80,10 @@ async fn create_source(
     Json(request): Json<UpsertSourceRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     if request.title.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "source title must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Source title must not be empty. Provide a meaningful title for the source.".to_string(),
+            details: Some(serde_json::json!({ "title": request.title })),
+        });
     }
 
     for repository_ref in &request.repository_refs {
@@ -155,9 +155,10 @@ async fn update_source(
     Json(request): Json<UpsertSourceRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if request.title.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "source title must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Source title must not be empty. Provide a meaningful title for the source.".to_string(),
+            details: Some(serde_json::json!({ "title": request.title })),
+        });
     }
 
     let source_id = parse_entity_id(&id)?;
@@ -191,8 +192,4 @@ async fn delete_source(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+

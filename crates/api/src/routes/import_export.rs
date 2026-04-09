@@ -317,13 +317,13 @@ async fn get_import_job_status(
     Path(job_id): Path<String>,
 ) -> Result<Json<ImportJobStatus>, ApiError> {
     let parsed_job_id =
-        Uuid::parse_str(&job_id).map_err(|_| ApiError::BadRequest("invalid job_id".to_string()))?;
+        Uuid::parse_str(&job_id).map_err(|_| ApiError::bad_request("invalid job_id"))?;
 
     let jobs = state.import_jobs.read().await;
     let status = jobs
         .get(&parsed_job_id)
         .cloned()
-        .ok_or_else(|| ApiError::NotFound(format!("job not found: {parsed_job_id}")))?;
+        .ok_or_else(|| ApiError::not_found(format!("job not found: {parsed_job_id}")))?;
 
     Ok(Json(status))
 }
@@ -334,17 +334,17 @@ async fn import_diff(
 ) -> Result<Json<MergeDiffResponse>, ApiError> {
     let (format, input, file_name) = extract_import_upload(multipart).await?;
     if !matches!(format, ImportFormat::Gedcom) {
-        return Err(ApiError::BadRequest(
-            "import diff currently supports only GEDCOM uploads".to_string(),
+        return Err(ApiError::bad_request(
+            "import diff currently supports only GEDCOM uploads"
         ));
     }
 
     let text = std::str::from_utf8(&input)
-        .map_err(|err| ApiError::BadRequest(format!("GEDCOM file must be UTF-8 text: {err}")))?;
+        .map_err(|err| ApiError::bad_request(format!("GEDCOM file must be UTF-8 text: {err}")))?;
     let lines = tokenize_gedcom(text)
-        .map_err(|err| ApiError::BadRequest(format!("invalid GEDCOM payload: {err}")))?;
+        .map_err(|err| ApiError::bad_request(format!("invalid GEDCOM payload: {err}")))?;
     let nodes = build_gedcom_tree(&lines)
-        .map_err(|err| ApiError::BadRequest(format!("invalid GEDCOM structure: {err}")))?;
+        .map_err(|err| ApiError::bad_request(format!("invalid GEDCOM structure: {err}")))?;
 
     let gedcom_persons = map_indi_nodes_to_persons(&nodes);
     let gedcom_events = map_indi_nodes_to_events(&nodes);
@@ -479,8 +479,8 @@ async fn import_merge(
     Json(request): Json<ImportMergeRequest>,
 ) -> Result<(StatusCode, Json<ImportMergeResponse>), ApiError> {
     if request.selected_changes.is_empty() {
-        return Err(ApiError::BadRequest(
-            "selected_changes must not be empty".to_string(),
+        return Err(ApiError::bad_request(
+            "selected_changes must not be empty"
         ));
     }
 
@@ -489,9 +489,7 @@ async fn import_merge(
 
     for selection in request.selected_changes {
         if selection.field.trim().is_empty() {
-            return Err(ApiError::BadRequest(
-                "selection field must not be empty".to_string(),
-            ));
+            return Err(ApiError::bad_request("selection field must not be empty"));
         }
 
         let entity_type = parse_merge_entity_type(&selection.entity_type)?;
@@ -526,7 +524,7 @@ async fn import_merge(
         {
             Ok(id) => id,
             Err(err) if err.code == StorageErrorCode::NotFound => {
-                return Err(ApiError::BadRequest(format!(
+                return Err(ApiError::bad_request(format!(
                     "selected change references unknown entity {}; promote existing entities first",
                     selection.entity_id
                 )));
@@ -555,7 +553,7 @@ async fn extract_import_upload(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|err| ApiError::BadRequest(format!("failed to read multipart field: {err}")))?
+        .map_err(|err| ApiError::bad_request(format!("failed to read multipart field: {err}")))?
     {
         let Some(name) = field.name().map(ToString::to_string) else {
             continue;
@@ -564,14 +562,14 @@ async fn extract_import_upload(
         match name.as_str() {
             "format" => {
                 let raw = field.text().await.map_err(|err| {
-                    ApiError::BadRequest(format!("failed to read format field: {err}"))
+                    ApiError::bad_request(format!("failed to read format field: {err}"))
                 })?;
                 import_format = Some(parse_import_format(&raw)?);
             }
             "file" => {
                 file_name = field.file_name().map(ToString::to_string);
                 let bytes = field.bytes().await.map_err(|err| {
-                    ApiError::BadRequest(format!("failed to read file field: {err}"))
+                    ApiError::bad_request(format!("failed to read file field: {err}"))
                 })?;
                 file_bytes = Some(bytes.to_vec());
             }
@@ -580,8 +578,8 @@ async fn extract_import_upload(
     }
 
     let format =
-        import_format.ok_or_else(|| ApiError::BadRequest("missing format field".to_string()))?;
-    let input = file_bytes.ok_or_else(|| ApiError::BadRequest("missing file field".to_string()))?;
+        import_format.ok_or_else(|| ApiError::bad_request("missing format field"))?;
+    let input = file_bytes.ok_or_else(|| ApiError::bad_request("missing file field"))?;
     Ok((format, input, file_name))
 }
 
@@ -590,8 +588,8 @@ async fn export_data(
     Query(query): Query<ExportQuery>,
 ) -> Result<Response, ApiError> {
     let Some(backend) = state.sqlite_backend.clone() else {
-        return Err(ApiError::InternalError(
-            "sqlite backend not available for import/export".to_string(),
+        return Err(ApiError::internal(
+            "sqlite backend not available for import/export"
         ));
     };
 
@@ -622,7 +620,7 @@ async fn export_data(
         }
     })
     .await
-    .map_err(|err| ApiError::InternalError(format!("export task join error: {err}")))??;
+    .map_err(|err| ApiError::internal(format!("export task join error: {err}")))??;
 
     stream_file_response(payload.0, payload.1, payload.2).await
 }
@@ -633,7 +631,7 @@ fn run_gedcom_import(
     input: &[u8],
 ) -> Result<ImportExecutionSummary, ApiError> {
     let text = std::str::from_utf8(input)
-        .map_err(|err| ApiError::BadRequest(format!("GEDCOM file must be UTF-8 text: {err}")))?;
+        .map_err(|err| ApiError::bad_request(format!("GEDCOM file must be UTF-8 text: {err}")))?;
 
     let report = backend.with_connection(|conn| {
         import_gedcom_to_sqlite(conn, &job_id.to_string(), text).map_err(map_gedcom_import_error)
@@ -708,11 +706,11 @@ fn run_gramps_import(
     input: &[u8],
 ) -> Result<ImportExecutionSummary, ApiError> {
     let text = std::str::from_utf8(input).map_err(|err| {
-        ApiError::BadRequest(format!("Gramps XML file must be UTF-8 text: {err}"))
+        ApiError::bad_request(format!("Gramps XML file must be UTF-8 text: {err}"))
     })?;
 
     let report = gramps::import_gramps_xml_to_sqlite(backend, &job_id.to_string(), text)
-        .map_err(|err| ApiError::InternalError(format!("Gramps import failed: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Gramps import failed: {err}")))?;
     backend.rebuild_search_index().map_err(ApiError::from)?;
 
     let entities_imported = report
@@ -838,7 +836,7 @@ fn export_gedcom_bytes(backend: &SqliteBackend, redact_living: bool) -> Result<V
 fn export_bundle_zip(backend: &SqliteBackend) -> Result<PathBuf, ApiError> {
     let temp_dir = std::env::temp_dir().join(format!("rustygene-export-bundle-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&temp_dir).map_err(|err| {
-        ApiError::InternalError(format!("failed to create bundle temp directory: {err}"))
+        ApiError::internal(format!("failed to create bundle temp directory: {err}"))
     })?;
 
     let db_json_path = temp_dir.join("database.json");
@@ -853,19 +851,19 @@ fn export_bundle_zip(backend: &SqliteBackend) -> Result<PathBuf, ApiError> {
 
     let zip_path = temp_dir.join("bundle.zip");
     let zip_file = File::create(&zip_path)
-        .map_err(|err| ApiError::InternalError(format!("failed to create bundle zip: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("failed to create bundle zip: {err}")))?;
     let mut zip = ZipWriter::new(zip_file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     let mut files = Vec::new();
 
     let database_bytes = std::fs::read(&db_json_path)
-        .map_err(|err| ApiError::InternalError(format!("failed to read database export: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("failed to read database export: {err}")))?;
     zip.start_file("database.json", options).map_err(|err| {
-        ApiError::InternalError(format!("failed to add database.json to bundle: {err}"))
+        ApiError::internal(format!("failed to add database.json to bundle: {err}"))
     })?;
     zip.write_all(&database_bytes).map_err(|err| {
-        ApiError::InternalError(format!("failed to write database.json to bundle: {err}"))
+        ApiError::internal(format!("failed to write database.json to bundle: {err}"))
     })?;
     files.push("database.json".to_string());
 
@@ -881,16 +879,16 @@ fn export_bundle_zip(backend: &SqliteBackend) -> Result<PathBuf, ApiError> {
 
         let entry_name = format!("media/{file_name}");
         let bytes = std::fs::read(&source_path).map_err(|err| {
-            ApiError::InternalError(format!(
+            ApiError::internal(format!(
                 "failed to read media file '{}': {err}",
                 source_path.display()
             ))
         })?;
         zip.start_file(&entry_name, options).map_err(|err| {
-            ApiError::InternalError(format!("failed to add '{entry_name}' to bundle: {err}"))
+            ApiError::internal(format!("failed to add '{entry_name}' to bundle: {err}"))
         })?;
         zip.write_all(&bytes).map_err(|err| {
-            ApiError::InternalError(format!("failed to write '{entry_name}' to bundle: {err}"))
+            ApiError::internal(format!("failed to write '{entry_name}' to bundle: {err}"))
         })?;
         files.push(entry_name);
     }
@@ -903,17 +901,17 @@ fn export_bundle_zip(backend: &SqliteBackend) -> Result<PathBuf, ApiError> {
     };
 
     zip.start_file("manifest.json", options).map_err(|err| {
-        ApiError::InternalError(format!("failed to add manifest.json to bundle: {err}"))
+        ApiError::internal(format!("failed to add manifest.json to bundle: {err}"))
     })?;
     let manifest_json = serde_json::to_vec_pretty(&manifest).map_err(|err| {
-        ApiError::InternalError(format!("failed to serialize bundle manifest: {err}"))
+        ApiError::internal(format!("failed to serialize bundle manifest: {err}"))
     })?;
     zip.write_all(&manifest_json).map_err(|err| {
-        ApiError::InternalError(format!("failed to write manifest.json to bundle: {err}"))
+        ApiError::internal(format!("failed to write manifest.json to bundle: {err}"))
     })?;
 
     zip.finish()
-        .map_err(|err| ApiError::InternalError(format!("failed to finalize bundle zip: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("failed to finalize bundle zip: {err}")))?;
 
     Ok(zip_path)
 }
@@ -925,7 +923,7 @@ async fn stream_file_response(
 ) -> Result<Response, ApiError> {
     let file = tokio_fs::File::open(&path)
         .await
-        .map_err(|err| ApiError::InternalError(format!("failed to open export file: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("failed to open export file: {err}")))?;
     let stream = ReaderStream::new(file);
 
     let mut response = Body::from_stream(stream).into_response();
@@ -935,7 +933,7 @@ async fn stream_file_response(
     response.headers_mut().insert(
         CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!("attachment; filename=\"{file_name}\"")).map_err(|err| {
-            ApiError::InternalError(format!("invalid content-disposition: {err}"))
+            ApiError::internal(format!("invalid content-disposition: {err}"))
         })?,
     );
 
@@ -947,7 +945,7 @@ fn parse_import_format(raw: &str) -> Result<ImportFormat, ApiError> {
         "gedcom" => Ok(ImportFormat::Gedcom),
         "gramps_xml" => Ok(ImportFormat::GrampsXml),
         "json" => Ok(ImportFormat::Json),
-        other => Err(ApiError::BadRequest(format!(
+        other => Err(ApiError::bad_request(format!(
             "unsupported import format: {other}"
         ))),
     }
@@ -966,7 +964,7 @@ fn parse_merge_entity_type(raw: &str) -> Result<EntityType, ApiError> {
         "media" => Ok(EntityType::Media),
         "note" => Ok(EntityType::Note),
         "lds_ordinance" | "ldsordinance" => Ok(EntityType::LdsOrdinance),
-        other => Err(ApiError::BadRequest(format!(
+        other => Err(ApiError::bad_request(format!(
             "invalid merge entity type: {other}"
         ))),
     }
@@ -1086,7 +1084,7 @@ fn write_temp_payload(extension: &str, bytes: &[u8]) -> Result<PathBuf, ApiError
         extension
     ));
     std::fs::write(&path, bytes)
-        .map_err(|err| ApiError::InternalError(format!("failed to write temp payload: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("failed to write temp payload: {err}")))?;
     Ok(path)
 }
 

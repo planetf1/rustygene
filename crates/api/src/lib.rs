@@ -219,15 +219,11 @@ impl AppState {
         slow_consumer_drop_threshold: u64,
     ) -> Result<Self, ApiError> {
         if cors_origins.is_empty() {
-            return Err(ApiError::BadRequest(
-                "cors_origins must not be empty".to_string(),
-            ));
+            return Err(ApiError::bad_request("cors_origins must not be empty"));
         }
 
         if event_bus_capacity == 0 {
-            return Err(ApiError::BadRequest(
-                "event_bus_capacity must not be zero".to_string(),
-            ));
+            return Err(ApiError::bad_request("event_bus_capacity must not be zero"));
         }
 
         Ok(Self {
@@ -440,11 +436,11 @@ pub fn build_router(state: AppState) -> Router {
         .iter()
         .map(|origin| {
             HeaderValue::from_str(origin).map_err(|_| {
-                ApiError::BadRequest(format!("invalid CORS origin configured: {origin}"))
+                ApiError::bad_request(format!("invalid CORS origin configured: {origin}"))
             })
         })
         .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_else(|err| panic!("invalid AppState configuration: {}", err.message()));
+        .unwrap_or_else(|err: ApiError| panic!("invalid AppState configuration: {}", err.message()));
 
     let cors_layer = CorsLayer::new()
         .allow_methods([
@@ -520,14 +516,14 @@ pub async fn start_server(state: AppState, port: u16) -> Result<ServerHandle, Ap
     let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let listener = TcpListener::bind(bind_addr)
         .await
-        .map_err(|err| ApiError::InternalError(format!("bind failed: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("bind failed: {err}")))?;
 
     let local_addr = listener
         .local_addr()
-        .map_err(|err| ApiError::InternalError(format!("read local address failed: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("read local address failed: {err}")))?;
 
     if local_addr.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
-        return Err(ApiError::InternalError(format!(
+        return Err(ApiError::internal(format!(
             "server must bind to 127.0.0.1, got {}",
             local_addr.ip()
         )));

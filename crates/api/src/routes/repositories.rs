@@ -8,9 +8,8 @@ use rustygene_core::evidence::{Repository, RepositoryType};
 use rustygene_core::types::EntityId;
 use rustygene_storage::Pagination;
 use serde::Deserialize;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -63,9 +62,10 @@ async fn create_repository(
     Json(request): Json<UpsertRepositoryRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     if request.name.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "repository name must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Repository name must not be empty. Provide a meaningful name for the repository.".to_string(),
+            details: Some(serde_json::json!({ "name": request.name })),
+        });
     }
 
     let repository_id = EntityId::new();
@@ -102,9 +102,10 @@ async fn update_repository(
     Json(request): Json<UpsertRepositoryRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if request.name.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "repository name must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Repository name must not be empty. Provide a meaningful name for the repository.".to_string(),
+            details: Some(serde_json::json!({ "name": request.name })),
+        });
     }
 
     let repository_id = parse_entity_id(&id)?;
@@ -130,8 +131,4 @@ async fn delete_repository(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+

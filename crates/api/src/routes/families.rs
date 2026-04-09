@@ -10,9 +10,8 @@ use rustygene_core::family::{ChildLink, Family, PartnerLink, Relationship, Relat
 use rustygene_core::types::EntityId;
 use rustygene_storage::Pagination;
 use serde::Deserialize;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::models::families::{
     CreateFamilyRequest, FamilyDetailResponse, FamilyListResponse, PartnerSummary,
 };
@@ -376,11 +375,7 @@ async fn get_family_assertions(
 
 // Helpers
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 async fn fetch_family_events(_state: &AppState, _family: &Family) -> Result<Vec<Event>, ApiError> {
     // Fetch all events, filter by participants

@@ -26,7 +26,7 @@ use tokio::fs as tokio_fs;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -142,7 +142,10 @@ async fn upload_media(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|err| ApiError::BadRequest(format!("failed to parse multipart field: {err}")))?
+        .map_err(|err| ApiError::BadRequest {
+            message: format!("Failed to parse multipart field: {err}"),
+            details: Some(serde_json::json!({ "error": err.to_string() })),
+        })?
     {
         let Some(name) = field.name().map(ToString::to_string) else {
             continue;
@@ -158,16 +161,23 @@ async fn upload_media(
         let bytes = field
             .bytes()
             .await
-            .map_err(|err| ApiError::BadRequest(format!("failed to read upload bytes: {err}")))?;
+            .map_err(|err| ApiError::BadRequest {
+                message: format!("Failed to read upload bytes: {err}"),
+                details: Some(serde_json::json!({ "error": err.to_string() })),
+            })?;
         file_bytes = Some(bytes.to_vec());
     }
 
-    let bytes = file_bytes.ok_or_else(|| ApiError::BadRequest("missing file field".to_string()))?;
+    let bytes = file_bytes.ok_or_else(|| ApiError::BadRequest {
+        message: "Missing 'file' field in multipart request.".to_string(),
+        details: Some(serde_json::json!({ "expected_field": "file" })),
+    })?;
 
     if bytes.len() > 50 * 1024 * 1024 {
-        return Err(ApiError::BadRequest(
-            "uploaded file exceeds 50MB limit".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: format!("Uploaded file exceeds the 50MB limit (got {} bytes).", bytes.len()),
+            details: Some(serde_json::json!({ "size": bytes.len(), "limit": 50 * 1024 * 1024 })),
+        });
     }
 
     let Some(mime_type) = sniff_mime_type(&bytes) else {
@@ -200,12 +210,12 @@ async fn upload_media(
     let data_dir = resolve_data_dir();
     let content_dir = data_dir.join("media").join(&hash_hex[..2]);
     fs::create_dir_all(&content_dir).map_err(|err| {
-        ApiError::InternalError(format!("failed to create media directory: {err}"))
+        ApiError::internal(format!("failed to create media directory: {err}"))
     })?;
 
     let file_path = content_dir.join(format!("{hash_hex}.{extension}"));
     fs::write(&file_path, &bytes)
-        .map_err(|err| ApiError::InternalError(format!("failed to write media file: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("failed to write media file: {err}")))?;
 
     let dimensions = image_dimensions(&bytes);
 
@@ -314,9 +324,10 @@ async fn create_album(
 ) -> Result<(StatusCode, Json<MediaAlbumResponse>), ApiError> {
     let name = request.name.trim();
     if name.is_empty() {
-        return Err(ApiError::BadRequest(
-            "album name must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Album name must not be empty. Provide a non-empty string for the album name.".to_string(),
+            details: Some(serde_json::json!({ "name": request.name })),
+        });
     }
 
     Ok((
@@ -334,16 +345,18 @@ async fn add_album_items(
     Json(request): Json<AddAlbumItemsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if request.media_ids.is_empty() {
-        return Err(ApiError::BadRequest(
-            "media_ids must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Media IDs list must not be empty. Provide at least one media ID to add to the album.".to_string(),
+            details: Some(serde_json::json!({ "field": "media_ids" })),
+        });
     }
 
     let album_name = album_id.trim();
     if album_name.is_empty() {
-        return Err(ApiError::BadRequest(
-            "album id must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Album ID must not be empty.".to_string(),
+            details: Some(serde_json::json!({ "album_id": album_id })),
+        });
     }
 
     for media_id in &request.media_ids {
@@ -385,7 +398,10 @@ async fn add_media_tag(
 
     let tag = request.tag.trim();
     if tag.is_empty() {
-        return Err(ApiError::BadRequest("tag must not be empty".to_string()));
+        return Err(ApiError::BadRequest {
+            message: "Tag must not be empty. Provide a non-empty string for the tag name.".to_string(),
+            details: Some(serde_json::json!({ "tag": request.tag })),
+        });
     }
 
     let assertion = JsonAssertion {
@@ -421,7 +437,10 @@ async fn remove_media_tag(
 
     let target = tag.trim().to_ascii_lowercase();
     if target.is_empty() {
-        return Err(ApiError::BadRequest("tag must not be empty".to_string()));
+        return Err(ApiError::BadRequest {
+            message: "Tag must not be empty. Provide a non-empty string for the tag name to remove.".to_string(),
+            details: Some(serde_json::json!({ "tag": tag })),
+        });
     }
 
     let records = state
@@ -479,9 +498,10 @@ async fn update_media_text(
     let text = request.text.trim();
 
     if text.is_empty() {
-        return Err(ApiError::BadRequest(
-            "OCR text must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "OCR text must not be empty. Provide non-empty text for the media record.".to_string(),
+            details: Some(serde_json::json!({ "text": request.text })),
+        });
     }
 
     media.ocr_text = Some(text.to_string());
@@ -517,21 +537,24 @@ async fn get_thumbnail(
     let media = state.storage.get_media(media_id).await?;
 
     let input = fs::read(&media.file_path)
-        .map_err(|err| ApiError::InternalError(format!("failed to read media file: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("failed to read media file: {err}")))?;
 
     let image = image::load_from_memory(&input).map_err(|err| {
-        ApiError::BadRequest(format!("thumbnail only supported for image media: {err}"))
+        ApiError::BadRequest {
+            message: format!("Thumbnail generation only supported for image media (got {}).", media.mime_type),
+            details: Some(serde_json::json!({ "mime_type": media.mime_type, "error": err.to_string() })),
+        }
     })?;
 
     let thumb = image.thumbnail(400, 400);
     let mut out = Vec::new();
     thumb
         .write_to(&mut Cursor::new(&mut out), ImageFormat::Jpeg)
-        .map_err(|err| ApiError::InternalError(format!("failed to encode thumbnail: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("failed to encode thumbnail: {err}")))?;
 
     let temp_path = std::env::temp_dir().join(format!("rustygene-thumb-{}.jpg", media.id));
     fs::write(&temp_path, &out).map_err(|err| {
-        ApiError::InternalError(format!("failed to write thumbnail temp file: {err}"))
+        ApiError::internal(format!("failed to write thumbnail temp file: {err}"))
     })?;
 
     stream_file(temp_path, "image/jpeg", &format!("thumb-{}.jpg", media.id)).await
@@ -596,14 +619,14 @@ async fn delete_media_record(
 
     if Path::new(&media.file_path).exists() {
         fs::remove_file(&media.file_path).map_err(|err| {
-            ApiError::InternalError(format!("failed to delete media file: {err}"))
+            ApiError::internal(format!("failed to delete media file: {err}"))
         })?;
     }
 
     if let Some(thumb_path) = media.thumbnail_path {
         if Path::new(&thumb_path).exists() {
             fs::remove_file(&thumb_path).map_err(|err| {
-                ApiError::InternalError(format!("failed to delete thumbnail file: {err}"))
+                ApiError::internal(format!("failed to delete thumbnail file: {err}"))
             })?;
         }
     }
@@ -923,7 +946,7 @@ async fn resolve_entity_type(
         return Ok(EntityType::LdsOrdinance);
     }
 
-    Err(ApiError::NotFound(format!("entity not found: {entity_id}")))
+    Err(ApiError::not_found(format!("entity not found: {entity_id}")))
 }
 
 async fn display_name_for_entity(
@@ -1167,11 +1190,7 @@ fn resolve_data_dir() -> PathBuf {
         .join(".rustygene")
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn image_dimensions(bytes: &[u8]) -> Option<DimensionsPx> {
     image::load_from_memory(bytes).ok().map(|img| DimensionsPx {
@@ -1225,7 +1244,7 @@ fn extension_for_mime(mime_type: &str) -> &'static str {
 async fn stream_file(path: PathBuf, mime: &str, file_name: &str) -> Result<Response, ApiError> {
     let file = tokio_fs::File::open(&path)
         .await
-        .map_err(|err| ApiError::NotFound(format!("file not found: {err}")))?;
+        .map_err(|err| ApiError::not_found(format!("file not found: {err}")))?;
 
     let stream = ReaderStream::new(file);
     let mut response = Body::from_stream(stream).into_response();
@@ -1233,12 +1252,12 @@ async fn stream_file(path: PathBuf, mime: &str, file_name: &str) -> Result<Respo
     response.headers_mut().insert(
         CONTENT_TYPE,
         HeaderValue::from_str(mime)
-            .map_err(|err| ApiError::InternalError(format!("invalid content-type: {err}")))?,
+            .map_err(|err| ApiError::internal(format!("invalid content-type: {err}")))?,
     );
     response.headers_mut().insert(
         CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!("attachment; filename=\"{}\"", file_name)).map_err(
-            |err| ApiError::InternalError(format!("invalid content-disposition: {err}")),
+            |err| ApiError::internal(format!("invalid content-disposition: {err}")),
         )?,
     );
 

@@ -6,14 +6,13 @@ use rusqlite::OptionalExtension;
 use rustygene_core::assertion::AssertionStatus;
 use rustygene_core::types::EntityId;
 use rustygene_storage::{StorageError, StorageErrorCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct UpdateAssertionRequest {
     #[serde(default)]
     confidence: Option<f64>,
@@ -35,16 +34,18 @@ async fn update_assertion(
     let assertion_id = parse_entity_id(&id)?;
 
     if request.confidence.is_none() && request.status.is_none() && request.preferred.is_none() {
-        return Err(ApiError::BadRequest(
-            "at least one of confidence/status/preferred must be provided".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Missing update parameters. At least one of 'confidence', 'status', or 'preferred' must be provided in the request body.".to_string(),
+            details: Some(serde_json::json!({ "provided": request })),
+        });
     }
 
     if let Some(confidence) = request.confidence {
         if !(0.0..=1.0).contains(&confidence) {
-            return Err(ApiError::BadRequest(
-                "confidence must be between 0.0 and 1.0".to_string(),
-            ));
+            return Err(ApiError::BadRequest {
+                message: format!("Confidence is out of range (got {confidence}). Provide a float between 0.0 and 1.0 (inclusive)."),
+                details: Some(serde_json::json!({ "confidence": confidence, "range": [0.0, 1.0] })),
+            });
         }
 
         update_assertion_confidence(&state, assertion_id, confidence).await?;
@@ -81,10 +82,10 @@ async fn update_assertion_confidence(
     confidence: f64,
 ) -> Result<(), ApiError> {
     let backend = state.sqlite_backend.clone().ok_or_else(|| {
-        ApiError::InternalError("assertion updates require sqlite backend".to_string())
+        ApiError::internal("assertion updates require sqlite backend")
     })?;
 
-    backend.with_connection(|conn| {
+    backend.with_connection(|conn: &mut rusqlite::Connection| {
         let tx = conn
             .transaction()
             .map_err(storage_backend_error("begin assertion tx"))?;
@@ -117,10 +118,10 @@ async fn set_assertion_preferred(
     preferred: bool,
 ) -> Result<(), ApiError> {
     let backend = state.sqlite_backend.clone().ok_or_else(|| {
-        ApiError::InternalError("assertion updates require sqlite backend".to_string())
+        ApiError::internal("assertion updates require sqlite backend")
     })?;
 
-    backend.with_connection(|conn| {
+    backend.with_connection(|conn: &mut rusqlite::Connection| {
         let tx = conn
             .transaction()
             .map_err(storage_backend_error("begin preferred tx"))?;
@@ -129,7 +130,7 @@ async fn set_assertion_preferred(
             .query_row(
                 "SELECT entity_id, field FROM assertions WHERE id = ?",
                 rusqlite::params![assertion_id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(storage_backend_error(
@@ -167,11 +168,7 @@ async fn set_assertion_preferred(
     Ok(())
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn parse_status(raw: &str) -> Result<AssertionStatus, ApiError> {
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -179,9 +176,10 @@ fn parse_status(raw: &str) -> Result<AssertionStatus, ApiError> {
         "approved" | "confirmed" => Ok(AssertionStatus::Confirmed),
         "rejected" | "retract" | "retracted" => Ok(AssertionStatus::Rejected),
         "disputed" => Ok(AssertionStatus::Disputed),
-        value => Err(ApiError::BadRequest(format!(
-            "invalid assertion status: {value}"
-        ))),
+        value => Err(ApiError::BadRequest {
+            message: format!("Invalid assertion status: '{value}'. Valid values are: proposed (pending), confirmed (approved), rejected (retract), disputed."),
+            details: Some(serde_json::json!({ "invalid_status": value, "allowed": ["proposed", "pending", "confirmed", "approved", "rejected", "retracted", "retract", "disputed"] })),
+        }),
     }
 }
 

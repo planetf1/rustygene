@@ -8,9 +8,8 @@ use rustygene_core::types::{ActorRef, EntityId};
 use rustygene_storage::{EntityType, Pagination, SandboxAssertionDiff};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 // ---- Request / Response types ----
@@ -93,11 +92,7 @@ pub fn router() -> Router<AppState> {
 
 // ---- Helpers ----
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn parse_entity_type(raw: &str) -> Result<EntityType, ApiError> {
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -112,7 +107,10 @@ fn parse_entity_type(raw: &str) -> Result<EntityType, ApiError> {
         "media" => Ok(EntityType::Media),
         "note" => Ok(EntityType::Note),
         "lds_ordinance" | "ldsordinance" => Ok(EntityType::LdsOrdinance),
-        _ => Err(ApiError::BadRequest(format!("invalid entity_type: {raw}"))),
+        _ => Err(ApiError::BadRequest {
+            message: format!("Invalid entity_type: '{raw}'. Valid types include: person, family, relationship, event, place, source, citation, repository, media, note."),
+            details: Some(serde_json::json!({ "invalid_type": raw, "allowed": ["person", "family", "relationship", "event", "place", "source", "citation", "repository", "media", "note", "lds_ordinance"] })),
+        }),
     }
 }
 
@@ -121,9 +119,10 @@ fn parse_sandbox_status(raw: &str) -> Result<SandboxStatus, ApiError> {
         "active" => Ok(SandboxStatus::Active),
         "promoted" => Ok(SandboxStatus::Promoted),
         "discarded" => Ok(SandboxStatus::Discarded),
-        _ => Err(ApiError::BadRequest(format!(
-            "invalid sandbox status: {raw}"
-        ))),
+        _ => Err(ApiError::BadRequest {
+            message: format!("Invalid sandbox status: '{raw}'. Valid statuses are: active, promoted, discarded."),
+            details: Some(serde_json::json!({ "invalid_status": raw, "allowed": ["active", "promoted", "discarded"] })),
+        }),
     }
 }
 

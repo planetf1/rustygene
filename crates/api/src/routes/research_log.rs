@@ -9,7 +9,7 @@ use rustygene_storage::{Pagination, ResearchLogFilter};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -132,9 +132,10 @@ async fn list_entries(
             entity_type.as_str(),
             "person" | "family" | "source" | "event"
         ) {
-            return Err(ApiError::BadRequest(format!(
-                "invalid entity_type: {entity_type}"
-            )));
+            return Err(ApiError::BadRequest {
+                message: format!("Invalid entity_type: '{entity_type}'. Valid types for research logs are: person, family, source, event."),
+                details: Some(serde_json::json!({ "invalid_type": entity_type, "allowed": ["person", "family", "source", "event"] })),
+            });
         }
     }
 
@@ -240,7 +241,10 @@ async fn create_entry(
         .to_string();
 
     if objective.is_empty() {
-        return Err(ApiError::BadRequest("title must not be empty".to_string()));
+        return Err(ApiError::BadRequest {
+            message: "Research log title (or hypothesis) must not be empty. Provide a descriptive title for the entry.".to_string(),
+            details: Some(serde_json::json!({ "field": "title/hypothesis" })),
+        });
     }
 
     let now = request
@@ -319,16 +323,20 @@ async fn update_entry(
 
     if let Some(title) = request.title {
         if title.trim().is_empty() {
-            return Err(ApiError::BadRequest("title must not be empty".to_string()));
+            return Err(ApiError::BadRequest {
+                message: "Research log title must not be empty.".to_string(),
+                details: Some(serde_json::json!({ "title": title })),
+            });
         }
         entry.objective = title;
     }
 
     if let Some(hypothesis) = request.hypothesis {
         if hypothesis.trim().is_empty() {
-            return Err(ApiError::BadRequest(
-                "hypothesis must not be empty".to_string(),
-            ));
+            return Err(ApiError::BadRequest {
+                message: "Research log hypothesis must not be empty.".to_string(),
+                details: Some(serde_json::json!({ "hypothesis": hypothesis })),
+            });
         }
         entry.objective = hypothesis;
     }
@@ -393,10 +401,10 @@ async fn update_entry(
 
     // no update method in Storage trait yet; replace row atomically in sqlite backend
     let backend = state.sqlite_backend.clone().ok_or_else(|| {
-        ApiError::InternalError("research-log update requires sqlite backend".to_string())
+        ApiError::internal("research-log update requires sqlite backend")
     })?;
 
-    backend.with_connection(|conn| {
+    backend.with_connection(|conn: &mut rusqlite::Connection| {
         let search_terms = serde_json::to_string(&entry.search_terms).map_err(|e| {
             rustygene_storage::StorageError {
                 code: rustygene_storage::StorageErrorCode::Serialization,
@@ -498,11 +506,7 @@ fn research_entry_to_response(entry: ResearchLogEntry) -> ResearchLogEntryRespon
     }
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn parse_research_status(raw: Option<&str>) -> Result<SearchResult, ApiError> {
     match raw.map(|v| v.trim().to_ascii_lowercase()) {
@@ -511,9 +515,10 @@ fn parse_research_status(raw: Option<&str>) -> Result<SearchResult, ApiError> {
         Some(v) if v == "working" || v == "deferred" => Ok(SearchResult::PartiallyFound),
         Some(v) if v == "closed" || v == "resolved" => Ok(SearchResult::Found),
         Some(v) if v == "abandoned" || v == "not_found" => Ok(SearchResult::NotFound),
-        Some(v) => Err(ApiError::BadRequest(format!(
-            "invalid research-log status: {v}"
-        ))),
+        Some(v) => Err(ApiError::BadRequest {
+            message: format!("Invalid research log status: '{v}'. Valid statuses are: open (inconclusive), working (deferred), closed (resolved), abandoned (not_found)."),
+            details: Some(serde_json::json!({ "invalid_status": v, "allowed": ["open", "working", "closed", "abandoned"] })),
+        }),
     }
 }
 
@@ -530,7 +535,10 @@ fn map_research_status_label(result: SearchResult) -> String {
 fn parse_entry_date(raw: &str) -> Result<DateTime<Utc>, ApiError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(ApiError::BadRequest("date must not be empty".to_string()));
+        return Err(ApiError::BadRequest {
+            message: "Research log date must not be empty.".to_string(),
+            details: Some(serde_json::json!({ "date": raw })),
+        });
     }
 
     if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
@@ -543,16 +551,18 @@ fn parse_entry_date(raw: &str) -> Result<DateTime<Utc>, ApiError> {
         }
     }
 
-    Err(ApiError::BadRequest(format!(
-        "invalid date format: {trimmed}. Use RFC3339 or YYYY-MM-DD"
-    )))
+    Err(ApiError::BadRequest {
+        message: format!("Invalid date format: '{trimmed}'. Use RFC3339 (e.g., 2024-03-24T14:30:00Z) or YYYY-MM-DD."),
+        details: Some(serde_json::json!({ "provided": trimmed, "expected_formats": ["RFC3339", "YYYY-MM-DD"] })),
+    })
 }
 
 fn upsert_confidence_tag(tags: &mut Vec<String>, confidence: f64) -> Result<(), ApiError> {
     if !(0.0..=1.0).contains(&confidence) {
-        return Err(ApiError::BadRequest(
-            "confidence must be between 0 and 1".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: format!("Confidence is out of range (got {confidence}). Provide a float between 0.0 and 1.0 (inclusive)."),
+            details: Some(serde_json::json!({ "confidence": confidence, "range": [0.0, 1.0] })),
+        });
     }
 
     tags.retain(|tag| !tag.starts_with("meta_confidence:"));

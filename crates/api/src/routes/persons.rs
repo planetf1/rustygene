@@ -14,10 +14,10 @@ use rustygene_core::types::{ActorRef, EntityId, Gender};
 use rustygene_storage::{
     EntityType, FieldAssertion, JsonAssertion, Pagination, StorageError, StorageErrorCode,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::models::persons::{
     AssertionValueResponse, CreateAssertionRequest, CreatePersonRequest, CreatedPersonResponse,
     FamilySummaryResponse, GenderAssertionResponse, PersonDetailResponse, PersonListResponse,
@@ -42,7 +42,7 @@ struct PersonsQuery {
     dir: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct UpdatePersonAssertionRequest {
     #[serde(default)]
     confidence: Option<f64>,
@@ -82,7 +82,7 @@ async fn list_persons(
     // Use a single SQL query to fetch persons with aggregated assertion counts and
     // birth/death years, avoiding N+1 queries for each person.
     let backend = state.sqlite_backend.clone().ok_or_else(|| {
-        ApiError::InternalError("list_persons requires sqlite backend".to_string())
+        ApiError::internal("list_persons requires sqlite backend")
     })?;
 
     // Push WHERE / ORDER BY / LIMIT / OFFSET into SQL using indexed generated columns.
@@ -113,7 +113,7 @@ async fn list_persons(
         death_year: Option<i32>,
     }
 
-    let (rows, total) = backend.with_connection(|conn| {
+    let (rows, total) = backend.with_connection(|conn: &mut rusqlite::Connection| {
         let search_pattern: Option<String> = query.q.as_ref().map(|q| {
             format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"))
         });
@@ -163,7 +163,7 @@ async fn list_persons(
             code: StorageErrorCode::Backend,
             message: format!("list_persons query failed: {e}"),
         })?
-        .filter_map(|r| r.ok())
+        .filter_map(|r: Result<PersonRow, rusqlite::Error>| r.ok())
         .collect::<Vec<_>>();
 
         let total = raw_rows.first().map_or(0, |r| r.total_count) as usize;
@@ -181,10 +181,10 @@ async fn list_persons(
             .assertion_counts_json
             .as_deref()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.as_object().cloned())
-            .map(|obj| {
+            .and_then(|v: serde_json::Value| v.as_object().cloned())
+            .map(|obj: serde_json::Map<String, serde_json::Value>| {
                 obj.into_iter()
-                    .filter_map(|(k, v)| v.as_u64().map(|n| (k, n as usize)))
+                    .filter_map(|(k, v): (String, serde_json::Value)| v.as_u64().map(|n| (k, n as usize)))
                     .collect()
             })
             .unwrap_or_default();
@@ -497,9 +497,10 @@ async fn create_person_assertion(
     Json(request): Json<CreateAssertionRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if request.field.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "assertion field must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Assertion field must not be empty. Provide a non-empty string for the field name.".to_string(),
+            details: Some(serde_json::json!({ "field": request.field })),
+        });
     }
 
     let person_id = parse_entity_id(&id)?;
@@ -550,16 +551,18 @@ async fn update_person_assertion(
     let assertion_id = parse_entity_id(&assertion_id)?;
 
     if request.confidence.is_none() && request.status.is_none() && request.preferred.is_none() {
-        return Err(ApiError::BadRequest(
-            "at least one of confidence/status/preferred must be provided".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Missing update parameters. At least one of 'confidence', 'status', or 'preferred' must be provided in the request body.".to_string(),
+            details: Some(serde_json::json!({ "provided": request })),
+        });
     }
 
     if let Some(confidence) = request.confidence {
         if !(0.0..=1.0).contains(&confidence) {
-            return Err(ApiError::BadRequest(
-                "confidence must be between 0.0 and 1.0".to_string(),
-            ));
+            return Err(ApiError::BadRequest {
+                message: format!("Confidence is out of range (got {confidence}). Provide a float between 0.0 and 1.0 (inclusive)."),
+                details: Some(serde_json::json!({ "confidence": confidence, "range": [0.0, 1.0] })),
+            });
         }
 
         state
@@ -580,9 +583,10 @@ async fn update_person_assertion(
             "rejected" | "retract" | "retracted" => AssertionStatus::Rejected,
             "disputed" => AssertionStatus::Disputed,
             value => {
-                return Err(ApiError::BadRequest(format!(
-                    "invalid assertion status: {value}"
-                )))
+                return Err(ApiError::BadRequest {
+                    message: format!("Invalid assertion status: '{value}'. Valid values are: proposed (pending), confirmed (approved), rejected (retract), disputed."),
+                    details: Some(serde_json::json!({ "invalid_status": value, "allowed": ["proposed", "pending", "confirmed", "approved", "rejected", "retracted", "retract", "disputed"] })),
+                })
             }
         };
 
@@ -676,23 +680,21 @@ async fn get_person_families(
     Ok(Json(response))
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn validate_create_person_request(request: &CreatePersonRequest) -> Result<(), ApiError> {
     if request.given_names.is_empty() {
-        return Err(ApiError::BadRequest(
-            "given_names must contain at least one value".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Creation request is missing 'given_names'. Provide at least one given name.".to_string(),
+            details: Some(serde_json::json!({ "field": "given_names" })),
+        });
     }
 
     if request.surnames.is_empty() {
-        return Err(ApiError::BadRequest(
-            "surnames must contain at least one value".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Creation request is missing 'surnames'. Provide at least one surname.".to_string(),
+            details: Some(serde_json::json!({ "field": "surnames" })),
+        });
     }
 
     Ok(())
@@ -768,7 +770,7 @@ fn json_assertion<T: serde::Serialize>(
     Ok(JsonAssertion {
         id: EntityId::new(),
         value: serde_json::to_value(value)
-            .map_err(|err| ApiError::InternalError(format!("serialize assertion failed: {err}")))?,
+            .map_err(|err| ApiError::internal(format!("serialize assertion failed: {err}")))?,
         confidence: confidence.unwrap_or(0.9),
         status: status.unwrap_or(AssertionStatus::Confirmed),
         evidence_type: evidence_type.unwrap_or(EvidenceType::Direct),

@@ -110,9 +110,7 @@ fn ensure_debug_enabled(state: &AppState) -> Result<(), ApiError> {
     if state.debug_route_available() {
         Ok(())
     } else {
-        Err(ApiError::NotFound(
-            "debug endpoints are disabled".to_string(),
-        ))
+        Err(ApiError::not_found("debug endpoints are disabled"))
     }
 }
 
@@ -333,7 +331,7 @@ async fn debug_bundle(State(state): State<AppState>) -> Result<impl IntoResponse
     };
 
     let payload = serde_json::to_vec_pretty(&bundle).map_err(|err| {
-        ApiError::InternalError(format!("failed to serialize diagnostics bundle: {err}"))
+        ApiError::internal(format!("failed to serialize diagnostics bundle: {err}"))
     })?;
 
     let mut headers = axum::http::HeaderMap::new();

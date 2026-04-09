@@ -69,69 +69,136 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use rustygene_core::types::EntityId;
 use serde::Serialize;
+use uuid::Uuid;
 
 use rustygene_storage::{StorageError, StorageErrorCode};
 
 /// The top-level error type returned by every route handler.
 ///
 /// ### How it works
-/// Each variant maps to an HTTP status code and a fixed `code` string.
+/// Each variant maps to an HTTP status code and a fixed `type` string.
 /// `IntoResponse` below serialises the variant into the JSON error envelope.
-///
-/// ### Bead `ahk` – what needs to change
-/// The current variants carry only a `String` message, so structured
-/// `details` cannot be attached.  As part of bead `ahk`, each variant (or
-/// `BadRequest` at minimum) should be able to carry an optional
-/// `serde_json::Value` for machine-readable context.  Consider:
-///
-/// ```rust
-/// BadRequest { message: String, details: Option<serde_json::Value> },
-/// ```
-///
-/// Also add `Unauthorized(String)` and `Forbidden(String)` for the full
-/// contract documented at the top of this file.
 #[derive(Debug)]
 pub enum ApiError {
-    NotFound(String),
-    Conflict(String),
-    BadRequest(String),
-    InternalError(String),
+    NotFound {
+        message: String,
+        details: Option<serde_json::Value>,
+    },
+    Conflict {
+        message: String,
+        details: Option<serde_json::Value>,
+    },
+    BadRequest {
+        message: String,
+        details: Option<serde_json::Value>,
+    },
+    Unauthorized {
+        message: String,
+        details: Option<serde_json::Value>,
+    },
+    Forbidden {
+        message: String,
+        details: Option<serde_json::Value>,
+    },
+    InternalError {
+        message: String,
+        details: Option<serde_json::Value>,
+    },
     StorageError(StorageError),
 }
 
 impl ApiError {
+    /// Convenience constructor for a simple BadRequest error.
+    pub fn bad_request(msg: impl Into<String>) -> Self {
+        Self::BadRequest {
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    /// Convenience constructor for a simple InternalError.
+    pub fn internal(msg: impl Into<String>) -> Self {
+        Self::InternalError {
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    /// Convenience constructor for a simple NotFound error.
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self::NotFound {
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    /// Attach structured details to the error if supported by the variant.
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        match &mut self {
+            Self::NotFound { details: d, .. }
+            | Self::Conflict { details: d, .. }
+            | Self::BadRequest { details: d, .. }
+            | Self::Unauthorized { details: d, .. }
+            | Self::Forbidden { details: d, .. }
+            | Self::InternalError { details: d, .. } => {
+                *d = Some(details);
+            }
+            Self::StorageError(_) => {} // StorageError doesn't support details yet
+        }
+        self
+    }
+
     pub fn message(&self) -> String {
         match self {
-            Self::NotFound(msg)
-            | Self::Conflict(msg)
-            | Self::BadRequest(msg)
-            | Self::InternalError(msg) => msg.clone(),
+            Self::NotFound { message, .. }
+            | Self::Conflict { message, .. }
+            | Self::BadRequest { message, .. }
+            | Self::Unauthorized { message, .. }
+            | Self::Forbidden { message, .. }
+            | Self::InternalError { message, .. } => message.clone(),
             Self::StorageError(err) => err.message.clone(),
         }
     }
 
-    fn code(&self) -> &'static str {
+    fn r#type(&self) -> &'static str {
         match self {
-            Self::NotFound(_) => "NOT_FOUND",
-            Self::Conflict(_) => "CONFLICT",
-            Self::BadRequest(_) => "BAD_REQUEST",
-            Self::InternalError(_) => "INTERNAL_ERROR",
+            Self::NotFound { .. } => "not_found",
+            Self::Conflict { .. } => "conflict",
+            Self::BadRequest { .. } => "validation",
+            Self::Unauthorized { .. } => "unauthorized",
+            Self::Forbidden { .. } => "forbidden",
+            Self::InternalError { .. } => "internal",
             Self::StorageError(err) => match err.code {
-                StorageErrorCode::NotFound => "NOT_FOUND",
-                StorageErrorCode::Conflict => "CONFLICT",
-                StorageErrorCode::Validation => "BAD_REQUEST",
-                StorageErrorCode::Serialization | StorageErrorCode::Backend => "INTERNAL_ERROR",
+                StorageErrorCode::NotFound => "not_found",
+                StorageErrorCode::Conflict => "conflict",
+                StorageErrorCode::Validation => "validation",
+                StorageErrorCode::Serialization | StorageErrorCode::Backend => "internal",
             },
+        }
+    }
+
+    fn details(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::NotFound { details, .. }
+            | Self::Conflict { details, .. }
+            | Self::BadRequest { details, .. }
+            | Self::Unauthorized { details, .. }
+            | Self::Forbidden { details, .. }
+            | Self::InternalError { details, .. } => details.clone(),
+            Self::StorageError(_) => None,
         }
     }
 
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::NotFound(_) => StatusCode::NOT_FOUND,
-            Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::NotFound { .. } => StatusCode::NOT_FOUND,
+            Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
+            Self::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
+            Self::Forbidden { .. } => StatusCode::FORBIDDEN,
+            Self::InternalError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::StorageError(err) => match err.code {
                 StorageErrorCode::NotFound => StatusCode::NOT_FOUND,
                 StorageErrorCode::Conflict => StatusCode::CONFLICT,
@@ -150,42 +217,45 @@ impl From<StorageError> for ApiError {
     }
 }
 
-/// ### Current wire format (flat – pre-bead `ahk`)
-/// ```json
-/// { "error": "<string>", "code": "NOT_FOUND" }
-/// ```
-///
-/// ### Target wire format (bead `ahk`)
-/// ```json
-/// { "error": { "type": "not_found", "message": "…", "details": {…} } }
-/// ```
-///
-/// **Junior developer – to migrate:**
-/// 1. Rename this struct to something like `ApiErrorInner` and add a `type`
-///    field (`#[serde(rename = "type")] pub r#type: &'static str`) plus
-///    `#[serde(skip_serializing_if = "Option::is_none")] pub details: Option<serde_json::Value>`.
-/// 2. Create a wrapper struct `ApiErrorBody { error: ApiErrorInner }` so the
-///    outer key is `"error"` and the value is the nested object.
-/// 3. Remove the standalone `code` field — the `type` field replaces it.
-/// 4. Update `into_response` to populate the new shape.
-/// 5. Any existing tests hitting the `"code"` key in the response JSON will
-///    need to be updated to check `"error"."type"` instead.
+/// Centralized entity ID parsing for all route handlers.
+pub fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
+    Uuid::parse_str(raw).map(EntityId).map_err(|e| {
+        ApiError::BadRequest {
+            message: format!("invalid entity id: '{raw}' is not a valid UUID"),
+            details: Some(serde_json::json!({
+                "input": raw,
+                "reason": e.to_string(),
+                "format": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+            })),
+        }
+    })
+}
+
+/// The inner structure of the JSON error envelope.
+#[derive(Debug, Serialize)]
+struct ApiErrorInner {
+    #[serde(rename = "type")]
+    pub r#type: &'static str,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+/// The top-level JSON error envelope.
 #[derive(Debug, Serialize)]
 struct ApiErrorBody {
-    // TODO (bead ahk): replace this flat shape with the nested envelope:
-    // `{ "error": { "type": "…", "message": "…", "details": {…} } }`
-    // See the module-level doc comment for the exact migration steps.
-    error: String,
-    code: &'static str,
+    error: ApiErrorInner,
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status_code();
         let body = Json(ApiErrorBody {
-            // TODO (bead ahk): replace with ApiErrorBody { error: ApiErrorInner { … } }
-            error: self.message(),
-            code: self.code(),
+            error: ApiErrorInner {
+                r#type: self.r#type(),
+                message: self.message(),
+                details: self.details(),
+            },
         });
 
         (status, body).into_response()

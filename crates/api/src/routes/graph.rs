@@ -10,9 +10,8 @@ use rustygene_core::person::Person;
 use rustygene_core::types::{DateValue, EntityId, Gender};
 use rustygene_storage::Pagination;
 use serde::Deserialize;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::models::graph::{
     AncestorTreeNode, DescendantTreeNode, NetworkEdge, NetworkGraph, NetworkNode, PathStep,
     PathWithKinship, PedigreeEdge, PedigreeGraph, PedigreeNode,
@@ -260,7 +259,7 @@ async fn get_path(
 
     let graph = load_family_graph(&state).await?;
     let Some(path) = shortest_path(&graph, from_id, to_id) else {
-        return Err(ApiError::NotFound(format!(
+        return Err(ApiError::not_found(format!(
             "no relationship path between {from_id} and {to_id}"
         )));
     };
@@ -365,17 +364,14 @@ async fn get_network(
     Ok(Json(NetworkGraph { nodes, edges }))
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn validate_generations(generations: u32) -> Result<u32, ApiError> {
     if generations > 10 {
-        return Err(ApiError::BadRequest(
-            "generations must be <= 10".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: format!("Generation limit exceeded (got {generations}). The maximum allowed depth is 10."),
+            details: Some(serde_json::json!({ "generations": generations, "limit": 10 })),
+        });
     }
     Ok(generations)
 }

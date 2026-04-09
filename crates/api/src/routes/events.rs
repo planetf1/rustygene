@@ -14,9 +14,8 @@ use rustygene_core::types::EntityId;
 use rustygene_core::types::{Calendar, DateValue, FuzzyDate};
 use rustygene_storage::{EntityType, JsonAssertion, Pagination};
 use serde::Deserialize;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::models::events::{
     AddParticipantRequest, CreateEventRequest, EventDetailResponse, EventParticipantResponse,
 };
@@ -280,9 +279,10 @@ async fn create_event_assertion(
     Json(request): Json<CreateAssertionRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if request.field.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "assertion field must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Assertion field must not be empty. Provide a non-empty string for the field name.".to_string(),
+            details: Some(serde_json::json!({ "field": request.field })),
+        });
     }
 
     let event_id = parse_entity_id(&id)?;
@@ -324,11 +324,7 @@ async fn create_event_assertion(
 
 // Helpers
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn parse_event_type(event_type_str: &str) -> Result<EventType, ApiError> {
     match event_type_str.to_lowercase().as_str() {

@@ -51,9 +51,10 @@ impl SearchStrategy {
             "fts" => Ok(Self::Fts),
             "phonetic" => Ok(Self::Phonetic),
             "combined" => Ok(Self::Combined),
-            other => Err(ApiError::BadRequest(format!(
-                "invalid strategy: {other} (expected exact|fts|phonetic|combined)"
-            ))),
+            other => Err(ApiError::BadRequest {
+                message: format!("Invalid search strategy: '{other}'. Valid strategies are: exact, fts, phonetic, combined."),
+                details: Some(serde_json::json!({ "invalid_strategy": other, "allowed": ["exact", "fts", "phonetic", "combined"] })),
+            }),
         }
     }
 
@@ -90,9 +91,10 @@ impl EntityFilter {
             "source" => Ok(Some(Self::Source)),
             "place" => Ok(Some(Self::Place)),
             "note" => Ok(Some(Self::Note)),
-            other => Err(ApiError::BadRequest(format!(
-                "invalid type: {other} (expected person|family|event|source|place|note)"
-            ))),
+            other => Err(ApiError::BadRequest {
+                message: format!("Invalid entity type filter: '{other}'. Valid types are: person, family, event, source, place, note."),
+                details: Some(serde_json::json!({ "invalid_type": other, "allowed": ["person", "family", "event", "source", "place", "note"] })),
+            }),
         }
     }
 
@@ -144,9 +146,10 @@ async fn search(
 ) -> Result<Json<SearchResponse>, ApiError> {
     let q = query.q.trim();
     if q.is_empty() {
-        return Err(ApiError::BadRequest(
-            "query parameter q is required".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Search query 'q' must not be empty. Provide a search term to find entities.".to_string(),
+            details: Some(serde_json::json!({ "field": "q" })),
+        });
     }
 
     let strategy = SearchStrategy::parse(query.strategy.as_deref())?;
@@ -172,9 +175,7 @@ async fn search(
     let offset = query.offset.unwrap_or(0) as usize;
 
     let Some(sqlite) = state.sqlite_backend.clone() else {
-        return Err(ApiError::InternalError(
-            "sqlite backend not available for search".to_string(),
-        ));
+        return Err(ApiError::internal("sqlite backend not available for search"));
     };
 
     let fts_query = build_fts_query(q)?;
@@ -657,21 +658,20 @@ fn event_year(event: &Event) -> Option<i32> {
 fn parse_year(raw: &str) -> Result<i32, ApiError> {
     let token = raw.trim();
     if token.is_empty() {
-        return Err(ApiError::BadRequest(
-            "date filters must not be empty when provided".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Date filter must not be empty when provided.".to_string(),
+            details: Some(serde_json::json!({ "provided": raw })),
+        });
     }
 
-    let year_part = token.split('-').next().ok_or_else(|| {
-        ApiError::BadRequest(format!(
-            "invalid date filter: {raw} (expected YYYY or YYYY-MM-DD)"
-        ))
+    let year_part = token.split('-').next().ok_or_else(|| ApiError::BadRequest {
+        message: format!("Invalid date filter: '{raw}'. Expected YYYY or YYYY-MM-DD."),
+        details: Some(serde_json::json!({ "provided": raw, "expected_format": "YYYY or YYYY-MM-DD" })),
     })?;
 
-    year_part.parse::<i32>().map_err(|_| {
-        ApiError::BadRequest(format!(
-            "invalid date filter: {raw} (expected YYYY or YYYY-MM-DD)"
-        ))
+    year_part.parse::<i32>().map_err(|_| ApiError::BadRequest {
+        message: format!("Invalid date filter: '{raw}'. Expected YYYY or YYYY-MM-DD."),
+        details: Some(serde_json::json!({ "provided": raw, "expected_format": "YYYY or YYYY-MM-DD" })),
     })
 }
 
@@ -736,9 +736,10 @@ fn person_display_name(person: &Person) -> String {
 fn build_fts_query(query: &str) -> Result<String, ApiError> {
     let tokens = tokenize_search(query);
     if tokens.is_empty() {
-        return Err(ApiError::BadRequest(
-            "query parameter q must contain at least one alphanumeric token".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Search query 'q' must contain at least one alphanumeric token.".to_string(),
+            details: Some(serde_json::json!({ "query": query })),
+        });
     }
 
     Ok(tokens

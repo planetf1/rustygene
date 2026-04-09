@@ -6,9 +6,8 @@ use rustygene_core::place::{ExternalId, Place, PlaceName, PlaceRef, PlaceType};
 use rustygene_core::types::EntityId;
 use rustygene_storage::Pagination;
 use serde::Deserialize;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -62,9 +61,10 @@ async fn create_place(
     Json(request): Json<UpsertPlaceRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     if request.names.is_empty() {
-        return Err(ApiError::BadRequest(
-            "place must have at least one name".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Place must have at least one name. Provide a non-empty name for the location.".to_string(),
+            details: Some(serde_json::json!({ "names": request.names })),
+        });
     }
 
     let place_id = EntityId::new();
@@ -100,9 +100,10 @@ async fn update_place(
     Json(request): Json<UpsertPlaceRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if request.names.is_empty() {
-        return Err(ApiError::BadRequest(
-            "place must have at least one name".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Place must have at least one name. Provide a non-empty name for the location.".to_string(),
+            details: Some(serde_json::json!({ "names": request.names })),
+        });
     }
 
     let place_id = parse_entity_id(&id)?;
@@ -129,8 +130,4 @@ async fn delete_place(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+

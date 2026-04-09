@@ -11,9 +11,8 @@ use rustygene_storage::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -133,9 +132,10 @@ async fn submit_staging(
     Json(request): Json<SubmitStagingProposalRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     if request.proposed_field.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "proposed_field must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Staging submission error: 'proposed_field' must not be empty. Provide a non-empty string for the field name.".to_string(),
+            details: Some(serde_json::json!({ "field": "proposed_field" })),
+        });
     }
 
     let entity_type = parse_entity_type(&request.entity_type)?;
@@ -224,19 +224,20 @@ async fn bulk_review(
     Json(request): Json<BulkReviewRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if request.ids.is_empty() {
-        return Err(ApiError::BadRequest(
-            "bulk ids must not be empty".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Bulk review error: 'ids' list must not be empty. Provide at least one proposal ID to review.".to_string(),
+            details: Some(serde_json::json!({ "field": "ids" })),
+        });
     }
 
     let reviewer = reviewer_actor_ref(request.reviewer.as_deref().unwrap_or("api"));
     let action = request.action.trim().to_ascii_lowercase();
 
     let backend = state.sqlite_backend.clone().ok_or_else(|| {
-        ApiError::InternalError("bulk staging requires sqlite backend".to_string())
+        ApiError::internal("bulk staging requires sqlite backend")
     })?;
 
-    backend.with_connection(|conn| {
+    backend.with_connection(|conn: &mut rusqlite::Connection| {
         let tx = conn.transaction().map_err(|e| rustygene_storage::StorageError {
             code: rustygene_storage::StorageErrorCode::Backend,
             message: format!("bulk transaction begin failed: {e}"),
@@ -247,7 +248,7 @@ async fn bulk_review(
                 .query_row(
                     "SELECT status FROM staging_queue WHERE id = ?",
                     rusqlite::params![proposal_id.to_string()],
-                    |row| row.get(0),
+                    |row: &rusqlite::Row| row.get(0),
                 )
                 .optional()
                 .map_err(|e| rustygene_storage::StorageError {
@@ -275,7 +276,7 @@ async fn bulk_review(
                 .query_row(
                     "SELECT assertion_id, entity_id, field FROM staging_queue WHERE id = ?",
                     rusqlite::params![proposal_id.to_string()],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .map_err(|e| rustygene_storage::StorageError {
                     code: rustygene_storage::StorageErrorCode::Backend,
@@ -413,7 +414,7 @@ async fn find_assertion_by_id(
         .into_iter()
         .find(|a| a.id == assertion_id)
         .ok_or_else(|| {
-            ApiError::NotFound(format!("assertion not found for proposal: {assertion_id}"))
+            ApiError::not_found(format!("assertion not found for proposal: {assertion_id}"))
         })
 }
 
@@ -465,14 +466,10 @@ async fn get_staging_proposal_by_id(
     proposals
         .into_iter()
         .find(|proposal| proposal.id == proposal_id)
-        .ok_or_else(|| ApiError::NotFound(format!("staging proposal not found: {proposal_id}")))
+        .ok_or_else(|| ApiError::not_found(format!("staging proposal not found: {proposal_id}")))
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn parse_entity_type(raw: &str) -> Result<EntityType, ApiError> {
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -487,7 +484,10 @@ fn parse_entity_type(raw: &str) -> Result<EntityType, ApiError> {
         "media" => Ok(EntityType::Media),
         "note" => Ok(EntityType::Note),
         "lds_ordinance" | "ldsordinance" => Ok(EntityType::LdsOrdinance),
-        _ => Err(ApiError::BadRequest(format!("invalid entity_type: {raw}"))),
+        _ => Err(ApiError::BadRequest {
+            message: format!("Invalid entity_type: '{raw}'. Valid types include: person, family, relationship, event, place, source, citation, repository, media, note."),
+            details: Some(serde_json::json!({ "invalid_type": raw, "allowed": ["person", "family", "relationship", "event", "place", "source", "citation", "repository", "media", "note", "lds_ordinance"] })),
+        }),
     }
 }
 
@@ -498,7 +498,10 @@ fn parse_staging_status(raw: Option<&str>) -> Result<Option<AssertionStatus>, Ap
         Some(v) if v == "approved" || v == "confirmed" => Ok(Some(AssertionStatus::Confirmed)),
         Some(v) if v == "rejected" => Ok(Some(AssertionStatus::Rejected)),
         Some(v) if v == "disputed" => Ok(Some(AssertionStatus::Disputed)),
-        Some(v) => Err(ApiError::BadRequest(format!("invalid status filter: {v}"))),
+        Some(v) => Err(ApiError::BadRequest {
+            message: format!("Invalid status filter: '{v}'. Valid statuses are: pending (proposed), approved (confirmed), rejected, disputed."),
+            details: Some(serde_json::json!({ "invalid_status": v, "allowed": ["pending", "proposed", "approved", "confirmed", "rejected", "disputed"] })),
+        }),
     }
 }
 

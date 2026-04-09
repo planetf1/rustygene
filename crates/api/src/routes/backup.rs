@@ -34,10 +34,10 @@ fn require_backup_dir(state: &AppState) -> Result<PathBuf, ApiError> {
     let backend = state
         .sqlite_backend
         .as_ref()
-        .ok_or_else(|| ApiError::InternalError("no SQLite backend configured".to_string()))?;
+        .ok_or_else(|| ApiError::internal("no SQLite backend configured"))?;
     backend.backup_dir().ok_or_else(|| {
-        ApiError::InternalError(
-            "backup directory unavailable (in-memory database has no backup dir)".to_string(),
+        ApiError::internal(
+            "backup directory unavailable (in-memory database has no backup dir)"
         )
     })
 }
@@ -48,11 +48,11 @@ async fn create_backup(State(state): State<AppState>) -> Result<impl IntoRespons
     let backend = state
         .sqlite_backend
         .as_ref()
-        .ok_or_else(|| ApiError::InternalError("no SQLite backend configured".to_string()))?;
+        .ok_or_else(|| ApiError::internal("no SQLite backend configured"))?;
 
     tokio::fs::create_dir_all(&backup_dir)
         .await
-        .map_err(|e| ApiError::InternalError(format!("create backup dir failed: {e}")))?;
+        .map_err(|e| ApiError::internal(format!("create backup dir failed: {e}")))?;
 
     let filename = format!("backup_{}.db", Utc::now().format("%Y%m%d_%H%M%S"));
     let dest_path = backup_dir.join(&filename);
@@ -61,8 +61,8 @@ async fn create_backup(State(state): State<AppState>) -> Result<impl IntoRespons
     let backend_clone = backend.clone();
     let size: u64 = tokio::task::spawn_blocking(move || backend_clone.backup_to_file(&dest_clone))
         .await
-        .map_err(|e| ApiError::InternalError(format!("backup task panicked: {e}")))?
-        .map_err(|e| ApiError::InternalError(e.message))?;
+        .map_err(|e| ApiError::internal(format!("backup task panicked: {e}")))?
+        .map_err(|e| ApiError::internal(e.message))?;
 
     let created_at = std::fs::metadata(&dest_path)
         .ok()
@@ -89,8 +89,8 @@ async fn list_backups(State(state): State<AppState>) -> Result<impl IntoResponse
         rustygene_storage::sqlite_impl::SqliteBackend::list_backups(&backup_dir)
     })
     .await
-    .map_err(|e| ApiError::InternalError(format!("list_backups task panicked: {e}")))?
-    .map_err(|e| ApiError::InternalError(e.message))?;
+    .map_err(|e| ApiError::internal(format!("list_backups task panicked: {e}")))?
+    .map_err(|e| ApiError::internal(e.message))?;
 
     let infos: Vec<BackupInfo> = raw
         .into_iter()
@@ -111,7 +111,7 @@ async fn download_backup(
 ) -> Result<impl IntoResponse, ApiError> {
     // Reject path traversal attempts
     if filename.contains('/') || filename.contains("..") {
-        return Err(ApiError::BadRequest("invalid filename".to_string()));
+        return Err(ApiError::bad_request("invalid filename"));
     }
 
     let backup_dir = require_backup_dir(&state)?;
@@ -119,7 +119,7 @@ async fn download_backup(
 
     let file = tokio::fs::File::open(&file_path)
         .await
-        .map_err(|_| ApiError::NotFound(format!("backup '{filename}' not found")))?;
+        .map_err(|_| ApiError::not_found(format!("backup '{filename}' not found")))?;
 
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
@@ -132,10 +132,10 @@ async fn download_backup(
             CONTENT_DISPOSITION,
             content_disposition
                 .parse::<axum::http::HeaderValue>()
-                .map_err(|e| ApiError::InternalError(e.to_string()))?,
+                .map_err(|e| ApiError::internal(e.to_string()))?,
         )
         .body(body)
-        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     Ok(response)
 }
@@ -146,19 +146,19 @@ async fn delete_backup(
     Path(filename): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     if filename.contains('/') || filename.contains("..") {
-        return Err(ApiError::BadRequest("invalid filename".to_string()));
+        return Err(ApiError::bad_request("invalid filename"));
     }
 
     let backup_dir = require_backup_dir(&state)?;
     let file_path = backup_dir.join(&filename);
 
     if !file_path.exists() {
-        return Err(ApiError::NotFound(format!("backup '{filename}' not found")));
+        return Err(ApiError::not_found(format!("backup '{filename}' not found")));
     }
 
     tokio::fs::remove_file(&file_path)
         .await
-        .map_err(|e| ApiError::InternalError(format!("delete backup failed: {e}")))?;
+        .map_err(|e| ApiError::internal(format!("delete backup failed: {e}")))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -173,45 +173,45 @@ async fn restore_backup(
     let backend = state
         .sqlite_backend
         .as_ref()
-        .ok_or_else(|| ApiError::InternalError("no SQLite backend configured".to_string()))?;
+        .ok_or_else(|| ApiError::internal("no SQLite backend configured"))?;
 
     let mut file_bytes: Option<Vec<u8>> = None;
 
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| ApiError::BadRequest(format!("multipart read failed: {e}")))?
+        .map_err(|e| ApiError::bad_request(format!("multipart read failed: {e}")))?
     {
         if field.name().map(|n| n == "file").unwrap_or(false) {
             let bytes = field
                 .bytes()
                 .await
-                .map_err(|e| ApiError::BadRequest(format!("file read failed: {e}")))?;
+                .map_err(|e| ApiError::bad_request(format!("file read failed: {e}")))?;
             file_bytes = Some(bytes.to_vec());
         }
     }
 
     let bytes =
-        file_bytes.ok_or_else(|| ApiError::BadRequest("missing 'file' field".to_string()))?;
+        file_bytes.ok_or_else(|| ApiError::bad_request("missing 'file' field"))?;
 
     // Write to a temp file then restore from it
     let tmp_path =
         std::env::temp_dir().join(format!("rustygene_restore_{}.db", uuid::Uuid::new_v4()));
     tokio::fs::write(&tmp_path, &bytes)
         .await
-        .map_err(|e| ApiError::InternalError(format!("write temp file failed: {e}")))?;
+        .map_err(|e| ApiError::internal(format!("write temp file failed: {e}")))?;
 
     let backend_clone = backend.clone();
     let tmp_clone = tmp_path.clone();
     let result: Result<(), _> =
         tokio::task::spawn_blocking(move || backend_clone.restore_from_file(&tmp_clone))
             .await
-            .map_err(|e| ApiError::InternalError(format!("restore task panicked: {e}")))?;
+            .map_err(|e| ApiError::internal(format!("restore task panicked: {e}")))?;
 
     // Clean up temp file regardless of outcome
     let _ = tokio::fs::remove_file(&tmp_path).await;
 
-    result.map_err(|e| ApiError::InternalError(e.message))?;
+    result.map_err(|e| ApiError::internal(e.message))?;
 
     Ok(StatusCode::NO_CONTENT)
 }

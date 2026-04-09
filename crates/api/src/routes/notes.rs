@@ -12,7 +12,7 @@ use rustygene_storage::{EntityType, JsonAssertion, Pagination};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -160,7 +160,7 @@ async fn create_note(
                 &JsonAssertion {
                     id: EntityId::new(),
                     value: serde_json::to_value(NoteRef { note_id: note.id }).map_err(|err| {
-                        ApiError::InternalError(format!(
+                        ApiError::internal(format!(
                             "serialize note_ref assertion failed: {err}"
                         ))
                     })?,
@@ -224,7 +224,7 @@ async fn update_note(
                 &JsonAssertion {
                     id: EntityId::new(),
                     value: serde_json::to_value(NoteRef { note_id: note.id }).map_err(|err| {
-                        ApiError::InternalError(format!(
+                        ApiError::internal(format!(
                             "serialize note_ref assertion failed: {err}"
                         ))
                     })?,
@@ -261,9 +261,10 @@ async fn delete_note(
 fn sanitize_note_text(text: &str) -> Result<String, ApiError> {
     let cleaned = ammonia::clean(text).trim().to_string();
     if cleaned.is_empty() {
-        return Err(ApiError::BadRequest(
-            "note text must not be empty after sanitization".to_string(),
-        ));
+        return Err(ApiError::BadRequest {
+            message: "Note text must not be empty after sanitization. Provide meaningful content for the note.".to_string(),
+            details: Some(serde_json::json!({ "original_text": text })),
+        });
     }
 
     Ok(cleaned)
@@ -314,17 +315,14 @@ fn apply_optional_annotation_position(
                 .insert("position_y_pct".to_string(), y.to_string());
             Ok(())
         }
-        _ => Err(ApiError::BadRequest(
-            "position_x_pct and position_y_pct must be provided together".to_string(),
-        )),
+        _ => Err(ApiError::BadRequest {
+            message: "Incomplete position provided. Both 'position_x_pct' and 'position_y_pct' must be provided together or both omitted.".to_string(),
+            details: Some(serde_json::json!({ "x": position_x_pct, "y": position_y_pct })),
+        }),
     }
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
 
 fn parse_optional_link(
     linked_entity_id: Option<EntityId>,
@@ -332,9 +330,14 @@ fn parse_optional_link(
 ) -> Result<Option<(EntityId, EntityType)>, ApiError> {
     match (linked_entity_id, linked_entity_type) {
         (None, None) => Ok(None),
-        (Some(_), None) | (None, Some(_)) => Err(ApiError::BadRequest(
-            "linked_entity_id and linked_entity_type must be provided together".to_string(),
-        )),
+        (Some(id), None) => Err(ApiError::BadRequest {
+            message: "Incomplete link provided. 'linked_entity_id' was provided but 'linked_entity_type' is missing.".to_string(),
+            details: Some(serde_json::json!({ "linked_entity_id": id, "missing": "linked_entity_type" })),
+        }),
+        (None, Some(t)) => Err(ApiError::BadRequest {
+            message: "Incomplete link provided. 'linked_entity_type' was provided but 'linked_entity_id' is missing.".to_string(),
+            details: Some(serde_json::json!({ "linked_entity_type": t, "missing": "linked_entity_id" })),
+        }),
         (Some(entity_id), Some(entity_type)) => {
             let parsed_type = parse_entity_type(entity_type)?;
             Ok(Some((entity_id, parsed_type)))
@@ -355,9 +358,10 @@ fn parse_entity_type(raw: &str) -> Result<EntityType, ApiError> {
         "media" => Ok(EntityType::Media),
         "note" => Ok(EntityType::Note),
         "ldsordinance" | "lds_ordinance" => Ok(EntityType::LdsOrdinance),
-        _ => Err(ApiError::BadRequest(format!(
-            "invalid linked_entity_type: {raw}"
-        ))),
+        _ => Err(ApiError::BadRequest {
+            message: format!("Invalid linked_entity_type: '{raw}'. Valid types include: person, family, relationship, event, place, source, citation, repository, media, note."),
+            details: Some(serde_json::json!({ "invalid_type": raw, "allowed": ["person", "family", "relationship", "event", "place", "source", "citation", "repository", "media", "note", "lds_ordinance"] })),
+        }),
     }
 }
 

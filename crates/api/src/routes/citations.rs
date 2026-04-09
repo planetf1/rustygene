@@ -8,9 +8,8 @@ use rustygene_core::evidence::{Citation, CitationRef};
 use rustygene_core::types::{DateValue, EntityId};
 use rustygene_storage::Pagination;
 use serde::Deserialize;
-use uuid::Uuid;
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, parse_entity_id};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -94,9 +93,10 @@ async fn create_citation(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     if let Some(confidence_level) = request.confidence_level {
         if confidence_level > 3 {
-            return Err(ApiError::BadRequest(
-                "citation confidence_level must be in range 0..=3".to_string(),
-            ));
+            return Err(ApiError::BadRequest {
+                message: format!("Citation 'confidence_level' is out of range (got {confidence_level}). Provide a value between 0 and 3 (inclusive)."),
+                details: Some(serde_json::json!({ "confidence_level": confidence_level, "range": [0, 3] })),
+            });
         }
     }
 
@@ -150,9 +150,10 @@ async fn update_citation(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if let Some(confidence_level) = request.confidence_level {
         if confidence_level > 3 {
-            return Err(ApiError::BadRequest(
-                "citation confidence_level must be in range 0..=3".to_string(),
-            ));
+            return Err(ApiError::BadRequest {
+                message: format!("Citation 'confidence_level' is out of range (got {confidence_level}). Provide a value between 0 and 3 (inclusive)."),
+                details: Some(serde_json::json!({ "confidence_level": confidence_level, "range": [0, 3] })),
+            });
         }
     }
 
@@ -184,8 +185,4 @@ async fn delete_citation(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_entity_id(raw: &str) -> Result<EntityId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(EntityId)
-        .map_err(|_| ApiError::BadRequest(format!("invalid entity id: {raw}")))
-}
+
