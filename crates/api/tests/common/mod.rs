@@ -3,19 +3,24 @@ use std::time::Duration;
 
 use reqwest::StatusCode;
 use rusqlite::Connection;
-use rustygene_api::{start_server, AppState, ServerHandle};
+use rustygene_api::start_server;
+#[allow(unused_imports)]
+use rustygene_api::{AppState, ServerHandle};
 use rustygene_storage::run_migrations;
 use rustygene_storage::sqlite_impl::SqliteBackend;
 use serde::Deserialize;
+#[allow(unused_imports)]
 use serde_json::Value;
 
 pub struct TestServer {
+    #[allow(dead_code)]
     pub server: ServerHandle,
     pub client: reqwest::Client,
     pub base_url: String,
 }
 
 impl TestServer {
+    #[allow(dead_code)]
     pub async fn shutdown(self) {
         self.server.shutdown().await.expect("shutdown server");
     }
@@ -37,6 +42,7 @@ fn in_memory_backend() -> Arc<SqliteBackend> {
     Arc::new(SqliteBackend::new(conn))
 }
 
+#[allow(dead_code)]
 pub async fn spawn_test_server() -> TestServer {
     let backend = in_memory_backend();
     let state = AppState::with_default_cors_sqlite(backend, 0).expect("build app state");
@@ -49,6 +55,7 @@ pub async fn spawn_test_server() -> TestServer {
     }
 }
 
+#[allow(dead_code)]
 pub async fn spawn_test_server_with_kennedy_import() -> TestServer {
     let harness = spawn_test_server().await;
 
@@ -73,6 +80,7 @@ pub async fn spawn_test_server_with_kennedy_import() -> TestServer {
     harness
 }
 
+#[allow(dead_code)]
 pub async fn wait_for_import_completion(harness: &TestServer, job_id: &str) {
     for _ in 0..300 {
         let response = harness
@@ -93,6 +101,7 @@ pub async fn wait_for_import_completion(harness: &TestServer, job_id: &str) {
     panic!("import did not complete within timeout");
 }
 
+#[allow(dead_code)]
 pub async fn assert_api_error(
     response: reqwest::Response,
     expected_status: StatusCode,

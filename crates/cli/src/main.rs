@@ -935,7 +935,7 @@ fn run_import_command(
                 let mut assertions_added_to_matches = 0usize;
 
                 for new_id in &plan.new_person_ids {
-                    let Some(incoming_person) = incoming_by_id.get(&new_id) else {
+                    let Some(incoming_person) = incoming_by_id.get(new_id) else {
                         continue;
                     };
                     runtime
@@ -1382,7 +1382,6 @@ fn run_show_command(
 
     match command {
         ShowCommands::Person { id } => {
-            let id = id;
             let output = build_show_person_output(&conn, id).map_err(CliError::internal)?;
 
             let mut text = format!("person: {}\nassertions:\n", output.person.id);
@@ -1416,7 +1415,6 @@ fn run_show_command(
             })
         }
         ShowCommands::Family { id } => {
-            let id = id;
             let output = build_show_family_output(&conn, id).map_err(CliError::internal)?;
 
             let mut text = format!("family: {}\n", output.family.id);
@@ -1436,7 +1434,6 @@ fn run_show_command(
             })
         }
         ShowCommands::Event { id } => {
-            let id = id;
             let output = build_show_event_output(&conn, id).map_err(CliError::internal)?;
 
             let mut text = format!("event: {}\n", output.event.id);
@@ -1451,7 +1448,6 @@ fn run_show_command(
             })
         }
         ShowCommands::Source { id } => {
-            let id = id;
             let source: Source = load_entity_from_table(&conn, "sources", id, "source")
                 .map_err(CliError::internal)?;
 
@@ -1475,7 +1471,6 @@ fn run_show_command(
             })
         }
         ShowCommands::Citation { id } => {
-            let id = id;
             let citation: Citation = load_entity_from_table(&conn, "citations", id, "citation")
                 .map_err(CliError::internal)?;
 
@@ -1495,7 +1490,6 @@ fn run_show_command(
             })
         }
         ShowCommands::Repository { id } => {
-            let id = id;
             let repository: Repository =
                 load_entity_from_table(&conn, "repositories", id, "repository")
                     .map_err(CliError::internal)?;
@@ -1513,7 +1507,6 @@ fn run_show_command(
             })
         }
         ShowCommands::Note { id } => {
-            let id = id;
             let note: Note = load_entity_from_table(&conn, "notes", id, "note")
                 .map_err(CliError::internal)?;
 
@@ -1529,7 +1522,6 @@ fn run_show_command(
             })
         }
         ShowCommands::Media { id } => {
-            let id = id;
             let media: Media = load_entity_from_table(&conn, "media", id, "media")
                 .map_err(CliError::internal)?;
 
@@ -2397,7 +2389,6 @@ fn resolve_db_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::{
         Cli, CliSearchResult, Commands, ExportFormat, ImportFormat, QueryCommands,
         QueryPersonSort, ResearchLogCommands, SandboxCommands, ShowCommands, StagingCommands,

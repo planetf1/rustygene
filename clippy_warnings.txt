@@ -1,0 +1,134 @@
+    Checking rustygene-core v0.1.0 (/Users/jonesn/src/rustygene/crates/core)
+   Compiling rustygene-app v0.1.0 (/Users/jonesn/src/rustygene/app/src-tauri)
+    Checking rustygene-storage v0.1.0 (/Users/jonesn/src/rustygene/crates/storage)
+    Checking rustygene-gedcom v0.1.0 (/Users/jonesn/src/rustygene/crates/gedcom)
+    Checking rustygene-api v0.1.0 (/Users/jonesn/src/rustygene/crates/api)
+    Checking rustygene-cli v0.1.0 (/Users/jonesn/src/rustygene/crates/cli)
+error: unused import: `super::*`
+    --> crates/cli/src/main.rs:2400:9
+     |
+2400 |     use super::*;
+     |         ^^^^^^^^
+     |
+     = note: `-D unused-imports` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/cli/src/main.rs:938:68
+    |
+938 |                     let Some(incoming_person) = incoming_by_id.get(&new_id) else {
+    |                                                                    ^^^^^^^ help: change this to: `new_id`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrow
+    = note: `-D clippy::needless-borrow` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: redundant redefinition of a binding `id`
+    --> crates/cli/src/main.rs:1385:13
+     |
+1385 |             let id = id;
+     |             ^^^^^^^^^^^^
+     |
+help: `id` is initially defined here
+    --> crates/cli/src/main.rs:1384:32
+     |
+1384 |         ShowCommands::Person { id } => {
+     |                                ^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#redundant_locals
+     = note: `-D clippy::redundant-locals` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_locals)]`
+
+error: redundant redefinition of a binding `id`
+    --> crates/cli/src/main.rs:1419:13
+     |
+1419 |             let id = id;
+     |             ^^^^^^^^^^^^
+     |
+help: `id` is initially defined here
+    --> crates/cli/src/main.rs:1418:32
+     |
+1418 |         ShowCommands::Family { id } => {
+     |                                ^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#redundant_locals
+
+error: redundant redefinition of a binding `id`
+    --> crates/cli/src/main.rs:1439:13
+     |
+1439 |             let id = id;
+     |             ^^^^^^^^^^^^
+     |
+help: `id` is initially defined here
+    --> crates/cli/src/main.rs:1438:31
+     |
+1438 |         ShowCommands::Event { id } => {
+     |                               ^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#redundant_locals
+
+error: redundant redefinition of a binding `id`
+    --> crates/cli/src/main.rs:1454:13
+     |
+1454 |             let id = id;
+     |             ^^^^^^^^^^^^
+     |
+help: `id` is initially defined here
+    --> crates/cli/src/main.rs:1453:32
+     |
+1453 |         ShowCommands::Source { id } => {
+     |                                ^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#redundant_locals
+
+error: redundant redefinition of a binding `id`
+    --> crates/cli/src/main.rs:1478:13
+     |
+1478 |             let id = id;
+     |             ^^^^^^^^^^^^
+     |
+help: `id` is initially defined here
+    --> crates/cli/src/main.rs:1477:34
+     |
+1477 |         ShowCommands::Citation { id } => {
+     |                                  ^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#redundant_locals
+
+error: redundant redefinition of a binding `id`
+    --> crates/cli/src/main.rs:1498:13
+     |
+1498 |             let id = id;
+     |             ^^^^^^^^^^^^
+     |
+help: `id` is initially defined here
+    --> crates/cli/src/main.rs:1497:36
+     |
+1497 |         ShowCommands::Repository { id } => {
+     |                                    ^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#redundant_locals
+
+error: redundant redefinition of a binding `id`
+    --> crates/cli/src/main.rs:1516:13
+     |
+1516 |             let id = id;
+     |             ^^^^^^^^^^^^
+     |
+help: `id` is initially defined here
+    --> crates/cli/src/main.rs:1515:30
+     |
+1515 |         ShowCommands::Note { id } => {
+     |                              ^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#redundant_locals
+
+error: redundant redefinition of a binding `id`
+    --> crates/cli/src/main.rs:1532:13
+     |
+1532 |             let id = id;
+     |             ^^^^^^^^^^^^
+     |
+help: `id` is initially defined here
+    --> crates/cli/src/main.rs:1531:31
+     |
+1531 |         ShowCommands::Media { id } => {
+     |                               ^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#redundant_locals
+
+error: could not compile `rustygene-cli` (bin "rustygene-cli" test) due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `rustygene-cli` (bin "rustygene-cli") due to 9 previous errors
