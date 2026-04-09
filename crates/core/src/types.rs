@@ -16,11 +16,28 @@ impl EntityId {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityIdParseError(pub String);
+
+impl fmt::Display for EntityIdParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "'{0}' is not a valid UUID (expected format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for EntityIdParseError {}
+
 impl FromStr for EntityId {
-    type Err = uuid::Error;
+    type Err = EntityIdParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Uuid::from_str(s).map(EntityId)
+        Uuid::from_str(s)
+            .map(EntityId)
+            .map_err(|_| EntityIdParseError(s.to_string()))
     }
 }
 

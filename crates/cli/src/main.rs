@@ -2636,7 +2636,7 @@ mod tests {
         match cli.command {
             Commands::Show {
                 command: ShowCommands::Person { id },
-            } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
+            } => assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show person command"),
         }
     }
@@ -2653,7 +2653,7 @@ mod tests {
         match cli.command {
             Commands::Show {
                 command: ShowCommands::Family { id },
-            } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
+            } => assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show family command"),
         }
     }
@@ -2670,7 +2670,7 @@ mod tests {
         match cli.command {
             Commands::Show {
                 command: ShowCommands::Event { id },
-            } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
+            } => assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show event command"),
         }
     }
@@ -2687,7 +2687,7 @@ mod tests {
         match cli.command {
             Commands::Show {
                 command: ShowCommands::Source { id },
-            } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
+            } => assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show source command"),
         }
     }
@@ -2704,7 +2704,7 @@ mod tests {
         match cli.command {
             Commands::Show {
                 command: ShowCommands::Citation { id },
-            } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
+            } => assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show citation command"),
         }
     }
@@ -2721,7 +2721,7 @@ mod tests {
         match cli.command {
             Commands::Show {
                 command: ShowCommands::Repository { id },
-            } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
+            } => assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show repository command"),
         }
     }
@@ -2738,7 +2738,7 @@ mod tests {
         match cli.command {
             Commands::Show {
                 command: ShowCommands::Note { id },
-            } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
+            } => assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show note command"),
         }
     }
@@ -2755,7 +2755,7 @@ mod tests {
         match cli.command {
             Commands::Show {
                 command: ShowCommands::Media { id },
-            } => assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000"),
+            } => assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000"),
             _ => panic!("expected show media command"),
         }
     }
@@ -2810,8 +2810,8 @@ mod tests {
                         sandbox, entity, ..
                     },
             } => {
-                assert_eq!(sandbox, "550e8400-e29b-41d4-a716-446655440000");
-                assert_eq!(entity, "550e8400-e29b-41d4-a716-446655440001");
+                assert_eq!(sandbox.to_string(), "550e8400-e29b-41d4-a716-446655440000");
+                assert_eq!(entity.to_string(), "550e8400-e29b-41d4-a716-446655440001");
             }
             _ => panic!("expected sandbox compare command"),
         }
@@ -2846,7 +2846,7 @@ mod tests {
             Commands::Staging {
                 command: StagingCommands::Accept { id, reviewer },
             } => {
-                assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
+                assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
                 assert_eq!(reviewer, "cli-user");
             }
             _ => panic!("expected staging accept command"),
@@ -2872,7 +2872,7 @@ mod tests {
                         reason,
                     },
             } => {
-                assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
+                assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
                 assert_eq!(reviewer, "cli-user");
                 assert_eq!(reason.as_deref(), Some("insufficient evidence"));
             }

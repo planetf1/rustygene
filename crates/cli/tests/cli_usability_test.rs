@@ -85,7 +85,6 @@ fn show_person_invalid_uuid_is_human_readable() {
 
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("invalid person id"))
         .stderr(predicate::str::contains("is not a valid UUID"))
         .stderr(predicate::str::contains("expected format"));
 }
