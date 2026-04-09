@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::Connection;
 use rustygene_core::event::Event;
@@ -14,16 +15,20 @@ use rustygene_gedcom::{
 };
 use rustygene_storage::run_migrations;
 
+static TEMP_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn temp_db_path(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time")
         .as_nanos();
+    let counter = TEMP_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "rustygene-corpus-roundtrip-{}-{}-{}.sqlite",
+        "rustygene-corpus-roundtrip-{}-{}-{}-{}.sqlite",
         label,
         std::process::id(),
-        nanos
+        nanos,
+        counter
     ))
 }
 
