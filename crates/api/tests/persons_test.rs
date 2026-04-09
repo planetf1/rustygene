@@ -668,4 +668,142 @@ async fn person_assertion_confidence_update_triggers_snapshot_recompute() {
     );
 
     server.shutdown().await.ok();
+
+}
+#[tokio::test]
+async fn list_persons_sql_filter_sort_and_pagination_work() {
+    let backend = in_memory_backend();
+
+    // Create 6 persons: 3 with surname "Smith", 3 with surname "Jones"
+    let surnames_and_given: &[(&str, &str)] = &[
+        ("Smith", "Alice"),
+        ("Smith", "Bob"),
+        ("Smith", "Carol"),
+        ("Jones", "David"),
+        ("Jones", "Eve"),
+        ("Jones", "Frank"),
+    ];
+    for (surname, given) in surnames_and_given {
+        let person = rustygene_core::person::Person {
+            id: rustygene_core::types::EntityId::new(),
+            names: vec![rustygene_core::person::PersonName {
+                name_type: rustygene_core::person::NameType::Birth,
+                date_range: None,
+                given_names: given.to_string(),
+                call_name: None,
+                surnames: vec![rustygene_core::person::Surname {
+                    value: surname.to_string(),
+                    origin_type: rustygene_core::person::SurnameOrigin::Patrilineal,
+                    connector: None,
+                }],
+                prefix: None,
+                suffix: None,
+                sort_as: None,
+            }],
+            gender: rustygene_core::types::Gender::Unknown,
+            living: false,
+            private: false,
+            original_xref: None,
+            _raw_gedcom: Default::default(),
+        };
+        backend.create_person(&person).await.expect("create person");
+    }
+
+    let state = AppState::with_default_cors(backend, 0).expect("build app state");
+    let server = start_server(state, 0).await.expect("start server");
+    let client = reqwest::Client::new();
+    let base = format!("http://{}/api/v1", server.local_addr);
+
+    // 1. Unfiltered: total = 6, default limit = 50, get all 6 items.
+    let resp: serde_json::Value = client
+        .get(format!("{base}/persons"))
+        .send()
+        .await
+        .expect("list persons unfiltered")
+        .json()
+        .await
+        .expect("parse");
+    assert_eq!(resp["total"].as_u64(), Some(6), "total must be 6");
+    assert_eq!(
+        resp["items"].as_array().map(|a| a.len()),
+        Some(6),
+        "items must contain 6 entries"
+    );
+
+    // 2. Search filter: q=Smith returns only the 3 Smith entries.
+    let resp: serde_json::Value = client
+        .get(format!("{base}/persons?q=Smith"))
+        .send()
+        .await
+        .expect("list persons filtered")
+        .json()
+        .await
+        .expect("parse");
+    assert_eq!(resp["total"].as_u64(), Some(3), "filtered total must be 3");
+    assert_eq!(
+        resp["items"].as_array().map(|a| a.len()),
+        Some(3),
+        "filtered items must be 3"
+    );
+    for item in resp["items"].as_array().unwrap() {
+        let name = item["display_name"].as_str().unwrap_or("");
+        assert!(
+            name.contains("Smith"),
+            "each result must contain 'Smith', got: {name}"
+        );
+    }
+
+    // 3. Pagination: limit=2, offset=0 on unfiltered -> items.len()==2, total==6.
+    let resp: serde_json::Value = client
+        .get(format!("{base}/persons?limit=2&offset=0"))
+        .send()
+        .await
+        .expect("list persons page 1")
+        .json()
+        .await
+        .expect("parse");
+    assert_eq!(resp["total"].as_u64(), Some(6), "paged total must still be 6");
+    assert_eq!(
+        resp["items"].as_array().map(|a| a.len()),
+        Some(2),
+        "page 1 must return exactly 2 items"
+    );
+
+    // 4. Pagination: limit=2, offset=4 -> last page returns exactly 2 items.
+    let resp: serde_json::Value = client
+        .get(format!("{base}/persons?limit=2&offset=4"))
+        .send()
+        .await
+        .expect("list persons page 3")
+        .json()
+        .await
+        .expect("parse");
+    assert_eq!(resp["total"].as_u64(), Some(6), "last page total must be 6");
+    assert_eq!(
+        resp["items"].as_array().map(|a| a.len()),
+        Some(2),
+        "last page must return 2 items"
+    );
+
+    // 5. Pagination beyond end: offset=10 -> items empty, total still 6.
+    let resp: serde_json::Value = client
+        .get(format!("{base}/persons?limit=5&offset=10"))
+        .send()
+        .await
+        .expect("list persons beyond end")
+        .json()
+        .await
+        .expect("parse");
+    assert_eq!(
+        resp["total"].as_u64(),
+        Some(6),
+        "beyond-end total must still be 6"
+    );
+    assert_eq!(
+        resp["items"].as_array().map(|a| a.len()),
+        Some(0),
+        "beyond-end items must be empty"
+    );
+
+    server.shutdown().await.ok();
 }

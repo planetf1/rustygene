@@ -85,7 +85,27 @@ async fn list_persons(
         ApiError::InternalError("list_persons requires sqlite backend".to_string())
     })?;
 
+    // Push WHERE / ORDER BY / LIMIT / OFFSET into SQL using indexed generated columns.
+    let sort_field = query.sort.as_deref().unwrap_or("name");
+    let descending = query.dir.as_deref() == Some("desc");
+    let dir = if descending { "DESC" } else { "ASC" };
+    let limit = query.limit.unwrap_or(50) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+
+    // ORDER BY fragment — column names come from a fixed match, not user input.
+    let order_by = match sort_field {
+        "birth_year" => format!("p.birth_year {dir} NULLS LAST"),
+        "death_year" => format!("p.death_year {dir} NULLS LAST"),
+        "assertion_count" => format!(
+            "(SELECT COUNT(*) FROM assertions WHERE entity_id = p.id AND sandbox_id IS NULL) {dir}"
+        ),
+        _ => format!(
+            "LOWER(COALESCE(p.primary_surname, '')) {dir}, LOWER(COALESCE(p.primary_given_name, '')) {dir}"
+        ),
+    };
+
     struct PersonRow {
+        total_count: i64,
         id: String,
         data: String,
         assertion_counts_json: Option<String>,
@@ -93,80 +113,70 @@ async fn list_persons(
         death_year: Option<i32>,
     }
 
-    let rows: Vec<PersonRow> = backend.with_connection(|conn| {
-        // Aggregate assertion field counts and birth/death years in pure SQL.
-        // Events are linked to persons via json_each(e.data, '$.participants'),
-        // matching the same pattern used by list_events_for_person() in storage.
-        let sql = "
-            SELECT
-                p.id,
-                p.data,
-                (
-                    SELECT json_group_object(field, cnt)
-                    FROM (
-                        SELECT field, COUNT(*) as cnt
-                        FROM assertions
-                        WHERE entity_id = p.id AND sandbox_id IS NULL
-                        GROUP BY field
-                    )
-                ) AS assertion_counts_json,
-                (
-                                        SELECT MIN(CAST(json_extract(e.data, '$.date.date.year') AS INTEGER))
-                    FROM events e
-                    WHERE json_extract(e.data, '$.event_type') = 'birth'
-                                            AND json_extract(e.data, '$.date.date.year') IS NOT NULL
-                      AND EXISTS (
-                          SELECT 1 FROM json_each(e.data, '$.participants') par
-                          WHERE json_extract(par.value, '$.person_id') = p.id
-                      )
-                ) AS birth_year,
-                (
-                                        SELECT MAX(CAST(json_extract(e.data, '$.date.date.year') AS INTEGER))
-                    FROM events e
-                    WHERE json_extract(e.data, '$.event_type') = 'death'
-                                            AND json_extract(e.data, '$.date.date.year') IS NOT NULL
-                      AND EXISTS (
-                          SELECT 1 FROM json_each(e.data, '$.participants') par
-                          WHERE json_extract(par.value, '$.person_id') = p.id
-                      )
-                ) AS death_year
-            FROM persons p
-            ORDER BY p.id
-        ";
+    let (rows, total) = backend.with_connection(|conn| {
+        let search_pattern: Option<String> = query.q.as_ref().map(|q| {
+            format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"))
+        });
 
-        let mut stmt = conn.prepare(sql).map_err(|e| StorageError {
+        let where_clause = if search_pattern.is_some() {
+            " WHERE (p.primary_given_name LIKE ?1 ESCAPE '\\' OR p.primary_surname LIKE ?1 ESCAPE '\\')"
+        } else {
+            ""
+        };
+
+        let sql = format!(
+            "SELECT COUNT(*) OVER () AS total_count, p.id, p.data,
+                (SELECT json_group_object(field, cnt)
+                 FROM (SELECT field, COUNT(*) AS cnt FROM assertions
+                       WHERE entity_id = p.id AND sandbox_id IS NULL GROUP BY field)
+                ) AS assertion_counts_json,
+                p.birth_year,
+                p.death_year
+             FROM persons p
+             {where_clause}
+             ORDER BY {order_by}
+             LIMIT ?2 OFFSET ?3"
+        );
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
             message: format!("prepare list_persons query failed: {e}"),
         })?;
 
-        let rows = stmt.query_map([], |row| {
+        let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<PersonRow> {
             Ok(PersonRow {
-                id: row.get(0)?,
-                data: row.get(1)?,
-                assertion_counts_json: row.get(2)?,
-                birth_year: row.get(3)?,
-                death_year: row.get(4)?,
+                total_count: row.get(0)?,
+                id: row.get(1)?,
+                data: row.get(2)?,
+                assertion_counts_json: row.get(3)?,
+                birth_year: row.get(4)?,
+                death_year: row.get(5)?,
             })
-        }).map_err(|e| StorageError {
+        };
+
+        let raw_rows = if let Some(ref pattern) = search_pattern {
+            stmt.query_map(rusqlite::params![pattern, limit, offset], map_row)
+        } else {
+            stmt.query_map(rusqlite::params![rusqlite::types::Null, limit, offset], map_row)
+        }
+        .map_err(|e| StorageError {
             code: StorageErrorCode::Backend,
             message: format!("list_persons query failed: {e}"),
         })?
         .filter_map(|r| r.ok())
         .collect::<Vec<_>>();
 
-        Ok(rows)
+        let total = raw_rows.first().map_or(0, |r| r.total_count) as usize;
+        Ok((raw_rows, total))
     })?;
 
-    // Build the response, parsing person display names from JSON blobs.
-    let mut response: Vec<PersonResponse> = Vec::with_capacity(rows.len());
+    let mut items: Vec<PersonResponse> = Vec::with_capacity(rows.len());
     for row in rows {
         let person: rustygene_core::person::Person = match serde_json::from_str(&row.data) {
             Ok(p) => p,
             Err(_) => continue,
         };
         let display_name = display_name_for_person(&person);
-
-        // Parse assertion counts from aggregated JSON
         let assertion_counts: BTreeMap<String, usize> = row
             .assertion_counts_json
             .as_deref()
@@ -178,13 +188,11 @@ async fn list_persons(
                     .collect()
             })
             .unwrap_or_default();
-
         let id = match Uuid::parse_str(&row.id).map(EntityId) {
             Ok(id) => id,
             Err(_) => continue,
         };
-
-        response.push(PersonResponse {
+        items.push(PersonResponse {
             id,
             display_name,
             birth_year: row.birth_year,
@@ -192,41 +200,6 @@ async fn list_persons(
             assertion_counts,
         });
     }
-
-    // Apply search filter.
-    if let Some(ref q) = query.q {
-        let q_lc = q.to_lowercase();
-        response.retain(|p| p.display_name.to_lowercase().contains(&q_lc));
-    }
-
-    // Apply sort.
-    let sort_field = query.sort.as_deref().unwrap_or("name");
-    let descending = query.dir.as_deref() == Some("desc");
-    match sort_field {
-        "birth_year" => response.sort_by(|a, b| {
-            let ord = a.birth_year.cmp(&b.birth_year);
-            if descending { ord.reverse() } else { ord }
-        }),
-        "death_year" => response.sort_by(|a, b| {
-            let ord = a.death_year.cmp(&b.death_year);
-            if descending { ord.reverse() } else { ord }
-        }),
-        "assertion_count" => response.sort_by(|a, b| {
-            let ca: usize = a.assertion_counts.values().sum();
-            let cb: usize = b.assertion_counts.values().sum();
-            let ord = ca.cmp(&cb);
-            if descending { ord.reverse() } else { ord }
-        }),
-        _ /* "name" */ => response.sort_by(|a, b| {
-            let ord = a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase());
-            if descending { ord.reverse() } else { ord }
-        }),
-    }
-
-    let total = response.len();
-    let limit = query.limit.unwrap_or(50) as usize;
-    let offset = query.offset.unwrap_or(0) as usize;
-    let items = response.into_iter().skip(offset).take(limit).collect();
 
     Ok(Json(PersonListResponse { total, items }))
 }
