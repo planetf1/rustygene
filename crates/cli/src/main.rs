@@ -1228,7 +1228,9 @@ fn run_export_command(
             }
             for (idx, family) in families.iter().enumerate() {
                 let xref = preserved_or_generated_xref(family.original_xref.as_deref(), 'F', idx);
-                nodes.push(family_to_fam_node(family, &persons, &events, &places, &xref));
+                nodes.push(family_to_fam_node(
+                    family, &persons, &events, &places, &xref,
+                ));
             }
             for (idx, source) in sources.iter().enumerate() {
                 let xref = preserved_or_generated_xref(source.original_xref.as_deref(), 'S', idx);
@@ -2575,8 +2577,7 @@ mod tests {
         Cli, CliSearchResult, Commands, ExportFormat, ImportFormat, OutputFormat, QueryCommands,
         QueryPersonSort, ResearchLogCommands, SandboxCommands, ShowCommands, StagingCommands,
         build_person_match_query, parse_entity_id_arg, preserved_or_generated_xref,
-        resolve_person_query,
-        resolve_db_path,
+        resolve_db_path, resolve_person_query,
     };
     use clap::Parser;
     use rusqlite::Connection;

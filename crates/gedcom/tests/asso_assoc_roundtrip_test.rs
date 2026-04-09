@@ -158,7 +158,9 @@ fn export_db_as_gedcom(conn: &Connection) -> String {
             .original_xref
             .clone()
             .unwrap_or_else(|| format!("@F{}@", idx + 1));
-        nodes.push(family_to_fam_node(family, &persons, &events, &places, &xref));
+        nodes.push(family_to_fam_node(
+            family, &persons, &events, &places, &xref,
+        ));
     }
 
     let mut anonymous_source_xrefs: BTreeMap<String, String> = BTreeMap::new();
@@ -264,7 +266,8 @@ fn asso_assoc_roundtrip_preserves_distribution_and_export_fidelity() {
         .expect("import synthetic ASSO fixture");
 
     assert!(
-        !report1.unhandled_tags.contains_key("ASSO") && !report1.unhandled_tags.contains_key("ASSOC"),
+        !report1.unhandled_tags.contains_key("ASSO")
+            && !report1.unhandled_tags.contains_key("ASSOC"),
         "ASSO/ASSOC must not be unhandled tags"
     );
 
@@ -275,7 +278,10 @@ fn asso_assoc_roundtrip_preserves_distribution_and_export_fidelity() {
             |row| row.get(0),
         )
         .expect("count association assertions");
-    assert!(association_count >= 2, "expected typed association assertions");
+    assert!(
+        association_count >= 2,
+        "expected typed association assertions"
+    );
 
     let dist_before = assertion_distribution(&conn1);
 

@@ -1930,10 +1930,9 @@ fn map_indi_node_to_person_with_report(
                     .keys()
                     .filter(|k| k.starts_with("CUSTOM_ASSO_"))
                     .count();
-                person._raw_gedcom.insert(
-                    format!("CUSTOM_ASSO_{next_idx}"),
-                    serialize_subtree(child),
-                );
+                person
+                    ._raw_gedcom
+                    .insert(format!("CUSTOM_ASSO_{next_idx}"), serialize_subtree(child));
             }
             "NOTE" => {
                 let next_idx = person
@@ -1953,10 +1952,9 @@ fn map_indi_node_to_person_with_report(
                     .keys()
                     .filter(|k| k.starts_with("CUSTOM_SOUR_"))
                     .count();
-                person._raw_gedcom.insert(
-                    format!("CUSTOM_SOUR_{next_idx}"),
-                    serialize_subtree(child),
-                );
+                person
+                    ._raw_gedcom
+                    .insert(format!("CUSTOM_SOUR_{next_idx}"), serialize_subtree(child));
             }
             "CHAN" => {
                 record_deferred_standard_tag(report, child.tag.as_str());
@@ -1982,10 +1980,9 @@ fn map_indi_node_to_person_with_report(
                     .keys()
                     .filter(|k| k.starts_with(&format!("CUSTOM_{tag}_")))
                     .count();
-                person._raw_gedcom.insert(
-                    format!("CUSTOM_{tag}_{next_idx}"),
-                    serialize_subtree(child),
-                );
+                person
+                    ._raw_gedcom
+                    .insert(format!("CUSTOM_{tag}_{next_idx}"), serialize_subtree(child));
             }
             tag if tag.starts_with('_') => {
                 record_unhandled_tag(report, tag);
@@ -2250,9 +2247,11 @@ fn citations_for_root(
 ) -> Vec<CitationRef> {
     dedupe_citation_refs(
         refs.iter()
-        .filter(|entry| entry.owner_tag == owner_tag && entry.owner_xref.as_deref() == owner_xref)
-        .map(|entry| entry.citation_ref.clone())
-        .collect(),
+            .filter(|entry| {
+                entry.owner_tag == owner_tag && entry.owner_xref.as_deref() == owner_xref
+            })
+            .map(|entry| entry.citation_ref.clone())
+            .collect(),
     )
 }
 
@@ -2264,13 +2263,13 @@ fn citations_for_node(
 ) -> Vec<CitationRef> {
     dedupe_citation_refs(
         refs.iter()
-        .filter(|entry| {
-            entry.root_tag == root_tag
-                && entry.root_xref.as_deref() == root_xref
-                && entry.owner_tag == owner_tag
-        })
-        .map(|entry| entry.citation_ref.clone())
-        .collect(),
+            .filter(|entry| {
+                entry.root_tag == root_tag
+                    && entry.root_xref.as_deref() == root_xref
+                    && entry.owner_tag == owner_tag
+            })
+            .map(|entry| entry.citation_ref.clone())
+            .collect(),
     )
 }
 
@@ -2397,7 +2396,9 @@ fn parse_obje_primary_flag(raw_value: &str) -> Option<bool> {
     }
 }
 
-fn parse_obje_link_metadata(node: &GedcomNode) -> (Option<String>, Option<Value>, Option<bool>, Value) {
+fn parse_obje_link_metadata(
+    node: &GedcomNode,
+) -> (Option<String>, Option<Value>, Option<bool>, Value) {
     let mut caption: Option<String> = None;
     let mut crop_rect_pct: Option<Value> = None;
     let mut is_primary: Option<bool> = None;
@@ -2427,7 +2428,12 @@ fn parse_obje_link_metadata(node: &GedcomNode) -> (Option<String>, Option<Value>
         }
     }
 
-    (caption, crop_rect_pct, is_primary, Value::Object(vendor_tags))
+    (
+        caption,
+        crop_rect_pct,
+        is_primary,
+        Value::Object(vendor_tags),
+    )
 }
 
 fn parse_obje_media_ref_assertions(
@@ -2657,7 +2663,9 @@ fn parse_association_assertions(
                 .filter_map(|child| {
                     child.value.as_deref().and_then(|value| {
                         let trimmed = value.trim();
-                        if trimmed.is_empty() || (trimmed.starts_with('@') && trimmed.ends_with('@')) {
+                        if trimmed.is_empty()
+                            || (trimmed.starts_with('@') && trimmed.ends_with('@'))
+                        {
                             None
                         } else {
                             Some(trimmed.to_string())
@@ -2689,8 +2697,9 @@ fn parse_association_assertions(
 
 fn vendor_source_system_for_tag(tag: &str) -> Option<&'static str> {
     match tag {
-        "_APID" | "_ATL" | "_LKID" | "_OID" | "_MSER" | "_TID" | "_CLON" | "_ENCR"
-        | "_STYPE" => Some("ancestry"),
+        "_APID" | "_ATL" | "_LKID" | "_OID" | "_MSER" | "_TID" | "_CLON" | "_ENCR" | "_STYPE" => {
+            Some("ancestry")
+        }
         "_FSID" => Some("familysearch"),
         "_HPID" => Some("myheritage"),
         "_PID" | "_WPID" => Some("vendor"),

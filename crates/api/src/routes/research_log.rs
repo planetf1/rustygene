@@ -128,16 +128,21 @@ async fn list_entries(
         .map(|value| value.trim().to_ascii_lowercase());
 
     if let Some(ref entity_type) = requested_type {
-        if !matches!(entity_type.as_str(), "person" | "family" | "source" | "event") {
+        if !matches!(
+            entity_type.as_str(),
+            "person" | "family" | "source" | "event"
+        ) {
             return Err(ApiError::BadRequest(format!(
                 "invalid entity_type: {entity_type}"
             )));
         }
     }
 
-    let effective_entity_type = requested_type
-        .as_deref()
-        .or(if entity_id.is_some() { Some("person") } else { None });
+    let effective_entity_type = requested_type.as_deref().or(if entity_id.is_some() {
+        Some("person")
+    } else {
+        None
+    });
 
     let person_ref = if effective_entity_type == Some("person") {
         entity_id
@@ -184,13 +189,13 @@ async fn list_entries(
 
     if let (Some(filter_entity_id), Some(filter_entity_type)) = (entity_id, effective_entity_type) {
         mapped.retain(|entry| {
-            entry
-                .entity_references
-                .iter()
-                .any(|reference| {
-                    reference.id == filter_entity_id
-                        && reference.entity_type.trim().eq_ignore_ascii_case(filter_entity_type)
-                })
+            entry.entity_references.iter().any(|reference| {
+                reference.id == filter_entity_id
+                    && reference
+                        .entity_type
+                        .trim()
+                        .eq_ignore_ascii_case(filter_entity_type)
+            })
         });
     }
 

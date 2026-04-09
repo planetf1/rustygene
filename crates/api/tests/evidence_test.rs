@@ -241,8 +241,10 @@ async fn source_detail_omits_citations_by_default_and_includes_when_requested() 
         .await
         .expect("source detail default");
     assert_eq!(source_detail_default.status(), StatusCode::OK);
-    let source_detail_default_body: serde_json::Value =
-        source_detail_default.json().await.expect("source detail default body");
+    let source_detail_default_body: serde_json::Value = source_detail_default
+        .json()
+        .await
+        .expect("source detail default body");
     assert!(
         source_detail_default_body.get("citations").is_none(),
         "citations should be omitted by default to avoid over-fetching"
@@ -266,9 +268,7 @@ async fn source_detail_omits_citations_by_default_and_includes_when_requested() 
         .expect("citations array when include_citations=true");
     assert_eq!(citations.len(), 1);
     assert_eq!(
-        citations[0]
-            .get("id")
-            .and_then(serde_json::Value::as_str),
+        citations[0].get("id").and_then(serde_json::Value::as_str),
         Some(citation_id)
     );
 

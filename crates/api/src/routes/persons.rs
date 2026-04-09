@@ -158,7 +158,6 @@ async fn list_persons(
         Ok(rows)
     })?;
 
-
     // Build the response, parsing person display names from JSON blobs.
     let mut response: Vec<PersonResponse> = Vec::with_capacity(rows.len());
     for row in rows {
@@ -169,7 +168,8 @@ async fn list_persons(
         let display_name = display_name_for_person(&person);
 
         // Parse assertion counts from aggregated JSON
-        let assertion_counts: BTreeMap<String, usize> = row.assertion_counts_json
+        let assertion_counts: BTreeMap<String, usize> = row
+            .assertion_counts_json
             .as_deref()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .and_then(|v| v.as_object().cloned())
@@ -302,7 +302,10 @@ async fn list_persons_fallback(
             }
         }),
         _ => response.sort_by(|a, b| {
-            let ord = a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase());
+            let ord = a
+                .display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase());
             if descending {
                 ord.reverse()
             } else {
@@ -359,7 +362,6 @@ fn extract_event_year(event: &Event) -> Option<i32> {
         Some(DateValue::Textual { .. }) | None => None,
     }
 }
-
 
 async fn create_person(
     State(state): State<AppState>,
@@ -814,10 +816,6 @@ fn display_name_for_person(person: &Person) -> String {
         format!("{} {}", primary.given_names, surname)
     }
 }
-
-
-
-
 
 fn name_assertions(assertions: &[FieldAssertion]) -> Vec<PersonNameAssertion> {
     assertions

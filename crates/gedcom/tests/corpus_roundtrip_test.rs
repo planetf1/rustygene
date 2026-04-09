@@ -170,7 +170,9 @@ fn export_db_as_gedcom(conn: &Connection) -> String {
             .original_xref
             .clone()
             .unwrap_or_else(|| format!("@F{}@", idx + 1));
-        nodes.push(family_to_fam_node(family, &persons, &events, &places, &xref));
+        nodes.push(family_to_fam_node(
+            family, &persons, &events, &places, &xref,
+        ));
     }
 
     // Only export sources that have an original xref.  Inline/anonymous sources
@@ -465,7 +467,6 @@ fn corpus_roundtrip_torture551_ged_diagnostic() {
     let exported = export_db_as_gedcom(&conn1);
     assert!(exported.contains("0 HEAD"));
     assert!(exported.contains("0 TRLR"));
-
 
     let mut conn2 = setup_db(&db2);
     import_gedcom_to_sqlite(&mut conn2, "corpus-reimport-torture551", &exported)

@@ -99,8 +99,7 @@ fn in_memory_backend() -> Arc<SqliteBackend> {
 #[tokio::test]
 async fn import_kennedy_gedcom_completes_and_reports_entities() {
     let backend = in_memory_backend();
-    let state =
-        AppState::with_default_cors_sqlite(backend.clone(), 0).expect("build app state");
+    let state = AppState::with_default_cors_sqlite(backend.clone(), 0).expect("build app state");
 
     let server = start_server(state, 0).await.expect("start server");
     assert_eq!(server.local_addr.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
@@ -569,8 +568,7 @@ async fn merge_diff_and_selective_merge_create_staging_only() {
         "unexpected import/diff response: {diff_body}"
     );
 
-    let diff: MergeDiffResponse =
-        serde_json::from_str(&diff_body).expect("parse diff response");
+    let diff: MergeDiffResponse = serde_json::from_str(&diff_body).expect("parse diff response");
     assert!(
         !diff.changed_fields.is_empty() || !diff.new_entities.is_empty(),
         "diff should detect at least one change"

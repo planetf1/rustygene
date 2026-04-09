@@ -4,8 +4,8 @@ use reqwest::StatusCode;
 use rusqlite::Connection;
 use rustygene_api::{start_server, AppState};
 use rustygene_core::assertion::{AssertionStatus, EvidenceType};
-use rustygene_core::evidence::CitationRef;
 use rustygene_core::event::{Event, EventParticipant, EventRole, EventType};
+use rustygene_core::evidence::CitationRef;
 use rustygene_core::person::{NameType, Person, PersonName, Surname, SurnameOrigin};
 use rustygene_core::types::{ActorRef, Calendar, DateValue, EntityId, FuzzyDate, Gender};
 use rustygene_storage::run_migrations;
@@ -400,10 +400,22 @@ async fn list_persons_includes_aggregated_assertion_counts_and_event_years() {
         _raw_gedcom: Default::default(),
     };
 
-    backend.create_event(&birth_1).await.expect("create birth_1");
-    backend.create_event(&birth_2).await.expect("create birth_2");
-    backend.create_event(&death_1).await.expect("create death_1");
-    backend.create_event(&death_2).await.expect("create death_2");
+    backend
+        .create_event(&birth_1)
+        .await
+        .expect("create birth_1");
+    backend
+        .create_event(&birth_2)
+        .await
+        .expect("create birth_2");
+    backend
+        .create_event(&death_1)
+        .await
+        .expect("create death_1");
+    backend
+        .create_event(&death_2)
+        .await
+        .expect("create death_2");
 
     let state = AppState::with_default_cors(backend, 0).expect("build app state");
     let server = start_server(state, 0).await.expect("start server");
@@ -418,7 +430,11 @@ async fn list_persons_includes_aggregated_assertion_counts_and_event_years() {
         .expect("list persons");
     let status = response.status();
     let body_text = response.text().await.expect("read list response body");
-    assert_eq!(status, StatusCode::OK, "unexpected response body: {body_text}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected response body: {body_text}"
+    );
 
     let body: serde_json::Value =
         serde_json::from_str(&body_text).expect("parse list response JSON");
